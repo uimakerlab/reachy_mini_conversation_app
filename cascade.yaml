@@ -2,7 +2,7 @@
 # API keys are in .env file (OPENAI_API_KEY, DEEPGRAM_API_KEY, GEMINI_API_KEY, ELEVENLABS_API_KEY)
 
 asr:
-  provider: whisper_mlx  # deepgram, whisper_openai, parakeet_mlx, parakeet_mlx_streaming, whisper_mlx
+  provider: parakeet_mlx  # deepgram, whisper_openai, parakeet_mlx, parakeet_mlx_streaming
 
   providers:
     # ========== CLOUD PROVIDERS ==========
@@ -56,19 +56,6 @@ asr:
       precision: bf16
       context_size: [256, 256]  # (left, right) frames
       depth: null  # null = auto
-
-    whisper_mlx:
-      module: whisper_mlx
-      class: WhisperMLXASR
-      streaming: true  # pseudo-streaming via incremental batch
-      location: local
-      requires: []
-      hardware: apple_silicon
-      description: "Whisper MLX - local Whisper for Apple Silicon"
-      # Settings
-      model: mlx-community/whisper-large-v3-turbo
-      language: en
-      chunk_interval_ms: 500
 
     # ========== LOCAL PROVIDERS (CUDA/MPS) ==========
     nemotron:

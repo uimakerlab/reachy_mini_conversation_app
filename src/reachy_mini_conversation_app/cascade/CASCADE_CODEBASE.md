@@ -506,7 +506,7 @@ tracker.print_summary()
 
 ### MLX Thread Affinity (Apple Silicon)
 
-**Problem:** Local MLX-based providers (Parakeet, Whisper MLX) may produce empty transcriptions when called from Gradio.
+**Problem:** Local MLX-based providers (Parakeet) may produce empty transcriptions when called from Gradio.
 
 **Root Cause:** MLX has thread affinity requirements. The cascade architecture involves multiple threads:
 1. **Main thread** - Gradio UI

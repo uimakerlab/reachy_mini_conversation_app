@@ -3,7 +3,6 @@
 from .base import ASRProvider
 from .deepgram import DeepgramASR
 from .nemotron import NemotronASR
-from .whisper_mlx import WhisperMLXASR
 from .parakeet_mlx import ParakeetMLXASR
 from .base_streaming import StreamingASRProvider
 from .whisper_openai import WhisperOpenAIASR
@@ -17,6 +16,5 @@ __all__ = [
     "NemotronASR",
     "ParakeetMLXASR",
     "ParakeetMLXStreamingASR",
-    "WhisperMLXASR",
     "WhisperOpenAIASR",
 ]
