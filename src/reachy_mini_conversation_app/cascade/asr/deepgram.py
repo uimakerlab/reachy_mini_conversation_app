@@ -1,4 +1,4 @@
-"""Deepgram streaming ASR provider."""
+"""Deepgram ASR provider (cloud streaming)."""
 
 from __future__ import annotations
 import io
@@ -13,8 +13,8 @@ from .base_streaming import StreamingASRProvider
 logger = logging.getLogger(__name__)
 
 
-class DeepgramStreamingASR(StreamingASRProvider):
-    """Deepgram streaming ASR implementation using WebSocket."""
+class DeepgramASR(StreamingASRProvider):
+    """Deepgram ASR via WebSocket streaming (cloud)."""
 
     def __init__(
         self,
@@ -22,7 +22,7 @@ class DeepgramStreamingASR(StreamingASRProvider):
         model: str = "nova-2",
         language: str = "en",
     ):
-        """Initialize Deepgram streaming ASR.
+        """Initialize Deepgram ASR.
 
         Args:
             api_key: Deepgram API key
@@ -57,7 +57,7 @@ class DeepgramStreamingASR(StreamingASRProvider):
         except ImportError:
             raise ImportError("Deepgram SDK not installed. Install with: pip install deepgram-sdk")
 
-        logger.info(f"Deepgram streaming ASR initialized (model={model}, language={language})")
+        logger.info(f"Deepgram ASR initialized (model={model}, language={language})")
 
     async def start_stream(self) -> None:
         """Initialize streaming session with Deepgram."""

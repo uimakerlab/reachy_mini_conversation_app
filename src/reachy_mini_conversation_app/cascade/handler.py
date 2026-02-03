@@ -8,6 +8,7 @@ import json
 import base64
 import asyncio
 import logging
+import importlib
 import threading
 from typing import Any, Dict, List
 
@@ -15,11 +16,15 @@ import numpy as np
 import numpy.typing as npt
 
 from reachy_mini_conversation_app.prompts import get_session_instructions
-from reachy_mini_conversation_app.cascade.asr import ASRProvider, OpenAIWhisperASR, StreamingASRProvider
+from reachy_mini_conversation_app.cascade.asr import ASRProvider, StreamingASRProvider
 from reachy_mini_conversation_app.cascade.llm import OpenAILLM, LLMProvider
 from reachy_mini_conversation_app.cascade.tts import OpenAITTS, TTSProvider
 from reachy_mini_conversation_app.cascade.config import config
-from reachy_mini_conversation_app.tools.core_tools import ToolDependencies, get_tool_specs, dispatch_tool_call
+from reachy_mini_conversation_app.tools.core_tools import (
+    ToolDependencies,
+    get_tool_specs,
+    dispatch_tool_call,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -56,83 +61,64 @@ class CascadeHandler:
         # Track last partial transcript to avoid log spam
         self._last_partial_transcript = ""
 
+        # Store streaming status based on config
+        self.is_streaming_asr = config.is_asr_streaming()
+
         # Get tool specs and convert to Chat Completions format
         # Note : get_tool_specs() returns Realtime API format, so we need Chat Completions format
         self.tool_specs = self._convert_tool_specs_to_chat_format(get_tool_specs())
 
-        logger.info(f"Cascade handler initialized (skip_audio_playback={skip_audio_playback})")
+        logger.info(
+            f"Cascade handler initialized (skip_audio_playback={skip_audio_playback}, streaming_asr={self.is_streaming_asr})"
+        )
 
     def _convert_tool_specs_to_chat_format(self, realtime_specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Convert tool specs from Realtime API format to Chat Completions API format.
-
-        Realtime API format:
-            {"type": "function", "name": "...", "description": "...", "parameters": {...}}
-
-        Chat Completions API format:
-            {"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}
-        """
+        """Convert tool specs from Realtime API format to Chat Completions API format."""
         chat_specs = []
         for spec in realtime_specs:
-            if spec.get("type") == "function":
+            if spec["type"] == "function":
                 chat_spec = {
                     "type": "function",
                     "function": {
-                        "name": spec.get("name"),
-                        "description": spec.get("description"),
-                        "parameters": spec.get("parameters"),
+                        "name": spec["name"],
+                        "description": spec["description"],
+                        "parameters": spec["parameters"],
                     },
                 }
                 chat_specs.append(chat_spec)
         return chat_specs
 
     def _init_asr_provider(self) -> ASRProvider:
-        """Initialize ASR provider based on config."""
-        provider = config.CASCADE_ASR_PROVIDER
+        """Initialize ASR provider from cascade.yaml config."""
+        name = config.asr_provider
+        info = config.get_asr_provider_info(name)
 
-        if provider == "openai_whisper":
-            if not config.OPENAI_API_KEY:
-                raise ValueError("OPENAI_API_KEY not set in .env file")
-            return OpenAIWhisperASR(api_key=config.OPENAI_API_KEY)
+        # Validate API key requirements
+        api_key_map = {
+            "OPENAI_API_KEY": config.OPENAI_API_KEY,
+            "DEEPGRAM_API_KEY": config.DEEPGRAM_API_KEY,
+        }
+        for required in info["requires"]:
+            if not api_key_map[required]:
+                raise ValueError(f"{required} not set (required by {name})")
 
-        elif provider == "parakeet":
-            from reachy_mini_conversation_app.cascade.asr import ParakeetMLXASR
+        # Build kwargs: settings + API key if needed
+        kwargs = config.get_asr_settings(name)
+        for required in info["requires"]:
+            kwargs["api_key"] = api_key_map[required]
 
-            return ParakeetMLXASR(
-                model_name=config.PARAKEET_MODEL,
-                precision=config.PARAKEET_PRECISION,
-            )
+        # Dynamic import and instantiate
+        module = importlib.import_module(f"reachy_mini_conversation_app.cascade.asr.{info['module']}")
+        ProviderClass = getattr(module, info["class"])
 
-        elif provider == "deepgram_streaming":
-            from reachy_mini_conversation_app.cascade.asr import DeepgramStreamingASR
-
-            if not config.DEEPGRAM_API_KEY:
-                raise ValueError("DEEPGRAM_API_KEY not set in .env file")
-            return DeepgramStreamingASR(
-                api_key=config.DEEPGRAM_API_KEY,
-                model=config.DEEPGRAM_MODEL,
-                language="en",
-            )
-
-        elif provider == "parakeet_streaming":
-            from reachy_mini_conversation_app.cascade.asr import ParakeetMLXStreamingASR
-
-            return ParakeetMLXStreamingASR(
-                model_name=config.PARAKEET_MODEL,
-                precision=config.PARAKEET_PRECISION,
-                context_size=config.PARAKEET_STREAMING_CONTEXT,
-                depth=config.PARAKEET_STREAMING_DEPTH,
-            )
-
-        else:
-            raise ValueError(f"Unknown ASR provider: {provider}")
+        logger.info(f"Initializing ASR: {name} (location={info['location']}, streaming={info['streaming']})")
+        return ProviderClass(**kwargs)
 
     def _init_llm_provider(self) -> LLMProvider:
         """Initialize LLM provider based on config."""
-        provider = config.CASCADE_LLM_PROVIDER
+        provider = config.llm_provider
 
         # Add cascade-specific instructions about using speak tool instead of direct messaging
-        # This is because some LLM cannot at the same time call tools and send a message
-        # This allows the robot to for instance both speak and dance in one tool call.
         cascade_instructions = (
             get_session_instructions() + "\n\nIMPORTANT: To talk to the user, you *MUST* use the 'speak' tool. "
             "You can call 'speak' along with other tools in the same response."
@@ -143,7 +129,7 @@ class CascadeHandler:
                 raise ValueError("OPENAI_API_KEY not set in .env file")
             return OpenAILLM(
                 api_key=config.OPENAI_API_KEY,
-                model=config.CASCADE_LLM_MODEL,
+                model=config.llm_settings["model"],
                 system_instructions=cascade_instructions,
             )
 
@@ -154,7 +140,7 @@ class CascadeHandler:
                 raise ValueError("GEMINI_API_KEY not set in .env file")
             return GeminiLLM(
                 api_key=config.GEMINI_API_KEY,
-                model=config.GEMINI_MODEL,
+                model=config.llm_settings["model"],
                 system_instructions=cascade_instructions,
             )
 
@@ -163,21 +149,21 @@ class CascadeHandler:
 
     def _init_tts_provider(self) -> TTSProvider:
         """Initialize TTS provider based on config."""
-        provider = config.CASCADE_TTS_PROVIDER
+        provider = config.tts_provider
 
         if provider == "openai_tts":
             if not config.OPENAI_API_KEY:
                 raise ValueError("OPENAI_API_KEY not set in .env file")
             return OpenAITTS(
                 api_key=config.OPENAI_API_KEY,
-                voice=config.CASCADE_TTS_VOICE,
+                voice=config.tts_settings["voice"],
                 response_format="pcm",
             )
 
         elif provider == "kokoro":
             from reachy_mini_conversation_app.cascade.tts import KokoroTTS
 
-            return KokoroTTS(voice=config.KOKORO_VOICE)
+            return KokoroTTS(voice=config.tts_settings["voice"])
 
         elif provider == "elevenlabs":
             from reachy_mini_conversation_app.cascade.tts import ElevenLabsTTS
@@ -186,14 +172,13 @@ class CascadeHandler:
                 raise ValueError("ELEVENLABS_API_KEY not set in .env file")
             return ElevenLabsTTS(
                 api_key=config.ELEVENLABS_API_KEY,
-                voice_id=config.ELEVENLABS_VOICE_ID,
-                model=config.ELEVENLABS_MODEL,
+                voice_id=config.tts_settings["voice_id"],
+                model=config.tts_settings["model"],
                 output_format="pcm_24000",
             )
 
         else:
             raise ValueError(f"Unknown TTS provider: {provider}")
-
 
     async def process_audio_manual(self, audio_bytes: bytes) -> str:
         """Process recorded audio through the cascade pipeline.
@@ -335,7 +320,6 @@ class CascadeHandler:
                 if self.deps.movement_manager:
                     self.deps.movement_manager.set_listening(False)
 
-
                 # 2. LLM: Text → Response + Tool Calls
                 logger.info("Generating LLM response...")
                 tracker.mark("llm_start")
@@ -449,11 +433,6 @@ class CascadeHandler:
 
                     # Add image to conversation as a user message (for LLM to analyze)
                     # Decode base64 to raw bytes for Gemini inline_data format
-                    # TODO : shouldn't we inject this as a response to the LLM tool call, with the tool call id, etc.
-                    # TODO : maybe we should differentiate images that are requested by the LLM and those that we give it because of logic on the app side ?
-                    # TODO : This is Gemini. Check how other LLM providers like OpenAI require this ?
-                    import base64
-
                     image_bytes = base64.b64decode(b64_im)
 
                     self.conversation_history.append(

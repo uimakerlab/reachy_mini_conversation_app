@@ -1,4 +1,4 @@
-"""OpenAI Whisper ASR implementation."""
+"""Whisper ASR via OpenAI API."""
 
 from __future__ import annotations
 import io
@@ -14,11 +14,11 @@ from .base import ASRProvider
 logger = logging.getLogger(__name__)
 
 
-class OpenAIWhisperASR(ASRProvider):
-    """OpenAI Whisper API implementation for ASR."""
+class WhisperOpenAIASR(ASRProvider):
+    """Whisper ASR via OpenAI API (cloud, batch)."""
 
     def __init__(self, api_key: str, model: str = "whisper-1"):
-        """Initialize OpenAI Whisper ASR.
+        """Initialize Whisper OpenAI ASR.
 
         Args:
             api_key: OpenAI API key
@@ -27,7 +27,7 @@ class OpenAIWhisperASR(ASRProvider):
         """
         self.client = OpenAI(api_key=api_key)
         self.model = model
-        logger.info(f"Initialized OpenAI Whisper ASR with model: {model}")
+        logger.info(f"Initialized Whisper OpenAI ASR with model: {model}")
 
     async def transcribe(self, audio_bytes: bytes, language: Optional[str] = None) -> str:
         """Transcribe audio using OpenAI Whisper API.

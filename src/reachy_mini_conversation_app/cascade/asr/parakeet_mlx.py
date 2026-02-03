@@ -18,27 +18,27 @@ logger = logging.getLogger(__name__)
 
 
 class ParakeetMLXASR(ASRProvider):
-    """Parakeet-MLX ASR implementation optimized for Apple Silicon."""
+    """Parakeet-MLX ASR (local, Apple Silicon batch)."""
 
     def __init__(
         self,
-        model_name: str = "mlx-community/parakeet-tdt-0.6b-v3",
+        model: str = "mlx-community/parakeet-tdt-0.6b-v3",
         precision: str = "fp32",
     ):
         """Initialize Parakeet-MLX ASR.
 
         Args:
-            model_name: Model ID from HuggingFace (parakeet-tdt-0.6b-v3 recommended)
+            model: Model ID from HuggingFace (parakeet-tdt-0.6b-v3 recommended)
             precision: Inference precision (fp32 for quality, bf16 for speed)
 
         """
-        self.model_name = model_name
+        self.model_name = model
         self.precision = precision
         self.target_sample_rate = 16000  # Parakeet requires 16kHz
         self.model: Any = None  # Will be set by _ensure_model
 
         # Preload model immediately to avoid first-call delay
-        logger.info(f"Loading Parakeet model: {model_name} (precision: {precision})...")
+        logger.info(f"Loading Parakeet model: {model} (precision: {precision})...")
         self._ensure_model()
         logger.info("Parakeet model loaded successfully")
 

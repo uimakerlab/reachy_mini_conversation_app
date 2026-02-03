@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 # Suppress verbose debug logging from numba (used by librosa for audio resampling)
 logging.getLogger("numba").setLevel(logging.WARNING)
 
+# Metadata keys (not passed to provider constructor)
+ASR_METADATA_KEYS = {"module", "class", "streaming", "location", "requires", "hardware", "description", "status"}
+
 
 def _load_cascade_config() -> Dict[str, Any]:
     """Load cascade configuration from YAML file."""
@@ -31,7 +34,7 @@ def _load_cascade_config() -> Dict[str, Any]:
         required_keys = ["asr", "llm", "tts"]
         missing_keys = [key for key in required_keys if key not in config]
         if missing_keys:
-            raise RuntimeError(f"cascade.yaml is missing required keys: {', '.join(missing_keys)}\n")
+            raise RuntimeError(f"cascade.yaml is missing required keys: {', '.join(missing_keys)}")
 
         logger.info("Cascade configuration loaded from cascade.yaml")
         return config
@@ -45,66 +48,52 @@ class CascadeConfig:
 
     def __init__(self) -> None:
         """Initialize cascade configuration by loading cascade.yaml."""
-        # Load API keys from environment
-        self.ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-        self.DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+        # API keys from environment
         self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+        self.DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+        self.ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
-        # Load cascade.yaml
-        _cascade = _load_cascade_config()
+        self._cascade = _load_cascade_config()
 
-        # ASR configuration
-        self.CASCADE_ASR_PROVIDER = _cascade["asr"]["provider"]
-        self.PARAKEET_MODEL = _cascade["asr"]["parakeet"]["model"]
-        self.PARAKEET_PRECISION = _cascade["asr"]["parakeet"]["precision"]
-        self.PARAKEET_STREAMING_CONTEXT = tuple(
-            _cascade["asr"].get("parakeet_streaming", {}).get("context_size", [256, 256])
-        )
-        self.PARAKEET_STREAMING_DEPTH = _cascade["asr"].get("parakeet_streaming", {}).get("depth")
-        self.DEEPGRAM_MODEL = _cascade["asr"].get("deepgram_streaming", {}).get("model", "nova-2")
+        # ASR config
+        self.asr_provider = self._cascade["asr"]["provider"]
+        self.asr_providers = self._cascade["asr"]["providers"]
 
-        # LLM configuration
-        self.CASCADE_LLM_PROVIDER = _cascade["llm"]["provider"]
-        self.CASCADE_LLM_MODEL = _cascade["llm"]["openai_gpt"]["model"]
-        self.GEMINI_MODEL = _cascade["llm"]["gemini"]["model"]
+        # LLM config
+        self.llm_provider = self._cascade["llm"]["provider"]
+        self.llm_settings = self._cascade["llm"][self.llm_provider]
 
-        # TTS configuration
-        self.CASCADE_TTS_PROVIDER = _cascade["tts"]["provider"]
-        self.CASCADE_TTS_TRIM_SILENCE = _cascade["tts"]["trim_silence"]
-        self.CASCADE_TTS_VOICE = _cascade["tts"]["openai_tts"]["voice"]
+        # TTS config
+        self.tts_provider = self._cascade["tts"]["provider"]
+        self.tts_settings = self._cascade["tts"][self.tts_provider]
+        self.tts_trim_silence = self._cascade["tts"]["trim_silence"]
 
-        # Provider-specific TTS settings
-        _tts_kokoro = _cascade["tts"]["kokoro"]
-        _tts_elevenlabs = _cascade["tts"]["elevenlabs"]
-        self.KOKORO_VOICE = _tts_kokoro["voice"]
-        self.ELEVENLABS_VOICE_ID = _tts_elevenlabs["voice_id"]
-        self.ELEVENLABS_MODEL = _tts_elevenlabs["model"]
+        self._log_config()
 
-        # Log configuration
-        logger.debug(
-            f"Cascade: ASR={self.CASCADE_ASR_PROVIDER}, LLM={self.CASCADE_LLM_PROVIDER} "
-            f"({self.CASCADE_LLM_MODEL}), TTS={self.CASCADE_TTS_PROVIDER} "
-            f"(trim_silence={self.CASCADE_TTS_TRIM_SILENCE})"
-        )
-        if self.CASCADE_ASR_PROVIDER == "parakeet":
-            logger.debug(f"Parakeet: model={self.PARAKEET_MODEL}, precision={self.PARAKEET_PRECISION}")
-        elif self.CASCADE_ASR_PROVIDER == "parakeet_streaming":
-            logger.debug(
-                f"Parakeet Streaming: model={self.PARAKEET_MODEL}, "
-                f"precision={self.PARAKEET_PRECISION}, context={self.PARAKEET_STREAMING_CONTEXT}, "
-                f"depth={self.PARAKEET_STREAMING_DEPTH}"
-            )
-        elif self.CASCADE_ASR_PROVIDER == "deepgram_streaming":
-            logger.debug(f"Deepgram: model={self.DEEPGRAM_MODEL}")
-        if self.CASCADE_LLM_PROVIDER == "gemini":
-            logger.debug(f"Gemini: model={self.GEMINI_MODEL}")
-        if self.CASCADE_TTS_PROVIDER == "openai_tts":
-            logger.debug(f"OpenAI TTS: voice={self.CASCADE_TTS_VOICE}")
-        elif self.CASCADE_TTS_PROVIDER == "kokoro":
-            logger.debug(f"Kokoro: voice={self.KOKORO_VOICE}")
-        elif self.CASCADE_TTS_PROVIDER == "elevenlabs":
-            logger.debug(f"ElevenLabs: voice_id={self.ELEVENLABS_VOICE_ID}, model={self.ELEVENLABS_MODEL}")
+    def get_asr_provider_info(self, name: str | None = None) -> Dict[str, Any]:
+        """Get full provider info from cascade.yaml."""
+        provider_name = name or self.asr_provider
+        if provider_name not in self.asr_providers:
+            available = ", ".join(self.asr_providers.keys())
+            raise ValueError(f"Unknown ASR provider: {provider_name}. Available: {available}")
+        return self.asr_providers[provider_name]
+
+    def get_asr_settings(self, name: str | None = None) -> Dict[str, Any]:
+        """Get provider settings (excludes metadata like module, class, streaming, etc.)."""
+        info = self.get_asr_provider_info(name)
+        return {k: v for k, v in info.items() if k not in ASR_METADATA_KEYS}
+
+    def is_asr_streaming(self, name: str | None = None) -> bool:
+        """Check if provider supports streaming."""
+        return self.get_asr_provider_info(name)["streaming"]
+
+    def _log_config(self) -> None:
+        """Log the loaded configuration."""
+        logger.info(f"Cascade: ASR={self.asr_provider}, LLM={self.llm_provider}, TTS={self.tts_provider}")
+        logger.debug(f"ASR provider info: {self.get_asr_provider_info()}")
+        logger.debug(f"LLM settings: {self.llm_settings}")
+        logger.debug(f"TTS settings: {self.tts_settings}")
 
 
 # Singleton instance - loaded on import

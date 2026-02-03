@@ -1,18 +1,22 @@
-"""ASR provider implementations."""
+"""ASR provider exports."""
 
 from .base import ASRProvider
-from .parakeet import ParakeetMLXASR
+from .deepgram import DeepgramASR
+from .nemotron import NemotronASR
+from .whisper_mlx import WhisperMLXASR
+from .parakeet_mlx import ParakeetMLXASR
 from .base_streaming import StreamingASRProvider
-from .openai_whisper import OpenAIWhisperASR
-from .deepgram_streaming import DeepgramStreamingASR
+from .whisper_openai import WhisperOpenAIASR
 from .parakeet_mlx_streaming import ParakeetMLXStreamingASR
 
 
 __all__ = [
     "ASRProvider",
     "StreamingASRProvider",
-    "OpenAIWhisperASR",
+    "DeepgramASR",
+    "NemotronASR",
     "ParakeetMLXASR",
     "ParakeetMLXStreamingASR",
-    "DeepgramStreamingASR",
+    "WhisperMLXASR",
+    "WhisperOpenAIASR",
 ]

@@ -41,7 +41,7 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
 
     def __init__(
         self,
-        model_name: str = "mlx-community/parakeet-tdt-0.6b-v3",
+        model: str = "mlx-community/parakeet-tdt-0.6b-v3",
         precision: str = "fp32",
         context_size: tuple[int, int] = (256, 256),
         depth: Optional[int] = None,
@@ -49,7 +49,7 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
         """Initialize Parakeet-MLX streaming ASR.
 
         Args:
-            model_name: Model ID from HuggingFace (parakeet-tdt-0.6b-v3 recommended)
+            model: Model ID from HuggingFace (parakeet-tdt-0.6b-v3 recommended)
             precision: Inference precision (fp32 for quality, bf16 for speed)
             context_size: (left, right) attention window in frames for streaming.
                          Larger = better accuracy but more latency.
@@ -58,7 +58,7 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
                   None = auto (model-dependent), lower = faster streaming
 
         """
-        self.model_name = model_name
+        self.model_name = model
         self.precision = precision
         self.context_size = context_size
         self.depth = depth
@@ -87,7 +87,7 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
         self._mlx_lock = threading.Lock()
 
         # Preload model immediately to avoid first-call delay
-        logger.info(f"Loading Parakeet model: {model_name} (precision: {precision})...")
+        logger.info(f"Loading Parakeet model: {model} (precision: {precision})...")
         self._ensure_model()
         logger.info("Parakeet model loaded successfully")
 
@@ -165,10 +165,13 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
                     if self.depth is not None:
                         kwargs["depth"] = self.depth
 
+                    logger.info(f"  [LOCK] Creating transcribe_stream with kwargs: {kwargs}")
                     # Create context manager
                     self.transcriber_context = self.model.transcribe_stream(**kwargs)
+                    logger.info(f"  [LOCK] Context created: {type(self.transcriber_context)}")
                     # Enter the context
                     self.transcriber = self.transcriber_context.__enter__()
+                    logger.info(f"  [LOCK] Transcriber ready: {type(self.transcriber)}, depth={self.transcriber.depth}")
 
             await asyncio.to_thread(_create_stream)
 
@@ -204,8 +207,10 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
         try:
             # Convert WAV bytes to numpy array
             audio_array_np = self._wav_bytes_to_numpy(audio_chunk)
+            logger.debug(f"Parsed WAV: {len(audio_array_np)} samples, range=[{audio_array_np.min():.3f}, {audio_array_np.max():.3f}]")
 
             if len(audio_array_np) == 0:
+                logger.warning("Empty audio chunk received, skipping")
                 return  # Skip empty chunks
 
             # Buffer the chunk
@@ -222,19 +227,30 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
                 buffered_audio = np.concatenate(self.chunk_buffer)
                 batch_size = len(buffered_audio)
 
-                # Add audio with thread safety
-                def _add_audio() -> None:
+                # Add audio and trigger processing with thread safety
+                # IMPORTANT: Must call transcriber.result after add_audio to trigger processing
+                def _add_audio_and_process() -> str:
                     with self._mlx_lock:
+                        logger.info(f"  [LOCK] Adding audio: {len(buffered_audio)} samples, range=[{buffered_audio.min():.3f}, {buffered_audio.max():.3f}]")
                         audio_array_mlx = mx.array(buffered_audio)
+                        logger.info(f"  [LOCK] MLX array created: {audio_array_mlx.shape}, dtype={audio_array_mlx.dtype}")
                         self.transcriber.add_audio(audio_array_mlx)
+                        logger.info(f"  [LOCK] Audio added, getting result...")
+                        # Access result to trigger transcription
+                        result = self.transcriber.result
+                        text = result.text if result else ""
+                        logger.info(f"  [LOCK] Result: '{text}', draft_tokens={len(self.transcriber.draft_tokens)}")
+                        return text
 
-                await asyncio.to_thread(_add_audio)
+                current_text = await asyncio.to_thread(_add_audio_and_process)
 
                 # Update tracking
                 self.cumulative_samples_sent += batch_size
                 logger.info(
                     f"✓ Sent {batch_size} samples ({batch_size / self.target_sample_rate * 1000:.0f}ms) | Cumulative: {self.cumulative_samples_sent} ({self.cumulative_samples_sent / self.target_sample_rate:.1f}s)"
                 )
+                if current_text:
+                    logger.debug(f"Current transcript: '{current_text}'")
 
                 # Reset buffer
                 self.chunk_buffer = []
