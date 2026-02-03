@@ -803,14 +803,35 @@ class CascadeGradioUI:
 
                 # Update chat history from handler's conversation history
                 # This syncs any new messages added during continuous processing
+                # Use same logic as _process_audio_async: prefer speak tool over assistant content
+                has_speak_tool = any(
+                    msg.get("role") == "tool" and msg.get("name") == "speak"
+                    for msg in self.handler.conversation_history
+                )
+
                 new_history = []
                 for msg in self.handler.conversation_history:
                     role = msg.get("role")
                     content = msg.get("content", "")
+
                     if role == "user" and content:
-                        new_history.append({"role": "user", "content": content})
-                    elif role == "assistant" and content:
-                        new_history.append({"role": "assistant", "content": content})
+                        # User messages (skip multimodal content like images)
+                        if isinstance(content, str):
+                            new_history.append({"role": "user", "content": content})
+
+                    elif role == "assistant":
+                        # Only show assistant content if no speak tool (to avoid duplicates)
+                        if not has_speak_tool and content:
+                            new_history.append({"role": "assistant", "content": content})
+
+                    elif role == "tool" and msg.get("name") == "speak":
+                        # Speak tool results contain the actual response text
+                        try:
+                            tool_content = json.loads(content) if isinstance(content, str) else content
+                            if "message" in tool_content:
+                                new_history.append({"role": "assistant", "content": tool_content["message"]})
+                        except (json.JSONDecodeError, TypeError):
+                            pass
 
                 return new_history if new_history else chat_history, status
 
@@ -860,6 +881,9 @@ class CascadeGradioUI:
             # Wait for result with timeout
             result = future.result(timeout=60)
 
+            # DEBUG: Log received result
+            logger.info(f"DEBUG _process_audio_sync: received result - success={result.get('success')}, responses_count={len(result.get('responses', []))}")
+
             # Update chat history
             if result["success"]:
                 # Add user message
@@ -870,6 +894,7 @@ class CascadeGradioUI:
                 if result.get("responses"):
                     for response in result["responses"]:
                         chat_history.append({"role": "assistant", "content": response})
+                        logger.info(f"DEBUG: Added assistant response to chat_history: {response[:50]}...")
 
                 status = "Message processed successfully!"
             else:
@@ -919,6 +944,15 @@ class CascadeGradioUI:
             if not transcript.strip():
                 result["error"] = "Empty transcript"
                 return result
+
+            # DEBUG: Log conversation history state after handler processing
+            new_messages = self.handler.conversation_history[initial_history_length:]
+            logger.info(f"DEBUG: initial_history_length={initial_history_length}, new_messages_count={len(new_messages)}")
+            for i, msg in enumerate(new_messages):
+                role = msg.get("role")
+                name = msg.get("name", "")
+                content_preview = str(msg.get("content", ""))[:100]
+                logger.info(f"DEBUG: new_msg[{i}] role={role}, name={name}, content_preview={content_preview}")
 
             # Collect all speech messages first (to play them all in one stream)
             speak_messages = []
@@ -996,6 +1030,9 @@ class CascadeGradioUI:
                 tracker.print_summary()
 
             result["success"] = True
+
+            # DEBUG: Log final result before returning
+            logger.info(f"DEBUG: Returning result - success={result['success']}, responses_count={len(result['responses'])}, responses={result['responses'][:2] if result['responses'] else []}")
 
         except Exception as e:
             logger.exception(f"Error in async processing: {e}")

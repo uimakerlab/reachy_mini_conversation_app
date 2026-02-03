@@ -369,8 +369,13 @@ class CascadeHandler:
                 assistant_message["content"] = full_text
             if tool_calls:
                 assistant_message["tool_calls"] = tool_calls
+
+            # DEBUG: Log what we're adding to history
+            logger.info(f"DEBUG _process_llm_response: text_chunks={len(text_chunks)}, tool_calls={len(tool_calls)}, full_text_len={len(full_text)}")
+
             if text_chunks or tool_calls:
                 self.conversation_history.append(assistant_message)
+                logger.info(f"DEBUG: Added assistant message to history, history_len={len(self.conversation_history)}")
 
             # Handle text-only responses: auto-inject speak tool call
             # This handles cases where LLM returns text without using the speak tool
@@ -424,6 +429,7 @@ class CascadeHandler:
                         "content": json.dumps(result),
                     }
                 )
+                logger.info(f"DEBUG: Added tool result to history: name={tool_name}, history_len={len(self.conversation_history)}")
 
                 # Special handling for camera tool
                 if tool_name == "camera" and "b64_im" in result:

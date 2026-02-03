@@ -103,10 +103,12 @@ def setup_logger(debug: bool) -> logging.Logger:
         logging.getLogger("aioice").setLevel(logging.INFO)
         logging.getLogger("openai").setLevel(logging.INFO)
         logging.getLogger("websockets").setLevel(logging.INFO)
+        logging.getLogger("matplotlib").setLevel(logging.WARNING)
     else:
         logging.getLogger("aiortc").setLevel(logging.ERROR)
         logging.getLogger("fastrtc").setLevel(logging.ERROR)
         logging.getLogger("aioice").setLevel(logging.WARNING)
+        logging.getLogger("matplotlib").setLevel(logging.WARNING)
     return logger
 
 def log_connection_troubleshooting(logger: logging.Logger, robot_name: Optional[str]) -> None:
