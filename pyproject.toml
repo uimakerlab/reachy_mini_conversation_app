@@ -58,6 +58,7 @@ all_vision = [
 ]
 
 cascade = ["sounddevice>=0.4.6", "librosa>=0.10.0", "pyyaml>=6.0"]
+cascade_silero_vad = ["torch>=2.0", "torchaudio>=2.0"]
 cascade_parakeet = ["parakeet-mlx>=0.4.0", "ffmpeg-python>=0.2.0"]
 cascade_kokoro = ["kokoro>=0.9.4"]
 cascade_elevenlabs = ["elevenlabs>=1.0.0"]
@@ -65,6 +66,7 @@ cascade_gemini = ["google-genai>=0.6.0"]
 cascade_deepgram = ["deepgram-sdk>=3.0.0,<4.0.0"]
 cascade_all = [
   "reachy_mini_conversation_app[cascade]",
+  "reachy_mini_conversation_app[cascade_silero_vad]",
   "reachy_mini_conversation_app[cascade_parakeet]",
   "reachy_mini_conversation_app[cascade_kokoro]",
   "reachy_mini_conversation_app[cascade_elevenlabs]",
