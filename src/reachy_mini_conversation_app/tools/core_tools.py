@@ -181,6 +181,9 @@ def _initialize_tools() -> None:
 
     _load_profile_tools()
 
+    # Always load built-in tools (available to all profiles)
+    importlib.import_module("reachy_mini_conversation_app.tools.speak")
+
     ALL_TOOLS = {cls.name: cls() for cls in get_concrete_subclasses(Tool)}  # type: ignore[type-abstract]
     ALL_TOOL_SPECS = [tool.spec() for tool in ALL_TOOLS.values()]
 

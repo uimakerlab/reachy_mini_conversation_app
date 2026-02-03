@@ -114,6 +114,13 @@ def run(
         vision_manager=vision_manager,
         head_wobbler=head_wobbler,
     )
+
+    # Cascade mode: delegate to cascade entry point
+    if args.cascade:
+        from reachy_mini_conversation_app.cascade.entry import run_cascade_mode
+        run_cascade_mode(deps, robot, args, logger)
+        return
+
     current_file_path = os.path.dirname(os.path.abspath(__file__))
     logger.debug(f"Current file absolute path: {current_file_path}")
     chatbot = gr.Chatbot(

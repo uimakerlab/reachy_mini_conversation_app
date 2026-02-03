@@ -236,6 +236,30 @@ LOCKED_PROFILE: str | None = "mars_rover"  # Lock to this profile
 When `LOCKED_PROFILE` is set, the app always uses that profile, ignoring `REACHY_MINI_CUSTOM_PROFILE` env var & the Gradio UI shows "(locked)" and disables all profile editing controls.
 This is useful for creating dedicated clones of the app with a fixed personality. Clone scripts can simply edit this constant to lock the variant.
 
+### Cascade mode
+
+#### Dependencies
+To include dependencies for the cascade of models:
+```
+uv sync --extra cascade             # For cascade pipeline (base, includes OpenAI providers)
+uv sync --extra cascade_parakeet    # Add Parakeet ASR (local, Apple Silicon)
+uv sync --extra cascade_kokoro      # Add Kokoro TTS (local, Apple Silicon)
+uv sync --extra cascade_elevenlabs  # Add ElevenLabs TTS
+uv sync --extra cascade_gemini      # Add Google Gemini LLM
+uv sync --extra cascade_all         # All cascade providers
+```
+
+#### Running with cascade
+- Run with cascade pipeline and Gradio web UI (requires `cascade` extra):
+
+  ```bash
+  reachy-mini-conversation-app --cascade --gradio
+  ```
+
+Note: Cascade mode currently only supports Gradio UI. Console mode with VAD is planned for future.
+
+
+#### env variables
 
 ## Development workflow
 - Install the dev group extras: `uv sync --group dev` or `pip install -e .[dev]`.
