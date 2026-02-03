@@ -502,6 +502,49 @@ tracker.print_summary()
 
 ---
 
+## Troubleshooting & Known Issues
+
+### MLX Thread Affinity (Apple Silicon)
+
+**Problem:** Local MLX-based providers (Parakeet, Whisper MLX) may produce empty transcriptions when called from Gradio.
+
+**Root Cause:** MLX has thread affinity requirements. The cascade architecture involves multiple threads:
+1. **Main thread** - Gradio UI
+2. **Handler event loop thread** - Runs `asyncio` event loop via `threading.Thread`
+3. **Thread pool workers** - Created by `asyncio.to_thread()` for "non-blocking" operations
+
+When MLX operations are wrapped in `asyncio.to_thread()`, they execute in different thread pool workers. MLX models loaded in one thread context may not work correctly when inference runs in a different thread.
+
+**Symptoms:**
+- Audio chunks are sent successfully (logs show "✓ Sent X samples")
+- But `result.text` is always empty
+- `draft_tokens` and `finalized_tokens` lists remain empty
+- Works fine in standalone tests (single thread), fails in Gradio
+
+**Solution:** Run all MLX operations **synchronously** - no `asyncio.to_thread()`:
+
+```python
+# ❌ WRONG - spawns thread pool workers
+async def send_audio_chunk(self, chunk):
+    def _add_audio():
+        with self._lock:
+            self.transcriber.add_audio(mx.array(audio))
+    await asyncio.to_thread(_add_audio)
+
+# ✅ CORRECT - synchronous, respects thread affinity
+async def send_audio_chunk(self, chunk):
+    audio_mlx = mx.array(audio)
+    self.transcriber.add_audio(audio_mlx)
+```
+
+**Why this works:** MLX operations are fast on Apple Silicon (~10-50ms for small chunks). The slight blocking is acceptable and avoids thread context issues.
+
+**Comparison with cloud providers:** Deepgram streaming works with fire-and-forget `asyncio.run_coroutine_threadsafe()` because it only does async network I/O (WebSocket send) - no local compute. The transcription happens server-side.
+
+**Key takeaway:** For local ML inference on Apple Silicon, prefer synchronous execution over threading abstractions.
+
+---
+
 ## Future Extensions
 
 - Console Mode with VAD (voice activity detection)
