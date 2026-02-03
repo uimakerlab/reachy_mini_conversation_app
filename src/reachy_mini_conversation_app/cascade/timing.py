@@ -103,9 +103,23 @@ class LatencyTracker:
         logger.info("LATENCY SUMMARY")
         logger.info("=" * 80)
 
+        # Detect if we're using VAD or button-click flow
+        # VAD uses: vad_speech_end, recording_captured
+        # Button uses: user_stop_click, recording_ready
+        is_vad_flow = any(e["name"] == "vad_speech_end" for e in self.events)
+
+        if is_vad_flow:
+            # VAD flow: speech_end -> recording_captured -> asr_complete
+            recording_capture = self.get_duration("vad_speech_end", "recording_captured")
+            asr_processing = self.get_duration("recording_captured", "asr_complete")
+            user_stop_event = "vad_speech_end"
+        else:
+            # Button flow: user_stop_click -> recording_ready -> asr_complete
+            recording_capture = self.get_duration("user_stop_click", "recording_ready")
+            asr_processing = self.get_duration("recording_ready", "asr_complete")
+            user_stop_event = "user_stop_click"
+
         # Main sequential stages (these should add up to total perceived latency)
-        recording_capture = self.get_duration("user_stop_click", "recording_ready")
-        asr_processing = self.get_duration("recording_ready", "asr_complete")
         llm_generation = self.get_duration("asr_complete", "llm_complete")
         tts_generation = self.get_duration("tts_start", "tts_first_chunk_ready")
         audio_system = self.get_duration("tts_first_chunk_ready", "audio_playback_started")
@@ -115,7 +129,7 @@ class LatencyTracker:
         llm_to_tts_gap = self.get_duration("llm_complete", "tts_start")
 
         # Total perceived latency
-        total_latency = self.get_duration("user_stop_click", "audio_playback_started")
+        total_latency = self.get_duration(user_stop_event, "audio_playback_started")
 
         # Display main stages
         logger.info("")
@@ -137,7 +151,8 @@ class LatencyTracker:
         logger.info("")
         logger.info("TOTAL PERCEIVED LATENCY:")
         if total_latency is not None:
-            logger.info(f"     Click → First Audio........................ {total_latency:>8.1f}ms")
+            label = "Speech End → First Audio" if is_vad_flow else "Click → First Audio"
+            logger.info(f"     {label}{'.' * (40 - len(label))} {total_latency:>8.1f}ms")
 
         logger.info("=" * 80)
 

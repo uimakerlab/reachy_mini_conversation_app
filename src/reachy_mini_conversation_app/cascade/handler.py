@@ -207,6 +207,7 @@ class CascadeHandler:
                 logger.info("Transcribing...")
                 tracker.mark("transcribing_start")
                 transcript = await self.asr.transcribe(audio_bytes, language="en")
+                tracker.mark("asr_complete", {"transcript_len": len(transcript)})
                 logger.info(f"User said: {transcript}")
 
                 if not transcript.strip():
