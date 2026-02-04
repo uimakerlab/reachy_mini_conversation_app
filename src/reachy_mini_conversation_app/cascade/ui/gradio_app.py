@@ -284,6 +284,17 @@ class CascadeGradioUI:
                         except (json.JSONDecodeError, TypeError):
                             pass
 
+                    elif role == "tool" and msg.get("name") not in ("speak", None):
+                        tool_name = msg.get("name")
+                        if tool_name != "camera":  # Camera handled separately with image display
+                            # Display other tool executions with metadata
+                            tool_content = msg.get("content", "{}")
+                            new_history.append({
+                                "role": "assistant",
+                                "content": tool_content,
+                                "metadata": {"title": f"🛠️ Used tool {tool_name}", "status": "done"},
+                            })
+
                 return new_history if new_history else chat_history, status
 
             # Set up polling timer for continuous mode (every 500ms)
@@ -343,8 +354,15 @@ class CascadeGradioUI:
                 # Add assistant responses
                 if result.get("responses"):
                     for response in result["responses"]:
-                        chat_history.append({"role": "assistant", "content": response})
-                        logger.debug(f"Added assistant response to chat_history: {response[:50]}...")
+                        if isinstance(response, dict):
+                            # Response already has role/content/metadata (e.g., tool messages)
+                            chat_history.append(response)
+                            content_preview = str(response.get("content", ""))[:50]
+                            logger.debug(f"Added formatted response to chat_history: {content_preview}...")
+                        else:
+                            # Plain string response (e.g., speak tool message text)
+                            chat_history.append({"role": "assistant", "content": response})
+                            logger.debug(f"Added assistant response to chat_history: {response[:50]}...")
 
                 status = "Message processed successfully!"
             else:
@@ -462,8 +480,13 @@ class CascadeGradioUI:
                         except Exception as e:
                             logger.exception(f"Failed to add camera image to chat: {e}")
                     elif tool_name:
-                        # Display other tool executions
-                        result["responses"].append(f"Used tool: {tool_name}")
+                        # Display other tool executions with metadata (collapsible in Gradio)
+                        tool_content = message.get("content", "{}")
+                        result["responses"].append({
+                            "role": "assistant",
+                            "content": tool_content,  # Already JSON string from handler
+                            "metadata": {"title": f"🛠️ Used tool {tool_name}", "status": "done"},
+                        })
 
             # In case there are several speech messages in a single stream (it shouldn't happen too much), concatenate them.
             if speak_messages:

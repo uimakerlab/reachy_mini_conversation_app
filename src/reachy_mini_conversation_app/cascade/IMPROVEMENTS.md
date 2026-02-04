@@ -2,7 +2,6 @@
 
 This document provides a detailed technical assessment of the cascade module, identifying opportunities for simplification, deduplication, and cleanup.
 
-**Audit Date:** February 2025
 **Scope:** All files in `cascade/` directory
 
 ---
