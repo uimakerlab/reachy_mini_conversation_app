@@ -29,9 +29,14 @@ cascade/
 ├── entry.py                           # Entry point from main.py
 ├── handler.py                         # Core pipeline orchestrator
 ├── config.py                          # Configuration loader (cascade.yaml)
-├── gradio_ui.py                       # Gradio interface & audio I/O
 ├── timing.py                          # Latency tracking & profiling
 ├── vad.py                             # Silero VAD for continuous mode
+│
+├── ui/                                # Gradio interface components
+│   ├── __init__.py                    # Exports CascadeGradioUI
+│   ├── audio_playback.py              # Pre-warmed audio output system
+│   ├── audio_recording.py             # Push-to-talk and VAD recording
+│   └── gradio_app.py                  # Main Gradio interface
 │
 ├── asr/                               # Automatic Speech Recognition
 │   ├── __init__.py                    # Provider exports
@@ -106,44 +111,75 @@ async _execute_tool_calls(tool_calls) -> None
     # Execute individual tools, handle camera/speak specially
 ```
 
-### CascadeGradioUI (`gradio_ui.py`)
+### UI Components (`ui/`)
 
-Handles the Gradio web interface and audio I/O.
+The Gradio interface is split into focused modules:
+
+#### AudioPlaybackSystem (`ui/audio_playback.py`)
+
+Pre-warmed audio output system for low-latency TTS playback.
 
 **Responsibilities:**
-- Display chat interface
-- Record audio from microphone
-- Convert audio to WAV bytes
-- Extract responses from handler's conversation history
-- Synthesize TTS and play through speaker
-- Synchronize head wobbler with audio
-- Manage pre-warmed playback threads
+- Detect playback backend (sounddevice vs robot.media)
+- Manage persistent playback and wobbler threads
+- Queue-based communication for zero-startup-cost playback
+
+**Key Interface:**
+```python
+playback = AudioPlaybackSystem(robot, head_wobbler, shutdown_event)
+playback.put_audio(chunk)      # Queue audio for playback
+playback.put_wobbler(chunk)    # Queue wobbler data
+playback.signal_end_of_turn()  # Signal end of speech
+playback.close()               # Shutdown threads
+```
+
+#### Recording Classes (`ui/audio_recording.py`)
+
+**ContinuousState:** Enum for VAD state machine (IDLE → LISTENING → RECORDING → PROCESSING)
+
+**StreamingASRCallbacks:** Dataclass for injecting ASR callbacks without coupling to handler.
+
+**PushToTalkRecorder:** Manual recording mode.
+```python
+recorder = PushToTalkRecorder(sample_rate, streaming_callbacks, event_loop)
+recorder.start()   # Start recording
+recorder.stop()    # Stop and get audio
+wav_bytes = recorder.get_wav_bytes()
+```
+
+**ContinuousVADRecorder:** VAD-based continuous recording.
+```python
+recorder = ContinuousVADRecorder(
+    sample_rate, streaming_callbacks, on_speech_captured, event_loop
+)
+recorder.start()   # Start VAD loop
+recorder.stop()    # Stop VAD loop
+recorder.state     # Current ContinuousState
+```
+
+#### CascadeGradioUI (`ui/gradio_app.py`)
+
+Main orchestrator that ties everything together.
+
+**Responsibilities:**
+- Build Gradio interface (chatbot, buttons, status)
+- Process audio pipeline (ASR → LLM → TTS)
+- Coordinate playback and recording subsystems
+- Handle Gradio events and lifecycle
 
 **Key Attributes:**
 ```python
-handler: CascadeHandler       # Reference to handler
-robot: Optional[ReachyMini]   # Robot instance for media output
-recording: bool               # Recording state
-audio_frames: List[np.int16]  # Accumulated audio during recording
-sample_rate: int = 16000      # Recording sample rate
-audio_queue: Queue            # Audio chunks → playback thread
-wobbler_queue: Queue          # Audio chunks → wobbler thread
-use_robot_media: bool         # Use robot.media vs sounddevice
+handler: CascadeHandler        # Reference to cascade handler
+robot: ReachyMini | None       # Robot instance
+playback: AudioPlaybackSystem  # Audio output
+shutdown_event: threading.Event # Coordinated shutdown
 ```
 
 **Key Methods:**
 ```python
-def create_interface() -> gr.Blocks
-    # Build and return Gradio interface
-
-def toggle_recording_wrapper()
-    # Called on START/STOP recording button
-
-def _synthesize_for_gradio(text)
-    # TTS → stream chunks to queues → parallel playback + wobbler
-
-def _init_playback_threads()
-    # Choose playback backend (sounddevice vs robot.media)
+create_interface() -> gr.Blocks     # Build Gradio UI
+launch(**kwargs) -> None            # Start server
+close() -> None                     # Shutdown all subsystems
 ```
 
 ---
@@ -404,8 +440,10 @@ main.py
       │   ├─> llm/ providers
       │   └─> tts/ providers
       │
-      └─> gradio_ui.py (CascadeGradioUI)
+      └─> ui/gradio_app.py (CascadeGradioUI)
           │
+          ├─> ui/audio_playback.py (AudioPlaybackSystem)
+          ├─> ui/audio_recording.py (Recorders)
           └─> handler (reference)
 ```
 
@@ -413,6 +451,8 @@ main.py
 - `entry.py` creates both handler and UI, wires them together
 - Handler owns conversation state and provider instances
 - UI owns audio I/O and display, reads from handler
+- AudioPlaybackSystem handles pre-warmed playback threads
+- Recording classes encapsulate push-to-talk and VAD modes
 
 ---
 

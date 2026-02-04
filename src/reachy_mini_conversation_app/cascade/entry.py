@@ -31,8 +31,8 @@ def run_cascade_mode(
         logger: Logger instance
 
     """
+    from reachy_mini_conversation_app.cascade.ui import CascadeGradioUI
     from reachy_mini_conversation_app.cascade.handler import CascadeHandler
-    from reachy_mini_conversation_app.cascade.gradio_ui import CascadeGradioUI
 
     # Cascade mode requires Gradio (console mode with VAD not yet implemented)
     if not args.gradio:
