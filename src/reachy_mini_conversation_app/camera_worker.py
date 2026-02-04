@@ -84,7 +84,7 @@ class CameraWorker:
         self._stop_event.clear()
         self._thread = threading.Thread(target=self.working_loop, daemon=True)
         self._thread.start()
-        logger.debug("Camera worker started")
+        logger.info("Camera worker thread started, waiting for first frame...")
 
     def stop(self) -> None:
         """Stop the camera worker loop."""
@@ -104,6 +104,8 @@ class CameraWorker:
         # Initialize head tracker if available
         neutral_pose = np.eye(4)  # Neutral pose (identity matrix)
         self.previous_head_tracking_state = self.is_head_tracking_enabled
+        first_frame_logged = False
+        null_frame_count = 0
 
         while not self._stop_event.is_set():
             try:
@@ -113,6 +115,12 @@ class CameraWorker:
                 frame = self.reachy_mini.media.get_frame()
 
                 if frame is not None:
+                    # Log first successful frame capture
+                    if not first_frame_logged:
+                        logger.info(f"Camera worker: first frame captured (shape={frame.shape})")
+                        first_frame_logged = True
+                        null_frame_count = 0
+
                     # Thread-safe frame storage
                     with self.frame_lock:
                         self.latest_frame = frame  # .copy()
@@ -230,6 +238,16 @@ class CameraWorker:
                                 self.interpolation_start_time = None
                                 self.interpolation_start_pose = None
                         # else: Keep current offsets (within 2s delay period)
+
+                else:
+                    # Track consecutive null frames for debugging
+                    null_frame_count += 1
+                    if null_frame_count == 1:
+                        logger.debug("Camera worker: get_frame() returned None")
+                    elif null_frame_count == 50:  # ~2 seconds at 40ms interval
+                        logger.warning(f"Camera worker: get_frame() returned None {null_frame_count} times consecutively")
+                    elif null_frame_count % 250 == 0:  # Every ~10 seconds
+                        logger.warning(f"Camera worker: still no frames after {null_frame_count} attempts")
 
                 # Small sleep to prevent excessive CPU usage (same as main_works.py)
                 time.sleep(0.04)

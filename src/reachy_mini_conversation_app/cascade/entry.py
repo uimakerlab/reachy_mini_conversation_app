@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import sys
+import time
 import logging
 from typing import TYPE_CHECKING
 
@@ -51,8 +52,24 @@ def run_cascade_mode(
     # Start services
     deps.movement_manager.start()
     deps.head_wobbler.start()
+
+    # Initialize media for video capture (required for camera.get_frame() to work)
+    # This mirrors what console.py does with start_recording()
     if deps.camera_worker:
+        logger.info(f"Media backend: {robot.media.backend}")
+        logger.info("Starting media recording for video capture...")
+        try:
+            robot.media.start_recording()
+            time.sleep(0.5)  # Give video pipeline time to start
+            logger.info("Media recording started")
+        except Exception as e:
+            logger.warning(f"Could not start media recording: {e}")
+
         deps.camera_worker.start()
+        logger.info("Camera worker started in cascade mode")
+    else:
+        logger.warning("No camera worker available (deps.camera_worker is None)")
+
     if deps.vision_manager:
         deps.vision_manager.start()
 
@@ -75,6 +92,11 @@ def run_cascade_mode(
         deps.head_wobbler.stop()
         if deps.camera_worker:
             deps.camera_worker.stop()
+            # Stop media recording that was started for video capture
+            try:
+                robot.media.stop_recording()
+            except Exception as e:
+                logger.debug(f"Error stopping media recording: {e}")
         if deps.vision_manager:
             deps.vision_manager.stop()
 
@@ -86,8 +108,6 @@ def run_cascade_mode(
 
         # Prevent connection to keep alive some threads
         robot.client.disconnect()
-
-        import time
 
         time.sleep(1)
         logger.info("Cascade mode shutdown complete.")

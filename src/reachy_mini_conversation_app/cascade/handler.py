@@ -389,9 +389,12 @@ class CascadeHandler:
                     self.deps,
                 )
 
-                # Do not log result if the tool_name was camera
+                # Do not log full result if the tool_name was camera (base64 is huge)
                 if tool_name == "camera":
-                    logger.info("Tool result: [camera image in base64, now shown]")
+                    if "b64_im" in result:
+                        logger.info("Tool result: [camera image in base64, not shown]")
+                    else:
+                        logger.info(f"Tool result: {result}")  # Log errors normally
                 else:
                     logger.info(f"Tool result: {result}")
 
@@ -407,26 +410,30 @@ class CascadeHandler:
                 logger.debug(f"Added tool result to history: name={tool_name}, history_len={len(self.conversation_history)}")
 
                 # Special handling for camera tool
-                if tool_name == "camera" and "b64_im" in result:
-                    has_camera_tool = True
-                    b64_im = result["b64_im"]
-                    logger.info("Camera tool executed - adding image to conversation for LLM analysis")
+                if tool_name == "camera":
+                    has_camera_tool = True  # Always trigger follow-up LLM call for camera
+                    if "b64_im" in result:
+                        b64_im = result["b64_im"]
+                        logger.info("Camera tool executed - adding image to conversation for LLM analysis")
 
-                    # Add image to conversation as a user message (for LLM to analyze)
-                    # Decode base64 to raw bytes for Gemini inline_data format
-                    image_bytes = base64.b64decode(b64_im)
+                        # Add image to conversation as a user message (for LLM to analyze)
+                        # Decode base64 to raw bytes for Gemini inline_data format
+                        image_bytes = base64.b64decode(b64_im)
 
-                    self.conversation_history.append(
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image",
-                                    "image": image_bytes,  # Will be converted to Gemini format in LLM
-                                }
-                            ],
-                        }
-                    )
+                        self.conversation_history.append(
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "image",
+                                        "image": image_bytes,  # Will be converted to Gemini format in LLM
+                                    }
+                                ],
+                            }
+                        )
+                    else:
+                        # Camera failed - error already in tool result, LLM will see it
+                        logger.warning(f"Camera tool returned error: {result}")
 
                 # Special handling for speak tool
                 elif tool_name == "speak" and "message" in result:
