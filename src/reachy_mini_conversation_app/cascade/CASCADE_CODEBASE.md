@@ -40,7 +40,8 @@ cascade/
 │   ├── openai_whisper.py              # OpenAI Whisper implementation
 │   ├── parakeet.py                    # Parakeet batch implementation
 │   ├── parakeet_mlx_streaming.py      # Parakeet MLX streaming implementation
-│   └── deepgram_streaming.py          # Deepgram streaming implementation
+│   ├── deepgram.py                    # Deepgram streaming implementation
+│   └── openai_realtime_asr.py         # OpenAI Realtime streaming implementation
 │
 ├── llm/                               # Large Language Models
 │   ├── __init__.py                    # Provider exports
@@ -170,7 +171,8 @@ class StreamingASRProvider(ASRProvider):
 | `OpenAIWhisperASR` | Batch | OpenAI Whisper API |
 | `ParakeetMLXASR` | Batch | Local Parakeet via MLX |
 | `ParakeetMLXStreamingASR` | Streaming | Local streaming via MLX |
-| `DeepgramStreamingASR` | Streaming | Remote via WebSocket |
+| `DeepgramASR` | Streaming | Deepgram Nova via WebSocket |
+| `OpenAIRealtimeASR` | Streaming | OpenAI Realtime API via WebSocket |
 
 ### LLM Providers (`llm/`)
 
@@ -542,6 +544,41 @@ async def send_audio_chunk(self, chunk):
 **Comparison with cloud providers:** Deepgram streaming works with fire-and-forget `asyncio.run_coroutine_threadsafe()` because it only does async network I/O (WebSocket send) - no local compute. The transcription happens server-side.
 
 **Key takeaway:** For local ML inference on Apple Silicon, prefer synchronous execution over threading abstractions.
+
+### OpenAI Realtime ASR - "Streaming" Misconception
+
+**Problem:** Partial transcripts don't appear during speech - they all arrive at once after speech ends.
+
+**Root Cause:** OpenAI's "streaming transcription" means text streams out quickly *after* audio is committed, NOT that you get real-time partials while speaking.
+
+**How it actually works:**
+1. Audio chunks sent → buffer on server
+2. Server VAD detects silence → commits buffer
+3. THEN transcription starts and deltas stream rapidly (~200ms for full text)
+
+**Additional issue - Connection latency:**
+- WebSocket connection takes ~800-1000ms to establish after speech starts
+- Audio recorded during this time overflows and is lost
+- Server VAD may not track speech properly due to this discontinuity
+
+**Configuration options (`cascade.yaml`):**
+```yaml
+openai_realtime_asr:
+  use_server_vad: true   # Real-time partials after each silence detection
+  use_server_vad: false  # All transcription at end (manual commit)
+```
+
+**With `use_server_vad: true`:**
+- Server VAD (500ms silence) and local Silero VAD (700ms) can coexist
+- Server streams partials after each detected pause
+- Local VAD controls when `end_stream()` is called
+
+**Comparison with Deepgram:**
+- Deepgram also streams partials after audio is processed, not during speech
+- Both exhibit similar "batch of partials at end" behavior
+- True real-time mid-speech partials would require periodic audio commits (causing fragmented transcripts)
+
+**Potential fix (not implemented):** Pre-warm WebSocket connection before speech starts, keeping it in standby mode to eliminate connection latency.
 
 ---
 

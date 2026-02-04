@@ -2,7 +2,7 @@
 # API keys are in .env file (OPENAI_API_KEY, DEEPGRAM_API_KEY, GEMINI_API_KEY, ELEVENLABS_API_KEY)
 
 asr:
-  provider: parakeet_mlx  # deepgram, whisper_openai, parakeet_mlx, parakeet_mlx_streaming
+  provider: openai_realtime_asr  # deepgram, whisper_openai, parakeet_mlx, parakeet_mlx_streaming
 
   providers:
     # ========== CLOUD PROVIDERS ==========
@@ -28,6 +28,20 @@ asr:
       # Settings
       model: nova-2  # or nova-3
       language: en
+
+    openai_realtime_asr:
+      module: openai_realtime_asr
+      class: OpenAIRealtimeASR
+      streaming: true
+      location: cloud
+      requires: [OPENAI_API_KEY]
+      hardware: null
+      description: "OpenAI Realtime - GPT-4o streaming transcription via WebSocket"
+      # Settings
+      model: gpt-4o-transcribe  # or gpt-4o-mini-transcribe (faster, lower quality)
+      language: en
+      prompt: ""  # Optional: guide transcription style/vocabulary
+      use_server_vad: true  # Enable for real-time partials during speech; both VADs can coexist
 
     # ========== LOCAL PROVIDERS (Apple Silicon) ==========
     parakeet_mlx:

@@ -6328,6 +6328,7 @@ cascade-all = [
     { name = "sounddevice" },
     { name = "torch" },
     { name = "torchaudio" },
+    { name = "websockets" },
 ]
 cascade-deepgram = [
     { name = "deepgram-sdk" },
@@ -6343,6 +6344,9 @@ cascade-kokoro = [
 ]
 cascade-nemotron = [
     { name = "nemo-toolkit", extra = ["asr"] },
+]
+cascade-openai-realtime = [
+    { name = "websockets" },
 ]
 cascade-parakeet = [
     { name = "ffmpeg-python" },
@@ -6413,6 +6417,7 @@ requires-dist = [
     { name = "reachy-mini-conversation-app", extras = ["cascade-gemini"], marker = "extra == 'cascade-all'" },
     { name = "reachy-mini-conversation-app", extras = ["cascade-kokoro"], marker = "extra == 'cascade-all'" },
     { name = "reachy-mini-conversation-app", extras = ["cascade-nemotron"], marker = "extra == 'cascade-all'" },
+    { name = "reachy-mini-conversation-app", extras = ["cascade-openai-realtime"], marker = "extra == 'cascade-all'" },
     { name = "reachy-mini-conversation-app", extras = ["cascade-parakeet"], marker = "extra == 'cascade-all'" },
     { name = "reachy-mini-conversation-app", extras = ["cascade-silero-vad"], marker = "extra == 'cascade-all'" },
     { name = "reachy-mini-dances-library" },
@@ -6428,8 +6433,9 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'local-vision'", specifier = "==5.0.0rc2" },
     { name = "ultralytics", marker = "extra == 'all-vision'" },
     { name = "ultralytics", marker = "extra == 'yolo-vision'" },
+    { name = "websockets", marker = "extra == 'cascade-openai-realtime'", specifier = ">=12.0" },
 ]
-provides-extras = ["reachy-mini-wireless", "local-vision", "yolo-vision", "mediapipe-vision", "all-vision", "cascade", "cascade-silero-vad", "cascade-parakeet", "cascade-nemotron", "cascade-kokoro", "cascade-elevenlabs", "cascade-gemini", "cascade-deepgram", "cascade-all"]
+provides-extras = ["reachy-mini-wireless", "local-vision", "yolo-vision", "mediapipe-vision", "all-vision", "cascade", "cascade-silero-vad", "cascade-parakeet", "cascade-nemotron", "cascade-kokoro", "cascade-elevenlabs", "cascade-gemini", "cascade-deepgram", "cascade-openai-realtime", "cascade-all"]
 
 [package.metadata.requires-dev]
 dev = [

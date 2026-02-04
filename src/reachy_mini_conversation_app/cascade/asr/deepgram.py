@@ -224,7 +224,7 @@ class DeepgramASR(StreamingASRProvider):
                             self.final_transcript += " " + transcript
                             self.is_final_received = True
                         else:
-                            logger.debug(f"Deepgram partial: '{transcript}'")
+                            logger.info(f"🎤 Partial: {transcript}")
                             self.partial_transcript = transcript
 
         except Exception as e:

@@ -270,15 +270,11 @@ class CascadeHandler:
             await self.asr.send_audio_chunk(chunk)
             partial = await self.asr.get_partial_transcript()
 
-            # Analyze partial transcript (debounced, fire-and-forget)
-            if partial:
-                # Only log if transcript changed (reduce spam)
-                if partial != self._last_partial_transcript:
-                    logger.debug(f"🎤 Got partial transcript: '{partial[:60]}...'")
-                    self._last_partial_transcript = partial
-
+            # Log partial transcript (debounced to reduce spam)
             if partial and partial != self._last_partial_transcript:
-                logger.debug(f"Partial transcript: {partial}")
+                logger.info(f"🎤 Partial: {partial}")
+                self._last_partial_transcript = partial
+
             return partial
         return None
 
