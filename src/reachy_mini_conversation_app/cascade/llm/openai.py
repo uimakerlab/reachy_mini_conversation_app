@@ -1,7 +1,6 @@
 """OpenAI LLM implementation."""
 
 from __future__ import annotations
-import json
 import logging
 from typing import Any, Dict, List, Optional, AsyncIterator
 
@@ -125,26 +124,3 @@ class OpenAILLM(LLMProvider):
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
             raise
-
-    def parse_tool_call(self, tool_call: Dict[str, Any]) -> tuple[str, str, Dict[str, Any]]:
-        """Parse a tool call into its components.
-
-        Args:
-            tool_call: Tool call dictionary from OpenAI
-
-        Returns:
-            Tuple of (call_id, tool_name, arguments_dict)
-
-        """
-        call_id = tool_call.get("id", "")
-        function_data = tool_call.get("function", {})
-        tool_name = function_data.get("name", "")
-        args_json = function_data.get("arguments", "{}")
-
-        try:
-            arguments = json.loads(args_json)
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse tool arguments: {args_json}")
-            arguments = {}
-
-        return call_id, tool_name, arguments

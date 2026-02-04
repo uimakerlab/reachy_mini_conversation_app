@@ -54,10 +54,8 @@ class CascadeGradioUI:
         # Tell handler to skip audio playback, since it will be done in gradio UI.
         self.handler.skip_audio_playback = True
 
-        self.chat_history: List[Dict[str, Any]] = []
         self.recording = False
         self.audio_frames: List[npt.NDArray[np.int16]] = []
-        self.recorded_file: Optional[str] = None
         self.audio_data: Optional[npt.NDArray[np.int16]] = None  # Keep audio in memory
         self.record_thread: Optional[threading.Thread] = None
         self.sample_rate = 16000
@@ -577,7 +575,6 @@ class CascadeGradioUI:
         self.recording = True
         self.audio_frames = []
         self.audio_data = None  # Reset audio data
-        self.recorded_file = None
 
         # Start recording in background thread
         self.record_thread = threading.Thread(target=self._record_audio, daemon=True)
@@ -853,8 +850,7 @@ class CascadeGradioUI:
             # Wait for result with timeout
             result = future.result(timeout=60)
 
-            # DEBUG: Log received result
-            logger.info(f"DEBUG _process_audio_sync: received result - success={result.get('success')}, responses_count={len(result.get('responses', []))}")
+            logger.debug(f"_process_audio_sync: received result - success={result.get('success')}, responses_count={len(result.get('responses', []))}")
 
             # Update chat history
             if result["success"]:
@@ -866,7 +862,7 @@ class CascadeGradioUI:
                 if result.get("responses"):
                     for response in result["responses"]:
                         chat_history.append({"role": "assistant", "content": response})
-                        logger.info(f"DEBUG: Added assistant response to chat_history: {response[:50]}...")
+                        logger.debug(f"Added assistant response to chat_history: {response[:50]}...")
 
                 status = "Message processed successfully!"
             else:
@@ -917,14 +913,13 @@ class CascadeGradioUI:
                 result["error"] = "Empty transcript"
                 return result
 
-            # DEBUG: Log conversation history state after handler processing
             new_messages = self.handler.conversation_history[initial_history_length:]
-            logger.info(f"DEBUG: initial_history_length={initial_history_length}, new_messages_count={len(new_messages)}")
+            logger.debug(f"initial_history_length={initial_history_length}, new_messages_count={len(new_messages)}")
             for i, msg in enumerate(new_messages):
                 role = msg.get("role")
                 name = msg.get("name", "")
                 content_preview = str(msg.get("content", ""))[:100]
-                logger.info(f"DEBUG: new_msg[{i}] role={role}, name={name}, content_preview={content_preview}")
+                logger.debug(f"new_msg[{i}] role={role}, name={name}, content_preview={content_preview}")
 
             # Collect all speech messages first (to play them all in one stream)
             speak_messages = []
@@ -1003,8 +998,7 @@ class CascadeGradioUI:
 
             result["success"] = True
 
-            # DEBUG: Log final result before returning
-            logger.info(f"DEBUG: Returning result - success={result['success']}, responses_count={len(result['responses'])}, responses={result['responses'][:2] if result['responses'] else []}")
+            logger.debug(f"Returning result - success={result['success']}, responses_count={len(result['responses'])}")
 
         except Exception as e:
             logger.exception(f"Error in async processing: {e}")
@@ -1045,11 +1039,6 @@ class CascadeGradioUI:
             # Generate TTS with PARALLEL sentence generation and STREAMING playback
             # Key optimization: Start playing sentence 1 while generating sentence 2, etc.
             total_chunks = 0
-            import wave
-            import asyncio
-            import tempfile
-
-            sentence_audio_files = []
 
             async def generate_and_queue_sentence(idx: int, sentence: str) -> List[npt.NDArray[np.int16]]:
                 """Generate TTS for one sentence and queue chunks immediately."""
@@ -1084,22 +1073,11 @@ class CascadeGradioUI:
                         tracker.mark("wobbler_first_chunk")
                         logger.info("First audio chunk playing - playback started while TTS continues in background")
 
-                # For DEBUG : Save sentence debug file
                 if sentence_chunks:
-                    sentence_audio = np.concatenate(sentence_chunks)
-                    temp_file = tempfile.NamedTemporaryFile(
-                        delete=False, suffix=f"_sentence_{idx + 1}.wav", dir="/tmp"
-                    )
-                    with wave.open(temp_file.name, "wb") as wf:
-                        wf.setnchannels(1)
-                        wf.setsampwidth(2)  # 16-bit
-                        wf.setframerate(24000)
-                        wf.writeframes(sentence_audio.tobytes())
-                    sentence_audio_files.append(temp_file.name)
-
                     duration = time.time() - sentence_start
+                    total_samples = sum(len(c) for c in sentence_chunks)
                     logger.debug(
-                        f"Sentence {idx + 1} complete: {len(sentence_chunks)} chunks ({len(sentence_audio)} samples, {len(sentence_audio) / 24000:.2f}s) generated in {duration:.2f}s -> {temp_file.name}"
+                        f"Sentence {idx + 1} complete: {len(sentence_chunks)} chunks ({total_samples} samples, {total_samples / 24000:.2f}s) generated in {duration:.2f}s"
                     )
 
                 return sentence_chunks
@@ -1133,7 +1111,6 @@ class CascadeGradioUI:
             logger.info(f"Parallel TTS complete: All {len(sentences)} sentences generated")
 
             logger.info(f"Generated {total_chunks} total audio chunks from {len(sentences)} sentences")
-            logger.debug(f"Debug files: {sentence_audio_files}")
 
             # Signal end of this playback session to persistent threads
             self.audio_queue.put(None)
@@ -1152,22 +1129,6 @@ class CascadeGradioUI:
             from reachy_mini_conversation_app.cascade.timing import tracker
 
             tracker.print_summary()
-
-            # Save final combined audio for debugging
-            if audio_chunks:
-                import wave
-                import tempfile
-
-                combined_audio = np.concatenate(audio_chunks)
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix="_combined.wav", dir="/tmp")
-                with wave.open(temp_file.name, "wb") as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)
-                    wf.setframerate(24000)
-                    wf.writeframes(combined_audio.tobytes())
-                logger.debug(
-                    f"Combined debug file: Saved {len(audio_chunks)} chunks ({len(combined_audio)} samples, {len(combined_audio) / 24000:.2f}s) to {temp_file.name}"
-                )
 
         except Exception as e:
             logger.exception(f"Error synthesizing speech: {e}")
@@ -1243,8 +1204,6 @@ class CascadeGradioUI:
     def _clear_history(self) -> tuple[List[Dict[str, Any]], str]:
         """Clear conversation history."""
         self.handler.conversation_history = []
-        self.chat_history = []
-        self.recorded_file = None
         return [], "History cleared"
 
     def launch(self, **kwargs: Any) -> None:

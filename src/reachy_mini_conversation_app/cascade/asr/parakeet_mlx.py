@@ -1,7 +1,6 @@
 """Parakeet-MLX ASR provider (Apple Silicon optimized)."""
 
 from __future__ import annotations
-import io
 import wave
 import asyncio
 import logging
@@ -9,7 +8,6 @@ from typing import Any, Optional
 
 import numpy as np
 import mlx.core as mx
-import numpy.typing as npt
 
 from .base import ASRProvider
 
@@ -181,79 +179,3 @@ class ParakeetMLXASR(ASRProvider):
                     Path(temp_file.name).unlink(missing_ok=True)
                 except Exception as e:
                     logger.warning(f"Failed to delete temporary file {temp_file.name}: {e}")
-
-    def _parse_wav_bytes(self, audio_bytes: bytes) -> npt.NDArray[np.float32]:
-        """Parse WAV file bytes into numpy array.
-
-        Args:
-            audio_bytes: WAV file bytes
-
-        Returns:
-            Audio as float32 numpy array (normalized to [-1, 1])
-
-        """
-        with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
-            sample_rate = wav_file.getframerate()
-            n_channels = wav_file.getnchannels()
-            sample_width = wav_file.getsampwidth()
-            n_frames = wav_file.getnframes()
-
-            # Store detected sample rate for resampling check
-            self._detected_sample_rate = sample_rate
-
-            logger.debug(f"WAV: {sample_rate}Hz, {n_channels}ch, {sample_width}byte, {n_frames} frames")
-
-            # Read frames
-            frames = wav_file.readframes(n_frames)
-
-            # Convert to numpy array based on sample width
-            if sample_width == 2:  # 16-bit
-                audio_array = np.frombuffer(frames, dtype=np.int16)
-            elif sample_width == 4:  # 32-bit
-                audio_array = np.frombuffer(frames, dtype=np.int32)
-            else:
-                raise ValueError(f"Unsupported sample width: {sample_width} bytes")
-
-            # Convert to float32 and normalize to [-1, 1]
-            audio_float = audio_array.astype(np.float32)
-            if sample_width == 2:
-                audio_float /= 32768.0  # int16 max
-            elif sample_width == 4:
-                audio_float /= 2147483648.0  # int32 max
-
-            # Convert stereo to mono if needed
-            if n_channels == 2:
-                audio_float = audio_float.reshape(-1, 2).mean(axis=1)
-                logger.debug("Converted stereo to mono")
-
-            return audio_float
-
-    def _resample_audio(self, audio: npt.NDArray[np.float32], from_rate: int, to_rate: int) -> npt.NDArray[np.float32]:
-        """Resample audio to target sample rate.
-
-        Args:
-            audio: Audio array
-            from_rate: Current sample rate
-            to_rate: Target sample rate
-
-        Returns:
-            Resampled audio
-
-        """
-        if from_rate == to_rate:
-            return audio
-
-        logger.debug(f"Resampling audio: {from_rate}Hz → {to_rate}Hz")
-
-        # Simple linear interpolation resampling
-        # For production, consider using scipy.signal.resample or librosa
-        duration = len(audio) / from_rate
-        new_length = int(duration * to_rate)
-
-        # Linear interpolation indices
-        old_indices = np.linspace(0, len(audio) - 1, new_length)
-        resampled = np.interp(old_indices, np.arange(len(audio)), audio)
-
-        logger.debug(f"Resampled: {len(audio)} → {len(resampled)} samples")
-        result: npt.NDArray[np.float32] = resampled.astype(np.float32)
-        return result

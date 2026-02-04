@@ -3,8 +3,7 @@
 from __future__ import annotations
 import time
 import logging
-from typing import Any, Dict, List, Optional, Generator
-from contextlib import contextmanager
+from typing import Any, Dict, List, Optional
 
 
 logger = logging.getLogger(__name__)
@@ -47,19 +46,6 @@ class LatencyTracker:
             metadata_str = f" ({', '.join(parts)})"
 
         logger.info(f"⏱️  [{elapsed_ms:7.1f}ms] {event_name}{metadata_str}")
-
-    @contextmanager
-    def measure(self, operation_name: str, metadata: Optional[Dict[str, Any]] = None) -> Generator[None, None, None]:
-        """Context manager for measuring operation duration."""
-        start = time.perf_counter()
-        self.mark(f"{operation_name}_start", metadata)
-        try:
-            yield
-        finally:
-            duration_ms = (time.perf_counter() - start) * 1000
-            final_metadata = {**(metadata or {}), "duration_ms": round(duration_ms, 1)}
-            self.mark(f"{operation_name}_end", final_metadata)
-            logger.info(f"⏱️  └─ {operation_name}: {duration_ms:.1f}ms")
 
     def get_duration(self, start_event: str, end_event: str, use_first: bool = True) -> Optional[float]:
         """Get duration between two events in milliseconds.

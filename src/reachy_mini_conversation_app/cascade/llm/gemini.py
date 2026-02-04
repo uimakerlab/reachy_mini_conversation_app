@@ -31,36 +31,15 @@ class GeminiLLM(LLMProvider):
             system_instructions: System prompt
 
         """
-        # Note: The google-genai SDK has issues with aiohttp session reuse (Issue #1083)
-        # Connections are NOT properly reused between requests, causing high latency.
-        # Workaround: Try to use aiohttp backend if available for better connection pooling
-
-        # Check if aiohttp backend is installed
-        import importlib.util
-
-        aiohttp_available = importlib.util.find_spec("aiohttp") is not None
-
-        # Create client (will use aiohttp if installed with google-genai[aiohttp])
         self.client = genai.Client(api_key=api_key)
-
-        if aiohttp_available:
-            logger.info(f"Initialized Gemini LLM with model: {model} (aiohttp backend available)")
-        else:
-            logger.warning(
-                f"Initialized Gemini LLM with model: {model} (aiohttp not installed, using httpx - may have slower connection reuse)"
-            )
-
         self.model = model
+        logger.info(f"Initialized Gemini LLM with model: {model}")
         self.system_instructions = system_instructions
 
-    async def warmup(self, tools: Optional[List[Dict[str, Any]]] = None) -> None:
+    async def warmup(self) -> None:
         """Pre-warm HTTP connection by making a minimal request.
 
         This establishes the connection and reduces first-request latency.
-
-        Args:
-            tools: Tools configuration (optional, not used for warmup)
-
         """
         logger.info("Warming up Gemini REST API (pre-establishing HTTP connection)...")
         try:
@@ -388,26 +367,3 @@ class GeminiLLM(LLMProvider):
                 "arguments": json.dumps(function_call.args),
             },
         }
-
-    def parse_tool_call(self, tool_call: Dict[str, Any]) -> tuple[str, str, Dict[str, Any]]:
-        """Parse a tool call into its components.
-
-        Args:
-            tool_call: Tool call dictionary (OpenAI format)
-
-        Returns:
-            Tuple of (call_id, tool_name, arguments_dict)
-
-        """
-        call_id = tool_call.get("id", "")
-        function_data = tool_call.get("function", {})
-        tool_name = function_data.get("name", "")
-        args_json = function_data.get("arguments", "{}")
-
-        try:
-            arguments = json.loads(args_json) if isinstance(args_json, str) else args_json
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse tool arguments: {args_json}")
-            arguments = {}
-
-        return call_id, tool_name, arguments

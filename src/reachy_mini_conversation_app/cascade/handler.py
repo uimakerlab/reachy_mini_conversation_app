@@ -12,9 +12,6 @@ import importlib
 import threading
 from typing import Any, Dict, List
 
-import numpy as np
-import numpy.typing as npt
-
 from reachy_mini_conversation_app.prompts import get_session_instructions
 from reachy_mini_conversation_app.cascade.asr import ASRProvider, StreamingASRProvider
 from reachy_mini_conversation_app.cascade.llm import LLMProvider
@@ -30,7 +27,7 @@ from reachy_mini_conversation_app.tools.core_tools import (
 logger = logging.getLogger(__name__)
 
 
-CASCADE_EXTRA_INSTRUCTIONS = """\n\n**IMPORTANT:** 
+CASCADE_EXTRA_INSTRUCTIONS = """\n\n**IMPORTANT:**
 ## SPEAKING TO THE USER
 - To talk to the user, you *MUST* use the 'speak' tool, there is no other way to generate speech.
 - When you want to say something, always use the 'speak' tool, even for short acknowledgments like "OK" or "Sure".
@@ -349,12 +346,11 @@ class CascadeHandler:
             if tool_calls:
                 assistant_message["tool_calls"] = tool_calls
 
-            # DEBUG: Log what we're adding to history
-            logger.info(f"DEBUG _process_llm_response: text_chunks={len(text_chunks)}, tool_calls={len(tool_calls)}, full_text_len={len(full_text)}")
+            logger.debug(f"_process_llm_response: text_chunks={len(text_chunks)}, tool_calls={len(tool_calls)}, full_text_len={len(full_text)}")
 
             if text_chunks or tool_calls:
                 self.conversation_history.append(assistant_message)
-                logger.info(f"DEBUG: Added assistant message to history, history_len={len(self.conversation_history)}")
+                logger.debug(f"Added assistant message to history, history_len={len(self.conversation_history)}")
 
             # Handle text-only responses: auto-inject speak tool call
             # This handles cases where LLM returns text without using the speak tool
@@ -408,7 +404,7 @@ class CascadeHandler:
                         "content": json.dumps(result),
                     }
                 )
-                logger.info(f"DEBUG: Added tool result to history: name={tool_name}, history_len={len(self.conversation_history)}")
+                logger.debug(f"Added tool result to history: name={tool_name}, history_len={len(self.conversation_history)}")
 
                 # Special handling for camera tool
                 if tool_name == "camera" and "b64_im" in result:
@@ -540,7 +536,7 @@ class CascadeHandler:
         # Warmup LLM connection
         if hasattr(self.llm, "warmup") and self.loop:
             logger.info("Pre-warming LLM connection...")
-            asyncio.run_coroutine_threadsafe(self.llm.warmup(tools=self.tool_specs), self.loop)
+            asyncio.run_coroutine_threadsafe(self.llm.warmup(), self.loop)
 
         logger.info("Cascade handler started")
 
@@ -560,34 +556,3 @@ class CascadeHandler:
             self.loop_thread.join(timeout=5)
 
         logger.info("Cascade handler stopped")
-
-    def copy(self) -> CascadeHandler:
-        """Create a copy of the handler (for compatibility with stream interface)."""
-        return CascadeHandler(self.deps)
-
-    # Methods for compatibility with fastrtc interface
-    async def start_up(self) -> None:
-        """Start up handler (async)."""
-        self.start()
-
-    async def shutdown(self) -> None:
-        """Shutdown handler (async)."""
-        self.stop()
-
-    async def receive(self, frame: tuple[int, npt.NDArray[np.int16]]) -> None:
-        """Receive audio frame from microphone (fastrtc interface).
-
-        In cascade mode with VAD, this would buffer audio and trigger processing.
-        For now, this is a no-op since we use Gradio's manual recording.
-        """
-        pass
-
-    async def emit(self) -> tuple[int, npt.NDArray[np.int16]] | None:
-        """Emit audio frame for playback (fastrtc interface).
-
-        Returns audio chunks from the output queue for WebRTC streaming.
-        This allows cascade mode to work with fastrtc.Stream for robot speaker output.
-        """
-        # For now, return None since cascade mode doesn't stream audio output
-        # Audio is played via sounddevice in Gradio UI
-        return None

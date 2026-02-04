@@ -26,21 +26,22 @@ Cascade Mode implements a traditional **ASR → LLM → TTS** conversation pipel
 ```
 cascade/
 ├── __init__.py                        # Package exports
-├── architecture.md                    # Design overview document
 ├── entry.py                           # Entry point from main.py
 ├── handler.py                         # Core pipeline orchestrator
 ├── config.py                          # Configuration loader (cascade.yaml)
 ├── gradio_ui.py                       # Gradio interface & audio I/O
 ├── timing.py                          # Latency tracking & profiling
+├── vad.py                             # Silero VAD for continuous mode
 │
 ├── asr/                               # Automatic Speech Recognition
 │   ├── __init__.py                    # Provider exports
 │   ├── base.py                        # ASRProvider abstract base
 │   ├── base_streaming.py              # StreamingASRProvider abstract base
-│   ├── openai_whisper.py              # OpenAI Whisper implementation
-│   ├── parakeet.py                    # Parakeet batch implementation
+│   ├── whisper_openai.py              # OpenAI Whisper implementation
+│   ├── parakeet_mlx.py                # Parakeet MLX batch implementation
 │   ├── parakeet_mlx_streaming.py      # Parakeet MLX streaming implementation
 │   ├── deepgram.py                    # Deepgram streaming implementation
+│   ├── nemotron.py                    # Nemotron ASR implementation
 │   └── openai_realtime_asr.py         # OpenAI Realtime streaming implementation
 │
 ├── llm/                               # Large Language Models
@@ -52,6 +53,7 @@ cascade/
 └── tts/                               # Text-to-Speech
     ├── __init__.py                    # Provider exports
     ├── base.py                        # TTSProvider abstract base
+    ├── utils.py                       # Shared TTS utilities (silence trimming)
     ├── openai.py                      # OpenAI TTS implementation
     ├── kokoro.py                      # Kokoro local TTS
     └── elevenlabs.py                  # ElevenLabs API implementation
@@ -121,7 +123,6 @@ Handles the Gradio web interface and audio I/O.
 ```python
 handler: CascadeHandler       # Reference to handler
 robot: Optional[ReachyMini]   # Robot instance for media output
-chat_history: List[Dict]      # Display history for Gradio
 recording: bool               # Recording state
 audio_frames: List[np.int16]  # Accumulated audio during recording
 sample_rate: int = 16000      # Recording sample rate
@@ -168,10 +169,11 @@ class StreamingASRProvider(ASRProvider):
 **Implementations:**
 | Provider | Type | Description |
 |----------|------|-------------|
-| `OpenAIWhisperASR` | Batch | OpenAI Whisper API |
+| `WhisperOpenAIASR` | Batch | OpenAI Whisper API |
 | `ParakeetMLXASR` | Batch | Local Parakeet via MLX |
 | `ParakeetMLXStreamingASR` | Streaming | Local streaming via MLX |
 | `DeepgramASR` | Streaming | Deepgram Nova via WebSocket |
+| `NemotronASR` | Streaming | NVIDIA Nemotron ASR |
 | `OpenAIRealtimeASR` | Streaming | OpenAI Realtime API via WebSocket |
 
 ### LLM Providers (`llm/`)
@@ -187,6 +189,8 @@ class LLMChunk:
 class LLMProvider(ABC):
     async generate(messages, tools, temperature) -> AsyncIterator[LLMChunk]
     def parse_tool_call(tool_call) -> (call_id, tool_name, args_dict)
+        # Default implementation handles OpenAI-style tool call format
+        # Subclasses can override if needed
 ```
 
 **Implementations:**

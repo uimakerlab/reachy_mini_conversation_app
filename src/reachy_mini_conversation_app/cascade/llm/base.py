@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 import abc
+import json
+import logging
 from typing import Any, Dict, List, Optional, AsyncIterator
 from dataclasses import dataclass
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -38,9 +43,10 @@ class LLMProvider(abc.ABC):
         """
         raise NotImplementedError
 
-    @abc.abstractmethod
     def parse_tool_call(self, tool_call: Dict[str, Any]) -> tuple[str, str, Dict[str, Any]]:
         """Parse a tool call into its components.
+
+        Default implementation handles OpenAI-style tool call format.
 
         Args:
             tool_call: Tool call dictionary
@@ -49,4 +55,15 @@ class LLMProvider(abc.ABC):
             Tuple of (call_id, tool_name, arguments_dict)
 
         """
-        raise NotImplementedError
+        call_id = tool_call.get("id", "")
+        function_data = tool_call.get("function", {})
+        tool_name = function_data.get("name", "")
+        args_json = function_data.get("arguments", "{}")
+
+        try:
+            arguments = json.loads(args_json) if isinstance(args_json, str) else args_json
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse tool arguments: {args_json}")
+            arguments = {}
+
+        return call_id, tool_name, arguments
