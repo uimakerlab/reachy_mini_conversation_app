@@ -100,89 +100,67 @@ class CascadeHandler:
                 chat_specs.append(chat_spec)
         return chat_specs
 
-    def _init_asr_provider(self) -> ASRProvider:
-        """Initialize ASR provider from cascade.yaml config."""
-        name = config.asr_provider
-        info = config.get_asr_provider_info(name)
+    def _init_provider(
+        self, provider_type: str, extra_kwargs: Dict[str, Any] | None = None
+    ) -> Any:
+        """Initialize a provider (ASR/LLM/TTS) from cascade.yaml config.
 
-        # Validate API key requirements
+        Args:
+            provider_type: One of "asr", "llm", "tts"
+            extra_kwargs: Additional kwargs to pass to provider constructor
+
+        Returns:
+            Initialized provider instance
+
+        """
+        # All API keys that any provider might need
         api_key_map = {
             "OPENAI_API_KEY": config.OPENAI_API_KEY,
             "DEEPGRAM_API_KEY": config.DEEPGRAM_API_KEY,
+            "GEMINI_API_KEY": config.GEMINI_API_KEY,
+            "ELEVENLABS_API_KEY": config.ELEVENLABS_API_KEY,
         }
-        for required in info["requires"]:
-            if not api_key_map[required]:
-                raise ValueError(f"{required} not set (required by {name})")
 
-        # Build kwargs: settings + API key if needed
-        kwargs = config.get_asr_settings(name)
+        # Get provider name, info, and settings using dynamic attribute access
+        name = getattr(config, f"{provider_type}_provider")
+        info = getattr(config, f"get_{provider_type}_provider_info")(name)
+        kwargs = getattr(config, f"get_{provider_type}_settings")(name)
+
+        # Validate and add API keys
         for required in info["requires"]:
+            if not api_key_map.get(required):
+                raise ValueError(f"{required} not set (required by {name})")
             kwargs["api_key"] = api_key_map[required]
 
+        # Merge extra kwargs if provided
+        if extra_kwargs:
+            kwargs.update(extra_kwargs)
+
         # Dynamic import and instantiate
-        module = importlib.import_module(f"reachy_mini_conversation_app.cascade.asr.{info['module']}")
+        module = importlib.import_module(
+            f"reachy_mini_conversation_app.cascade.{provider_type}.{info['module']}"
+        )
         ProviderClass = getattr(module, info["class"])
 
-        logger.info(f"Initializing ASR: {name} (location={info['location']}, streaming={info['streaming']})")
+        # Log with provider-specific details
+        extra_info = f", streaming={info['streaming']}" if "streaming" in info else ""
+        logger.info(f"Initializing {provider_type.upper()}: {name} (location={info['location']}{extra_info})")
+
         return ProviderClass(**kwargs)
+
+    def _init_asr_provider(self) -> ASRProvider:
+        """Initialize ASR provider from cascade.yaml config."""
+        return self._init_provider("asr")
 
     def _init_llm_provider(self) -> LLMProvider:
         """Initialize LLM provider from cascade.yaml config."""
-        name = config.llm_provider
-        info = config.get_llm_provider_info(name)
-
-        # Validate API key requirements
-        api_key_map = {
-            "OPENAI_API_KEY": config.OPENAI_API_KEY,
-            "GEMINI_API_KEY": config.GEMINI_API_KEY,
-        }
-        for required in info["requires"]:
-            if not api_key_map.get(required):
-                raise ValueError(f"{required} not set (required by {name})")
-
-        # Build kwargs: settings + API key + system instructions
-        kwargs = config.get_llm_settings(name)
-        for required in info["requires"]:
-            kwargs["api_key"] = api_key_map[required]
-
         # Add cascade-specific instructions (computed at runtime, not from config)
-        cascade_instructions = (
-            get_session_instructions() + CASCADE_EXTRA_INSTRUCTIONS
-        )
-        kwargs["system_instructions"] = cascade_instructions
-
-        # Dynamic import and instantiate
-        module = importlib.import_module(f"reachy_mini_conversation_app.cascade.llm.{info['module']}")
-        ProviderClass = getattr(module, info["class"])
-
-        logger.info(f"Initializing LLM: {name} (location={info['location']})")
-        return ProviderClass(**kwargs)
+        cascade_instructions = get_session_instructions() + CASCADE_EXTRA_INSTRUCTIONS
+        return self._init_provider("llm", {"system_instructions": cascade_instructions})
 
     def _init_tts_provider(self) -> TTSProvider:
         """Initialize TTS provider from cascade.yaml config."""
-        name = config.tts_provider
-        info = config.get_tts_provider_info(name)
-
-        # Validate API key requirements
-        api_key_map = {
-            "OPENAI_API_KEY": config.OPENAI_API_KEY,
-            "ELEVENLABS_API_KEY": config.ELEVENLABS_API_KEY,
-        }
-        for required in info["requires"]:
-            if not api_key_map.get(required):
-                raise ValueError(f"{required} not set (required by {name})")
-
-        # Build kwargs: settings + API key
-        kwargs = config.get_tts_settings(name)
-        for required in info["requires"]:
-            kwargs["api_key"] = api_key_map[required]
-
-        # Dynamic import and instantiate
-        module = importlib.import_module(f"reachy_mini_conversation_app.cascade.tts.{info['module']}")
-        ProviderClass = getattr(module, info["class"])
-
-        logger.info(f"Initializing TTS: {name} (location={info['location']})")
-        return ProviderClass(**kwargs)
+        return self._init_provider("tts")
 
     async def process_audio_manual(self, audio_bytes: bytes) -> str:
         """Process recorded audio through the cascade pipeline.
