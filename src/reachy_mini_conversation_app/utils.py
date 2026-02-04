@@ -83,13 +83,40 @@ def handle_vision_stuff(args: argparse.Namespace, current_robot: ReachyMini) -> 
     return camera_worker, head_tracker, vision_manager
 
 
+class ColoredFormatter(logging.Formatter):
+    """Formatter that adds colors based on log level."""
+
+    COLORS = {
+        logging.DEBUG: "\033[90m",     # Light grey
+        logging.INFO: "\033[0m",       # Default (white)
+        logging.WARNING: "\033[93m",   # Yellow
+        logging.ERROR: "\033[91m",     # Red
+        logging.CRITICAL: "\033[91m",  # Red
+    }
+    RESET = "\033[0m"
+
+    def format(self, record: logging.LogRecord) -> str:
+        color = self.COLORS.get(record.levelno, self.RESET)
+        message = super().format(record)
+        return f"{color}{message}{self.RESET}"
+
+
 def setup_logger(debug: bool) -> logging.Logger:
     """Setups the logger."""
     log_level = "DEBUG" if debug else "INFO"
-    logging.basicConfig(
-        level=getattr(logging, log_level, logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s:%(lineno)d | %(message)s",
+
+    # Create formatter with time-only and filename (no full path)
+    formatter = ColoredFormatter(
+        fmt="%(asctime)s %(levelname)s %(filename)s:%(lineno)d | %(message)s",
+        datefmt="%H:%M:%S",
     )
+
+    # Configure root logger with colored handler
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logging.root.handlers = [handler]
+    logging.root.setLevel(getattr(logging, log_level, logging.INFO))
+
     logger = logging.getLogger(__name__)
 
     # Suppress WebRTC warnings
