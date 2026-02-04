@@ -51,15 +51,6 @@ class KokoroTTS(TTSProvider):
 
         logger.info(f"Kokoro TTS initialized with voice: {voice}, lang: {lang_code}")
 
-    def _ensure_pipeline(self) -> None:
-        """Lazy load the pipeline on first use."""
-        if self.pipeline is None:
-            from kokoro import KPipeline
-
-            logger.info(f"Loading Kokoro pipeline from {self.repo_id}...")
-            self.pipeline = KPipeline(lang_code=self.lang_code, repo_id=self.repo_id)
-            logger.info("Kokoro pipeline loaded successfully")
-
     async def synthesize(self, text: str, voice: Optional[str] = None) -> AsyncIterator[bytes]:
         """Synthesize text using Kokoro TTS with streaming.
 
