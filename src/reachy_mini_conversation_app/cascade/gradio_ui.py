@@ -86,6 +86,44 @@ class CascadeGradioUI:
         """Check if the ASR provider supports streaming."""
         return isinstance(self.handler.asr, StreamingASRProvider)
 
+    def _persistent_wobbler_thread(self) -> None:
+        """Run persistent wobbler thread (pre-warmed and ready).
+
+        Shared by both sounddevice and robot.media playback modes.
+        """
+        import time
+
+        try:
+            logger.info("WOBBLER PREWARM: Thread ready")
+
+            # Main wobbler loop - runs forever
+            while not self.shutdown_event.is_set():
+                try:
+                    # Wait for chunks with timeout to allow shutdown
+                    chunk = self.wobbler_queue.get(timeout=0.1)
+
+                    if chunk is None:  # Sentinel - end of current playback session
+                        # Reset wobbler between turns
+                        if self.handler.deps.head_wobbler:
+                            self.handler.deps.head_wobbler.reset()
+                        continue
+
+                    # Feed to wobbler
+                    if self.handler.deps.head_wobbler:
+                        self.handler.deps.head_wobbler.feed(base64.b64encode(chunk).decode("utf-8"))
+
+                    # Rate limit to match playback
+                    chunk_duration = len(chunk) / (2 * 24000)
+                    time.sleep(chunk_duration)
+
+                except Empty:
+                    continue
+
+        except Exception as e:
+            logger.exception(f"Error in persistent wobbler thread: {e}")
+        finally:
+            logger.info("Wobbler thread shutdown")
+
     def _init_playback_threads(self) -> None:
         """Initialize persistent audio playback and wobbler threads (pre-warmed)."""
         # Determine playback mode based on system's default audio output device
@@ -185,42 +223,9 @@ class CascadeGradioUI:
                     pass
                 logger.info("Playback thread shutdown")
 
-        def persistent_wobbler_thread() -> None:
-            """Run persistent wobbler thread (pre-warmed and ready)."""
-            try:
-                logger.info("WOBBLER PREWARM: Thread ready")
-
-                # Main wobbler loop - runs forever
-                while not self.shutdown_event.is_set():
-                    try:
-                        # Wait for chunks with timeout to allow shutdown
-                        chunk = self.wobbler_queue.get(timeout=0.1)
-
-                        if chunk is None:  # Sentinel - end of current playback session
-                            # Reset wobbler between turns
-                            if self.handler.deps.head_wobbler:
-                                self.handler.deps.head_wobbler.reset()
-                            continue
-
-                        # Feed to wobbler
-                        if self.handler.deps.head_wobbler:
-                            self.handler.deps.head_wobbler.feed(base64.b64encode(chunk).decode("utf-8"))
-
-                        # Rate limit to match playback
-                        chunk_duration = len(chunk) / (2 * 24000)
-                        time.sleep(chunk_duration)
-
-                    except Empty:
-                        continue
-
-            except Exception as e:
-                logger.exception(f"Error in persistent wobbler thread: {e}")
-            finally:
-                logger.info("Wobbler thread shutdown")
-
         # Start persistent threads
         self.playback_thread = threading.Thread(target=persistent_playback_thread, daemon=True, name="AudioPlayback")
-        self.wobbler_thread = threading.Thread(target=persistent_wobbler_thread, daemon=True, name="Wobbler")
+        self.wobbler_thread = threading.Thread(target=self._persistent_wobbler_thread, daemon=True, name="Wobbler")
 
         self.playback_thread.start()
         self.wobbler_thread.start()
@@ -294,44 +299,11 @@ class CascadeGradioUI:
             finally:
                 logger.info("Robot playback thread shutdown")
 
-        def persistent_wobbler_thread() -> None:
-            """Run persistent wobbler thread (pre-warmed and ready)."""
-            try:
-                logger.info("WOBBLER PREWARM: Thread ready")
-
-                # Main wobbler loop - runs forever
-                while not self.shutdown_event.is_set():
-                    try:
-                        # Wait for chunks with timeout to allow shutdown
-                        chunk = self.wobbler_queue.get(timeout=0.1)
-
-                        if chunk is None:  # Sentinel - end of current playback session
-                            # Reset wobbler between turns
-                            if self.handler.deps.head_wobbler:
-                                self.handler.deps.head_wobbler.reset()
-                            continue
-
-                        # Feed to wobbler
-                        if self.handler.deps.head_wobbler:
-                            self.handler.deps.head_wobbler.feed(base64.b64encode(chunk).decode("utf-8"))
-
-                        # Rate limit to match playback
-                        chunk_duration = len(chunk) / (2 * 24000)
-                        time.sleep(chunk_duration)
-
-                    except Empty:
-                        continue
-
-            except Exception as e:
-                logger.exception(f"Error in persistent wobbler thread: {e}")
-            finally:
-                logger.info("Wobbler thread shutdown")
-
         # Start persistent threads
         self.playback_thread = threading.Thread(
             target=persistent_playback_thread, daemon=True, name="RobotAudioPlayback"
         )
-        self.wobbler_thread = threading.Thread(target=persistent_wobbler_thread, daemon=True, name="Wobbler")
+        self.wobbler_thread = threading.Thread(target=self._persistent_wobbler_thread, daemon=True, name="Wobbler")
 
         self.playback_thread.start()
         self.wobbler_thread.start()
