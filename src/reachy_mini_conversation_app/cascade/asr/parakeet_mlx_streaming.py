@@ -215,7 +215,7 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
                 self.cumulative_samples_sent += batch_size
                 current_text = self.transcriber.result.text if self.transcriber.result else ""
                 text_preview = f" | Text: '{current_text[:50]}...'" if current_text else ""
-                logger.info(
+                logger.debug(
                     f"✓ Sent {batch_size} samples ({batch_size / self.target_sample_rate * 1000:.0f}ms) | "
                     f"Cumulative: {self.cumulative_samples_sent} ({self.cumulative_samples_sent / self.target_sample_rate:.1f}s)"
                     f"{text_preview}"

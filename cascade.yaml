@@ -86,25 +86,58 @@ asr:
 
 
 llm:
-  provider: gemini
+  provider: gemini  # openai_gpt, gemini
 
-  openai_gpt:
-    model: gpt-4o-mini
+  providers:
+    openai_gpt:
+      module: openai
+      class: OpenAILLM
+      location: cloud
+      requires: [OPENAI_API_KEY]
+      description: "OpenAI GPT models"
+      # Settings
+      model: gpt-4o-mini
 
-  gemini:
-    model: gemini-2.5-flash-lite
+    gemini:
+      module: gemini
+      class: GeminiLLM
+      location: cloud
+      requires: [GEMINI_API_KEY]
+      description: "Google Gemini models"
+      # Settings
+      model: gemini-2.5-flash-lite
 
 
 tts:
-  provider: kokoro
+  provider: kokoro  # openai_tts, kokoro, elevenlabs
   trim_silence: true
 
-  openai_tts:
-    voice: alloy
+  providers:
+    openai_tts:
+      module: openai
+      class: OpenAITTS
+      location: cloud
+      requires: [OPENAI_API_KEY]
+      description: "OpenAI TTS API"
+      # Settings
+      voice: alloy
 
-  kokoro:
-    voice: am_adam
+    kokoro:
+      module: kokoro
+      class: KokoroTTS
+      location: local
+      requires: []
+      hardware: apple_silicon
+      description: "Kokoro local TTS for Apple Silicon"
+      # Settings
+      voice: am_adam
 
-  elevenlabs:
-    voice_id: pNInz6obpgDQGcFmaJgB
-    model: eleven_flash_v2_5
+    elevenlabs:
+      module: elevenlabs
+      class: ElevenLabsTTS
+      location: cloud
+      requires: [ELEVENLABS_API_KEY]
+      description: "ElevenLabs TTS API"
+      # Settings
+      voice_id: pNInz6obpgDQGcFmaJgB
+      model: eleven_flash_v2_5

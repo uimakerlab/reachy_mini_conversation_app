@@ -128,7 +128,7 @@ class ElevenLabsTTS(TTSProvider):
             )
 
             # Check for leading silence (if trimming enabled)
-            if config.CASCADE_TTS_TRIM_SILENCE:
+            if config.tts_trim_silence:
                 threshold = 327  # For int16 PCM (0.01 * 32767)
                 non_silent = np.where(np.abs(audio_array) > threshold)[0]
                 if len(non_silent) > 0:

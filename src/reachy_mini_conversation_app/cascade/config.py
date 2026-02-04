@@ -15,6 +15,8 @@ logging.getLogger("numba").setLevel(logging.WARNING)
 
 # Metadata keys (not passed to provider constructor)
 ASR_METADATA_KEYS = {"module", "class", "streaming", "location", "requires", "hardware", "description", "status"}
+LLM_METADATA_KEYS = {"module", "class", "location", "requires", "description"}
+TTS_METADATA_KEYS = {"module", "class", "location", "requires", "hardware", "description"}
 
 
 def _load_cascade_config() -> Dict[str, Any]:
@@ -62,11 +64,11 @@ class CascadeConfig:
 
         # LLM config
         self.llm_provider = self._cascade["llm"]["provider"]
-        self.llm_settings = self._cascade["llm"][self.llm_provider]
+        self.llm_providers = self._cascade["llm"]["providers"]
 
         # TTS config
         self.tts_provider = self._cascade["tts"]["provider"]
-        self.tts_settings = self._cascade["tts"][self.tts_provider]
+        self.tts_providers = self._cascade["tts"]["providers"]
         self.tts_trim_silence = self._cascade["tts"]["trim_silence"]
 
         self._log_config()
@@ -88,12 +90,38 @@ class CascadeConfig:
         """Check if provider supports streaming."""
         return self.get_asr_provider_info(name)["streaming"]
 
+    def get_llm_provider_info(self, name: str | None = None) -> Dict[str, Any]:
+        """Get full LLM provider info from cascade.yaml."""
+        provider_name = name or self.llm_provider
+        if provider_name not in self.llm_providers:
+            available = ", ".join(self.llm_providers.keys())
+            raise ValueError(f"Unknown LLM provider: {provider_name}. Available: {available}")
+        return self.llm_providers[provider_name]
+
+    def get_llm_settings(self, name: str | None = None) -> Dict[str, Any]:
+        """Get LLM provider settings (excludes metadata)."""
+        info = self.get_llm_provider_info(name)
+        return {k: v for k, v in info.items() if k not in LLM_METADATA_KEYS}
+
+    def get_tts_provider_info(self, name: str | None = None) -> Dict[str, Any]:
+        """Get full TTS provider info from cascade.yaml."""
+        provider_name = name or self.tts_provider
+        if provider_name not in self.tts_providers:
+            available = ", ".join(self.tts_providers.keys())
+            raise ValueError(f"Unknown TTS provider: {provider_name}. Available: {available}")
+        return self.tts_providers[provider_name]
+
+    def get_tts_settings(self, name: str | None = None) -> Dict[str, Any]:
+        """Get TTS provider settings (excludes metadata)."""
+        info = self.get_tts_provider_info(name)
+        return {k: v for k, v in info.items() if k not in TTS_METADATA_KEYS}
+
     def _log_config(self) -> None:
         """Log the loaded configuration."""
         logger.info(f"Cascade: ASR={self.asr_provider}, LLM={self.llm_provider}, TTS={self.tts_provider}")
         logger.debug(f"ASR provider info: {self.get_asr_provider_info()}")
-        logger.debug(f"LLM settings: {self.llm_settings}")
-        logger.debug(f"TTS settings: {self.tts_settings}")
+        logger.debug(f"LLM provider info: {self.get_llm_provider_info()}")
+        logger.debug(f"TTS provider info: {self.get_tts_provider_info()}")
 
 
 # Singleton instance - loaded on import

@@ -17,8 +17,8 @@ import numpy.typing as npt
 
 from reachy_mini_conversation_app.prompts import get_session_instructions
 from reachy_mini_conversation_app.cascade.asr import ASRProvider, StreamingASRProvider
-from reachy_mini_conversation_app.cascade.llm import OpenAILLM, LLMProvider
-from reachy_mini_conversation_app.cascade.tts import OpenAITTS, TTSProvider
+from reachy_mini_conversation_app.cascade.llm import LLMProvider
+from reachy_mini_conversation_app.cascade.tts import TTSProvider
 from reachy_mini_conversation_app.cascade.config import config
 from reachy_mini_conversation_app.tools.core_tools import (
     ToolDependencies,
@@ -115,70 +115,63 @@ class CascadeHandler:
         return ProviderClass(**kwargs)
 
     def _init_llm_provider(self) -> LLMProvider:
-        """Initialize LLM provider based on config."""
-        provider = config.llm_provider
+        """Initialize LLM provider from cascade.yaml config."""
+        name = config.llm_provider
+        info = config.get_llm_provider_info(name)
 
-        # Add cascade-specific instructions about using speak tool instead of direct messaging
+        # Validate API key requirements
+        api_key_map = {
+            "OPENAI_API_KEY": config.OPENAI_API_KEY,
+            "GEMINI_API_KEY": config.GEMINI_API_KEY,
+        }
+        for required in info["requires"]:
+            if not api_key_map.get(required):
+                raise ValueError(f"{required} not set (required by {name})")
+
+        # Build kwargs: settings + API key + system instructions
+        kwargs = config.get_llm_settings(name)
+        for required in info["requires"]:
+            kwargs["api_key"] = api_key_map[required]
+
+        # Add cascade-specific instructions (computed at runtime, not from config)
         cascade_instructions = (
             get_session_instructions() + "\n\nIMPORTANT: To talk to the user, you *MUST* use the 'speak' tool. "
             "You can call 'speak' along with other tools in the same response."
         )
+        kwargs["system_instructions"] = cascade_instructions
 
-        if provider == "openai_gpt":
-            if not config.OPENAI_API_KEY:
-                raise ValueError("OPENAI_API_KEY not set in .env file")
-            return OpenAILLM(
-                api_key=config.OPENAI_API_KEY,
-                model=config.llm_settings["model"],
-                system_instructions=cascade_instructions,
-            )
+        # Dynamic import and instantiate
+        module = importlib.import_module(f"reachy_mini_conversation_app.cascade.llm.{info['module']}")
+        ProviderClass = getattr(module, info["class"])
 
-        elif provider == "gemini":
-            from reachy_mini_conversation_app.cascade.llm import GeminiLLM
-
-            if not config.GEMINI_API_KEY:
-                raise ValueError("GEMINI_API_KEY not set in .env file")
-            return GeminiLLM(
-                api_key=config.GEMINI_API_KEY,
-                model=config.llm_settings["model"],
-                system_instructions=cascade_instructions,
-            )
-
-        else:
-            raise ValueError(f"Unknown LLM provider: {provider}")
+        logger.info(f"Initializing LLM: {name} (location={info['location']})")
+        return ProviderClass(**kwargs)
 
     def _init_tts_provider(self) -> TTSProvider:
-        """Initialize TTS provider based on config."""
-        provider = config.tts_provider
+        """Initialize TTS provider from cascade.yaml config."""
+        name = config.tts_provider
+        info = config.get_tts_provider_info(name)
 
-        if provider == "openai_tts":
-            if not config.OPENAI_API_KEY:
-                raise ValueError("OPENAI_API_KEY not set in .env file")
-            return OpenAITTS(
-                api_key=config.OPENAI_API_KEY,
-                voice=config.tts_settings["voice"],
-                response_format="pcm",
-            )
+        # Validate API key requirements
+        api_key_map = {
+            "OPENAI_API_KEY": config.OPENAI_API_KEY,
+            "ELEVENLABS_API_KEY": config.ELEVENLABS_API_KEY,
+        }
+        for required in info["requires"]:
+            if not api_key_map.get(required):
+                raise ValueError(f"{required} not set (required by {name})")
 
-        elif provider == "kokoro":
-            from reachy_mini_conversation_app.cascade.tts import KokoroTTS
+        # Build kwargs: settings + API key
+        kwargs = config.get_tts_settings(name)
+        for required in info["requires"]:
+            kwargs["api_key"] = api_key_map[required]
 
-            return KokoroTTS(voice=config.tts_settings["voice"])
+        # Dynamic import and instantiate
+        module = importlib.import_module(f"reachy_mini_conversation_app.cascade.tts.{info['module']}")
+        ProviderClass = getattr(module, info["class"])
 
-        elif provider == "elevenlabs":
-            from reachy_mini_conversation_app.cascade.tts import ElevenLabsTTS
-
-            if not config.ELEVENLABS_API_KEY:
-                raise ValueError("ELEVENLABS_API_KEY not set in .env file")
-            return ElevenLabsTTS(
-                api_key=config.ELEVENLABS_API_KEY,
-                voice_id=config.tts_settings["voice_id"],
-                model=config.tts_settings["model"],
-                output_format="pcm_24000",
-            )
-
-        else:
-            raise ValueError(f"Unknown TTS provider: {provider}")
+        logger.info(f"Initializing TTS: {name} (location={info['location']})")
+        return ProviderClass(**kwargs)
 
     async def process_audio_manual(self, audio_bytes: bytes) -> str:
         """Process recorded audio through the cascade pipeline.
