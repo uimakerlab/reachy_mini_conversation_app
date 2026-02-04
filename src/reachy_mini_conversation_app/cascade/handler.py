@@ -30,6 +30,18 @@ from reachy_mini_conversation_app.tools.core_tools import (
 logger = logging.getLogger(__name__)
 
 
+CASCADE_EXTRA_INSTRUCTIONS = """\n\n**IMPORTANT:** 
+## SPEAKING TO THE USER
+- To talk to the user, you *MUST* use the 'speak' tool, there is no other way to generate speech.
+- When you want to say something, always use the 'speak' tool, even for short acknowledgments like "OK" or "Sure".
+
+## ISSUING SEVERAL TOOLS IN ONE RESPONSE
+- You can always issue several tools in one response if needed.
+- You can combine the 'speak' tool with other tools in the same response.
+- Do not hesitate to use multiple tools if the situation requires it, especially for complex tasks.
+"""
+
+
 class CascadeHandler:
     """Main handler for cascade pipeline mode (Gradio UI only)."""
 
@@ -135,8 +147,7 @@ class CascadeHandler:
 
         # Add cascade-specific instructions (computed at runtime, not from config)
         cascade_instructions = (
-            get_session_instructions() + "\n\nIMPORTANT: To talk to the user, you *MUST* use the 'speak' tool. "
-            "You can call 'speak' along with other tools in the same response."
+            get_session_instructions() + CASCADE_EXTRA_INSTRUCTIONS
         )
         kwargs["system_instructions"] = cascade_instructions
 
