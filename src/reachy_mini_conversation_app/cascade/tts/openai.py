@@ -7,7 +7,7 @@ from typing import Literal, Optional, AsyncIterator
 from openai import AsyncOpenAI
 
 from .base import TTSProvider
-from reachy_mini_conversation_app.cascade.config import config
+from .utils import trim_leading_silence
 
 
 AudioFormat = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"]
@@ -83,28 +83,8 @@ class OpenAITTS(TTSProvider):
                 f"OpenAI TTS audio: {len(audio_array)} samples, min: {audio_array.min()}, max: {audio_array.max()}"
             )
 
-            # Check for leading silence (configurable via tts_trim_silence)
-            threshold = 327  # For int16 PCM (0.01 * 32767)
-            non_silent = np.where(np.abs(audio_array) > threshold)[0]
-            if len(non_silent) > 0:
-                first_sound_sample = non_silent[0]
-                silence_duration_ms = (first_sound_sample / 24000) * 1000
-                if silence_duration_ms > 100:
-                    logger.warning(
-                        f"OpenAI TTS: {silence_duration_ms:.0f}ms of leading silence detected (trim_silence={config.tts_trim_silence})"
-                    )
-                    if config.tts_trim_silence:
-                        logger.info(
-                            f"OpenAI TTS: Trimming from {len(audio_array)} to {len(audio_array) - first_sound_sample} samples"
-                        )
-                        audio_array = audio_array[first_sound_sample:]
-                        logger.info(
-                            f"OpenAI TTS: After trim - new length: {len(audio_array)} samples ({len(audio_array) / 24000 * 1000:.0f}ms)"
-                        )
-                    else:
-                        logger.info("OpenAI TTS: Keeping silence (tts_trim_silence=false)")
-                else:
-                    logger.debug(f"OpenAI TTS: {silence_duration_ms:.0f}ms leading silence (acceptable)")
+            # Trim leading silence if enabled
+            audio_array = trim_leading_silence(audio_array, provider_name="OpenAI TTS")
 
             # Re-chunk the (potentially trimmed) audio
             trimmed_bytes = audio_array.tobytes()

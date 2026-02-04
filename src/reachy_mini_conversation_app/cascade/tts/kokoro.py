@@ -5,7 +5,7 @@ import logging
 from typing import List, Optional, AsyncIterator
 
 from .base import TTSProvider
-from reachy_mini_conversation_app.cascade.config import config
+from .utils import trim_leading_silence
 
 
 logger = logging.getLogger(__name__)
@@ -127,31 +127,8 @@ class KokoroTTS(TTSProvider):
                 # Start audio processing
                 tracker.mark("tts_processing_start")
 
-                # Check for leading silence (configurable via CASCADE_TTS_TRIM_SILENCE)
-                import numpy as np
-
-                original_length = len(audio_data)
-                threshold = 0.01  # Consider anything below this as silence
-                non_silent = np.where(np.abs(audio_data) > threshold)[0]
-                if len(non_silent) > 0:
-                    first_sound_sample = non_silent[0]
-                    silence_duration_ms = (first_sound_sample / 24000) * 1000
-                    if silence_duration_ms > 100:  # More than 100ms silence
-                        logger.warning(
-                            f"Kokoro TTS: {silence_duration_ms:.0f}ms of leading silence detected (trim_silence={config.tts_trim_silence})"
-                        )
-                        if config.tts_trim_silence:
-                            logger.info(
-                                f"Kokoro TTS: Trimming from {original_length} to {len(audio_data) - first_sound_sample} samples"
-                            )
-                            audio_data = audio_data[first_sound_sample:]
-                            logger.info(
-                                f"Kokoro TTS: After trim - new length: {len(audio_data)} samples ({len(audio_data) / 24000 * 1000:.0f}ms)"
-                            )
-                        else:
-                            logger.info("Kokoro TTS: Keeping silence (trim_silence=false)")
-                    else:
-                        logger.debug(f"Kokoro TTS: {silence_duration_ms:.0f}ms leading silence (acceptable)")
+                # Trim leading silence if enabled (float32 audio)
+                audio_data = trim_leading_silence(audio_data, provider_name="Kokoro TTS")
 
                 # Convert float32 to int16 PCM
                 audio_int16 = (audio_data * 32767).astype(np.int16)
