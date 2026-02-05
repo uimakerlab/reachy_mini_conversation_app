@@ -1,7 +1,4 @@
-"""Main cascade handler orchestrating ASR → LLM → TTS pipeline.
-
-Note: This implementation is designed for Gradio UI mode only.
-"""
+"""Main cascade handler orchestrating ASR → LLM → TTS pipeline."""
 
 from __future__ import annotations
 import json
@@ -10,7 +7,7 @@ import asyncio
 import logging
 import importlib
 import threading
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Callable, Awaitable
 
 from reachy_mini_conversation_app.prompts import get_session_instructions
 from reachy_mini_conversation_app.cascade.asr import ASRProvider, StreamingASRProvider
@@ -40,7 +37,7 @@ CASCADE_EXTRA_INSTRUCTIONS = """\n\n**IMPORTANT:**
 
 
 class CascadeHandler:
-    """Main handler for cascade pipeline mode (Gradio UI only)."""
+    """Main handler for cascade pipeline mode."""
 
     def __init__(self, deps: ToolDependencies, skip_audio_playback: bool = False):
         """Initialize cascade handler.
@@ -52,6 +49,9 @@ class CascadeHandler:
         """
         self.deps = deps
         self.skip_audio_playback = skip_audio_playback
+
+        # Playback callback for console mode
+        self._playback_callback: Callable[[bytes], Awaitable[None]] | None = None
 
         # Initialize providers based on config
         self.asr = self._init_asr_provider()
@@ -100,9 +100,7 @@ class CascadeHandler:
                 chat_specs.append(chat_spec)
         return chat_specs
 
-    def _init_provider(
-        self, provider_type: str, extra_kwargs: Dict[str, Any] | None = None
-    ) -> Any:
+    def _init_provider(self, provider_type: str, extra_kwargs: Dict[str, Any] | None = None) -> Any:
         """Initialize a provider (ASR/LLM/TTS) from cascade.yaml config.
 
         Args:
@@ -137,9 +135,7 @@ class CascadeHandler:
             kwargs.update(extra_kwargs)
 
         # Dynamic import and instantiate
-        module = importlib.import_module(
-            f"reachy_mini_conversation_app.cascade.{provider_type}.{info['module']}"
-        )
+        module = importlib.import_module(f"reachy_mini_conversation_app.cascade.{provider_type}.{info['module']}")
         ProviderClass = getattr(module, info["class"])
 
         # Log with provider-specific details
@@ -161,6 +157,15 @@ class CascadeHandler:
     def _init_tts_provider(self) -> TTSProvider:
         """Initialize TTS provider from cascade.yaml config."""
         return self._init_provider("tts")
+
+    def set_playback_callback(self, callback: Callable[[bytes], Awaitable[None]]) -> None:
+        """Set callback for audio playback (console mode).
+
+        Args:
+            callback: Async function that receives audio bytes (PCM int16, 24kHz)
+
+        """
+        self._playback_callback = callback
 
     def _aggregate_cost(self, provider: Union[ASRProvider, LLMProvider, TTSProvider], provider_name: str) -> None:
         """Aggregate cost from a provider if it tracks costs."""
@@ -362,7 +367,9 @@ class CascadeHandler:
             if tool_calls:
                 assistant_message["tool_calls"] = tool_calls
 
-            logger.debug(f"_process_llm_response: text_chunks={len(text_chunks)}, tool_calls={len(tool_calls)}, full_text_len={len(full_text)}")
+            logger.debug(
+                f"_process_llm_response: text_chunks={len(text_chunks)}, tool_calls={len(tool_calls)}, full_text_len={len(full_text)}"
+            )
 
             if text_chunks or tool_calls:
                 self.conversation_history.append(assistant_message)
@@ -426,7 +433,9 @@ class CascadeHandler:
                         "content": json.dumps(result),
                     }
                 )
-                logger.debug(f"Added tool result to history: name={tool_name}, history_len={len(self.conversation_history)}")
+                logger.debug(
+                    f"Added tool result to history: name={tool_name}, history_len={len(self.conversation_history)}"
+                )
 
                 # Special handling for camera tool - store image for later
                 if tool_name == "camera":
@@ -482,18 +491,23 @@ class CascadeHandler:
         """Synthesize speech and feed to head wobbler for animation.
 
         Audio Playback Strategy:
-        - Console mode (future): Would play audio directly via sounddevice
+        - Console mode: Audio sent via _playback_callback for robot speaker playback
         - Gradio mode: Audio is NOT played here - Gradio UI handles playback via browser
 
-        This method only:
+        This method:
         1. Generates TTS audio chunks
         2. Feeds chunks to head_wobbler for synchronized head animation
-        3. Rate-limits to match real-time audio playback speed
+        3. Sends audio to playback callback (console mode only)
+        4. Rate-limits to match real-time audio playback speed
         """
         try:
             # Start head wobbler if available
             if self.deps.head_wobbler:
                 self.deps.head_wobbler.reset()
+
+            # Log what we're saying in console mode
+            if not self.skip_audio_playback:
+                print(f"[TTS] Speaking: {text}")
 
             # Stream TTS audio for head wobbler animation
             audio_chunks = []
@@ -505,6 +519,10 @@ class CascadeHandler:
                     # Note: OpenAI TTS outputs PCM int16 at 24kHz
                     # Convert to base64 for the wobbler's feed() method
                     self.deps.head_wobbler.feed(base64.b64encode(chunk).decode("utf-8"))
+
+                # Send to console playback callback (console mode only)
+                if not self.skip_audio_playback and self._playback_callback:
+                    await self._playback_callback(chunk)
 
                 # Rate limiting: match audio generation speed
                 # PCM int16 at 24kHz: 2 bytes per sample
