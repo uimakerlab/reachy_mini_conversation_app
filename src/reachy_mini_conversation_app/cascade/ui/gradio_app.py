@@ -603,49 +603,64 @@ class CascadeGradioUI:
             # Use pre-warmed persistent queues (no thread creation overhead!)
             logger.debug("Using pre-warmed audio playback system")
 
-            # Generate TTS with PARALLEL sentence generation and STREAMING playback
-            # Key optimization: Start playing sentence 1 while generating sentence 2, etc.
+            # Generate TTS with PARALLEL sentence generation and ORDERED playback
+            # Key optimization: Generate sentences in parallel, but queue in order
             total_chunks = 0
 
+            # Gate events ensure chunks queue in sentence order even if TTS responses arrive out of order
+            queue_events = [asyncio.Event() for _ in sentences]
+            queue_events[0].set()  # Sentence 0 can queue immediately
+
             async def generate_and_queue_sentence(idx: int, sentence: str) -> List[npt.NDArray[np.int16]]:
-                """Generate TTS for one sentence and queue chunks immediately."""
+                """Generate TTS for one sentence and queue chunks in order."""
                 nonlocal total_chunks, first_chunk_queued
 
                 logger.debug(f"TTS sentence {idx + 1}/{len(sentences)}: '{sentence}' (PARALLEL)")
                 sentence_chunks: list[npt.NDArray[np.int16]] = []
+                raw_chunks: list[bytes] = []  # Buffer raw chunks for wobbler
                 sentence_start = time.time()
 
+                # Buffer all chunks during TTS streaming
                 async for chunk in self.handler.tts.synthesize(sentence):
                     total_chunks += 1
-
-                    # Convert to numpy array
                     audio_array = np.frombuffer(chunk, dtype=np.int16)
                     sentence_chunks.append(audio_array)
+                    raw_chunks.append(chunk)
 
+                gen_duration = time.time() - sentence_start
+                if sentence_chunks:
+                    total_samples = sum(len(c) for c in sentence_chunks)
+                    logger.debug(
+                        f"Sentence {idx + 1} generated: {len(sentence_chunks)} chunks ({total_samples} samples, {total_samples / 24000:.2f}s) in {gen_duration:.2f}s"
+                    )
+
+                # Wait for our turn to queue (ensures sentence order)
+                await queue_events[idx].wait()
+
+                # Queue all chunks for this sentence
+                for audio_array, raw_chunk in zip(sentence_chunks, raw_chunks):
                     # Collect for Gradio output
                     audio_chunks.append(audio_array)
 
-                    # Queue for immediate playback (pre-warmed thread picks it up instantly!)
+                    # Queue for immediate playback
                     self.playback.put_audio(audio_array)
 
-                    # Queue for wobbler (pre-warmed thread picks it up too)
-                    self.playback.put_wobbler(chunk)
+                    # Queue for wobbler
+                    self.playback.put_wobbler(raw_chunk)
 
-                    # Track first chunk queued (should be nearly instant playback)
+                    # Track first chunk queued
                     if not first_chunk_queued:
                         first_chunk_queued = True
                         tracker.mark("audio_first_chunk_queued")
-                        tracker.mark("audio_playback_started")  # With pre-warmed system, queueing = playing
+                        tracker.mark("audio_playback_started")
                         tracker.mark("wobbler_first_chunk")
                         logger.info("First audio chunk playing - playback started while TTS continues in background")
 
-                if sentence_chunks:
-                    duration = time.time() - sentence_start
-                    total_samples = sum(len(c) for c in sentence_chunks)
-                    logger.debug(
-                        f"Sentence {idx + 1} complete: {len(sentence_chunks)} chunks ({total_samples} samples, {total_samples / 24000:.2f}s) generated in {duration:.2f}s"
-                    )
+                # Signal next sentence can queue
+                if idx + 1 < len(queue_events):
+                    queue_events[idx + 1].set()
 
+                logger.debug(f"Sentence {idx + 1} queued for playback")
                 return sentence_chunks
 
             # Strategy: Generate sentences with intelligent overlap

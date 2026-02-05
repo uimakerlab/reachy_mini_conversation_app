@@ -130,11 +130,11 @@ llm:
 
 
 tts:
-  provider: openai_tts  # openai_tts, kokoro, elevenlabs
+  provider: tts_openai  # tts_openai, kokoro, elevenlabs
   trim_silence: true
 
   providers:
-    openai_tts:
+    tts_openai:
       module: openai
       class: OpenAITTS
       location: cloud
