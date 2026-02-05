@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from reachy_mini import ReachyMini
 # Import config to ensure .env is loaded before reading REACHY_MINI_CUSTOM_PROFILE
 from reachy_mini_conversation_app.config import config  # noqa: F401
+from reachy_mini_conversation_app.tools.background_tool_manager import SystemTool, BackgroundToolManager
 
 
 logger = logging.getLogger(__name__)
@@ -111,13 +112,16 @@ def _load_profile_tools() -> None:
         sys.exit(1)
 
     # Parse tool names (skip comments and blank lines)
-    tool_names = []
+    tool_names = set()
     for line in lines:
         line = line.strip()
         # Skip blank lines and comments
         if not line or line.startswith("#"):
             continue
-        tool_names.append(line)
+        tool_names.add(line)
+
+    # Add system tools
+    tool_names.update({tool.value for tool in SystemTool})
 
     logger.info(f"Found {len(tool_names)} tools to load: {tool_names}")
 
@@ -208,7 +212,7 @@ def _safe_load_obj(args_json: str) -> Dict[str, Any]:
         return {}
 
 
-async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies) -> Dict[str, Any]:
+async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies, tool_manager: BackgroundToolManager | None = None) -> Dict[str, Any]:
     """Dispatch a tool call by name with JSON args and dependencies."""
     tool = ALL_TOOLS.get(tool_name)
 
@@ -216,9 +220,10 @@ async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependenc
         return {"error": f"unknown tool: {tool_name}"}
 
     args = _safe_load_obj(args_json)
+    if tool_manager is not None:
+        args["tool_manager"] = tool_manager
     try:
         return await tool(deps, **args)
     except Exception as e:
-        msg = f"{type(e).__name__}: {e}"
-        logger.exception("Tool error in %s: %s", tool_name, msg)
-        return {"error": msg}
+        logger.exception("Tool error in %s: %s", tool_name, e)
+        raise e
