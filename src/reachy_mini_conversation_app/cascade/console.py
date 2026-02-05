@@ -6,6 +6,7 @@ without requiring Gradio UI. It uses Silero VAD for automatic speech detection.
 
 from __future__ import annotations
 import io
+import time
 import wave
 import asyncio
 import logging
@@ -18,39 +19,74 @@ from scipy.signal import resample
 from reachy_mini_conversation_app.cascade.vad import SILERO_SAMPLE_RATE, SileroVAD
 
 
-# Minimum chunk size for Silero VAD (512 samples = 32ms at 16kHz)
-VAD_MIN_CHUNK_SIZE = 512
-
 if TYPE_CHECKING:
     from reachy_mini import ReachyMini
     from reachy_mini_conversation_app.cascade.handler import CascadeHandler
 
-
 logger = logging.getLogger(__name__)
 
+# Minimum chunk size for Silero VAD (512 samples = 32ms at 16kHz)
+VAD_MIN_CHUNK_SIZE = 512
 # TTS output sample rate (OpenAI TTS outputs PCM at 24kHz)
 TTS_SAMPLE_RATE = 24000
+
+
+def to_mono(audio: np.ndarray) -> np.ndarray:
+    """Convert stereo audio to mono by taking first channel."""
+    if audio.ndim == 1:
+        return audio
+    if audio.shape[0] > audio.shape[1]:
+        return audio[:, 0]  # (samples, channels)
+    return audio[0, :]  # (channels, samples)
+
+
+class AudioChunkBuffer:
+    """Accumulates audio samples and yields fixed-size chunks for VAD."""
+
+    def __init__(self, chunk_size: int, max_samples: int = 16000) -> None:
+        """Initialize buffer with given chunk size."""
+        self._buffer = np.zeros(max_samples, dtype=np.int16)
+        self._pos = 0
+        self._chunk_size = chunk_size
+
+    def add(self, samples: np.ndarray) -> None:
+        """Add samples to buffer, growing if needed."""
+        n = samples.size
+        if self._pos + n > self._buffer.size:
+            new_size = max(self._buffer.size * 2, self._pos + n)
+            new_buffer = np.zeros(new_size, dtype=np.int16)
+            new_buffer[: self._pos] = self._buffer[: self._pos]
+            self._buffer = new_buffer
+        self._buffer[self._pos : self._pos + n] = samples.flatten()
+        self._pos += n
+
+    def get_chunks(self) -> list[np.ndarray]:
+        """Return all complete chunks, keep remainder."""
+        chunks = []
+        while self._pos >= self._chunk_size:
+            chunks.append(self._buffer[: self._chunk_size].copy())
+            self._buffer[: self._pos - self._chunk_size] = self._buffer[self._chunk_size : self._pos]
+            self._pos -= self._chunk_size
+        return chunks
+
+    def clear(self) -> None:
+        """Reset buffer."""
+        self._pos = 0
 
 
 class VADState(Enum):
     """VAD state machine states."""
 
-    LISTENING = auto()  # Waiting for speech to start
-    RECORDING = auto()  # Recording speech in progress
-    PROCESSING = auto()  # Processing recorded audio through pipeline
+    LISTENING = auto()
+    RECORDING = auto()
+    PROCESSING = auto()
 
 
 class CascadeLocalStream:
     """Console stream for cascade pipeline using VAD-based speech detection."""
 
     def __init__(self, handler: CascadeHandler, robot: ReachyMini) -> None:
-        """Initialize the console stream.
-
-        Args:
-            handler: CascadeHandler instance for processing audio
-            robot: ReachyMini instance for audio I/O
-
-        """
+        """Initialize the console stream."""
         self.handler = handler
         self._robot = robot
 
@@ -67,13 +103,12 @@ class CascadeLocalStream:
         self._tasks: list[asyncio.Task] = []
 
         # Audio buffers
-        self._vad_input_buffer: list[np.ndarray] = []  # Buffer for accumulating VAD input
-        self._audio_buffer: list[np.ndarray] = []  # Buffer for recording speech
+        self._vad_chunk_buffer = AudioChunkBuffer(VAD_MIN_CHUNK_SIZE)
+        self._speech_chunks: list[np.ndarray] = []
         self._playback_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
         # Set playback callback on handler
         self.handler.set_playback_callback(self._queue_audio_for_playback)
-
         logger.info("CascadeLocalStream initialized")
 
     async def _queue_audio_for_playback(self, audio_bytes: bytes) -> None:
@@ -84,19 +119,12 @@ class CascadeLocalStream:
         """Start the console stream and run the async processing loops."""
         self._stop_event.clear()
 
-        # Start media
         logger.info("Starting media recording and playback...")
         self._robot.media.start_recording()
         self._robot.media.start_playing()
+        time.sleep(1)  # Give pipelines time to start
 
-        # Give pipelines time to start
-        import time
-
-        time.sleep(1)
-
-        print("\n[CASCADE] Console mode ready. Speak to interact with the robot.")
-        print("[CASCADE] Press Ctrl+C to stop.\n")
-
+        logger.info("Console mode ready. Speak to interact with the robot. Press Ctrl+C to stop.")
         asyncio.run(self._main_loop())
 
     async def _main_loop(self) -> None:
@@ -113,13 +141,10 @@ class CascadeLocalStream:
     async def _record_loop(self) -> None:
         """Read mic frames and process through VAD state machine."""
         input_sample_rate = self._robot.media.get_input_audio_samplerate()
-        logger.info(f"Audio recording at {input_sample_rate} Hz")
-
-        print("[CASCADE] Listening... (speak to begin)")
+        logger.info(f"Audio recording at {input_sample_rate} Hz, listening...")
 
         while not self._stop_event.is_set():
             audio_frame = self._robot.media.get_audio_sample()
-
             if audio_frame is None:
                 await asyncio.sleep(0.01)
                 continue
@@ -129,107 +154,62 @@ class CascadeLocalStream:
                 num_samples = int(len(audio_frame) * SILERO_SAMPLE_RATE / input_sample_rate)
                 audio_frame = resample(audio_frame, num_samples).astype(np.float32)
 
-            # Ensure audio is 1D (mono) - take first channel if stereo
-            if audio_frame.ndim > 1:
-                audio_frame = audio_frame[:, 0] if audio_frame.shape[1] <= audio_frame.shape[0] else audio_frame[0, :]
-
-            # Convert float32 to int16 for VAD
+            audio_frame = to_mono(audio_frame)
             audio_int16 = (audio_frame * 32767).astype(np.int16)
 
-            # Accumulate in VAD input buffer
-            self._vad_input_buffer.append(audio_int16)
-
-            # Check if we have enough samples for VAD processing
-            total_samples = sum(chunk.size for chunk in self._vad_input_buffer)
-            while total_samples >= VAD_MIN_CHUNK_SIZE:
-                # Concatenate buffered audio
-                all_audio = np.concatenate(self._vad_input_buffer).flatten()
-
-                # Take exactly VAD_MIN_CHUNK_SIZE samples (Silero requires exact size)
-                vad_chunk = all_audio[:VAD_MIN_CHUNK_SIZE]
-
-                # Keep remainder in buffer
-                remainder = all_audio[VAD_MIN_CHUNK_SIZE:]
-                self._vad_input_buffer = [remainder] if remainder.size > 0 else []
-                total_samples = remainder.size
-
-                # Process through VAD state machine
+            self._vad_chunk_buffer.add(audio_int16)
+            for vad_chunk in self._vad_chunk_buffer.get_chunks():
                 await self._process_vad(vad_chunk)
 
-            await asyncio.sleep(0)  # Yield to event loop
+            await asyncio.sleep(0)
 
     async def _process_vad(self, audio_chunk: np.ndarray) -> None:
-        """Process audio chunk through VAD state machine.
-
-        Args:
-            audio_chunk: Audio samples (int16, 16kHz, at least VAD_MIN_CHUNK_SIZE samples)
-
-        """
+        """Process audio chunk through VAD state machine."""
         if self._state == VADState.LISTENING:
             speech_started, _ = self._vad.process_chunk(audio_chunk, SILERO_SAMPLE_RATE)
             if speech_started:
                 self._state = VADState.RECORDING
-                self._audio_buffer = [audio_chunk]
-                print("[VAD] Speech detected - recording...")
-                logger.info("VAD: Speech started, recording...")
+                self._speech_chunks = [audio_chunk]
+                logger.info("Speech detected, recording...")
 
         elif self._state == VADState.RECORDING:
-            self._audio_buffer.append(audio_chunk)
+            self._speech_chunks.append(audio_chunk)
             _, speech_ended = self._vad.process_chunk(audio_chunk, SILERO_SAMPLE_RATE)
             if speech_ended:
                 self._state = VADState.PROCESSING
-                print("[VAD] Speech ended - processing...")
-                logger.info(f"VAD: Speech ended, buffer has {len(self._audio_buffer)} chunks")
-
-                # Process the recorded audio
+                logger.info(f"Speech ended, {len(self._speech_chunks)} chunks")
                 await self._process_recorded_audio()
 
                 # Reset for next utterance
-                self._audio_buffer = []
+                self._speech_chunks = []
                 self._vad.reset()
                 self._state = VADState.LISTENING
-                print("[CASCADE] Listening... (speak to begin)")
-
-        # PROCESSING state is handled within _process_recorded_audio
+                logger.info("Listening...")
 
     async def _process_recorded_audio(self) -> None:
         """Process recorded audio through the cascade pipeline."""
-        if not self._audio_buffer:
-            logger.warning("Empty audio buffer, skipping processing")
+        if not self._speech_chunks:
+            logger.warning("Empty audio buffer, skipping")
             return
 
-        # Concatenate all audio chunks
-        audio_data = np.concatenate(self._audio_buffer)
+        audio_data = np.concatenate(self._speech_chunks)
         logger.info(f"Processing {len(audio_data)} samples ({len(audio_data) / SILERO_SAMPLE_RATE:.2f}s)")
 
-        # Convert to WAV bytes for the handler
         wav_bytes = self._audio_to_wav(audio_data, SILERO_SAMPLE_RATE)
+        logger.info("Transcribing...")
 
-        print("[ASR] Transcribing...")
-
-        # Process through cascade pipeline
         transcript = await self.handler.process_audio_manual(wav_bytes)
-
         if transcript:
-            print(f"[USER] {transcript}")
+            logger.info(f"User: {transcript}")
         else:
-            print("[ASR] (no speech detected)")
+            logger.info("No speech detected")
 
     def _audio_to_wav(self, audio: np.ndarray, sample_rate: int) -> bytes:
-        """Convert audio numpy array to WAV bytes.
-
-        Args:
-            audio: Audio samples (int16)
-            sample_rate: Sample rate
-
-        Returns:
-            WAV file bytes
-
-        """
+        """Convert int16 audio array to WAV bytes."""
         buffer = io.BytesIO()
         with wave.open(buffer, "wb") as wf:
             wf.setnchannels(1)
-            wf.setsampwidth(2)  # int16 = 2 bytes
+            wf.setsampwidth(2)
             wf.setframerate(sample_rate)
             wf.writeframes(audio.tobytes())
         return buffer.getvalue()
