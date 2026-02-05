@@ -73,6 +73,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         self._shutdown_requested: bool = False
         self._connected_event: asyncio.Event = asyncio.Event()
 
+        # Cost tracking
+        self.cumulative_cost: float = 0.0
+
     def copy(self) -> "OpenaiRealtimeHandler":
         """Create a copy of the handler."""
         return OpenaiRealtimeHandler(self.deps, self.gradio_mode, self.instance_path)
@@ -309,6 +312,31 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 if event.type == "response.done":
                     # Doesn't mean the audio is done playing
                     logger.debug("Response done")
+
+                    # Cost tracking from usage data (pricing as of Feb 2026 https://openai.com/fr-FR/api/pricing/)
+                    AUDIO_INPUT_COST_PER_1M = 32.0
+                    AUDIO_OUTPUT_COST_PER_1M = 64.0
+                    TEXT_INPUT_COST_PER_1M = 4.0
+                    TEXT_OUTPUT_COST_PER_1M = 16.0
+                    IMAGE_INPUT_COST_PER_1M = 5.0
+
+                    response = getattr(event, "response", None)
+                    usage = getattr(response, "usage", None) if response else None
+                    if usage:
+                        inp = getattr(usage, "input_token_details", None)
+                        out = getattr(usage, "output_token_details", None)
+                        cost = 0.0
+                        if inp:
+                            cost += getattr(inp, "audio_tokens", 0) * AUDIO_INPUT_COST_PER_1M / 1e6
+                            cost += getattr(inp, "text_tokens", 0) * TEXT_INPUT_COST_PER_1M / 1e6
+                            cost += getattr(inp, "image_tokens", 0) * IMAGE_INPUT_COST_PER_1M / 1e6
+                        if out:
+                            cost += getattr(out, "audio_tokens", 0) * AUDIO_OUTPUT_COST_PER_1M / 1e6
+                            cost += getattr(out, "text_tokens", 0) * TEXT_OUTPUT_COST_PER_1M / 1e6
+                        self.cumulative_cost += cost
+                        logger.info("Cost: $%.4f | Cumulative: $%.4f", cost, self.cumulative_cost)
+                    else:
+                        logger.warning("No usage data available for cost tracking")
 
                 # Handle partial transcription (user speaking in real-time)
                 if event.type == "conversation.item.input_audio_transcription.partial":
