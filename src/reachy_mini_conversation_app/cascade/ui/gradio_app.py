@@ -56,6 +56,7 @@ class CascadeGradioUI:
         self._ptt_recorder: PushToTalkRecorder | None = None
         self._vad_recorder: ContinuousVADRecorder | None = None
         self.continuous_mode = False
+        self._shown_camera_indices: set[int] = set()  # Track which camera messages have been shown
 
     def _is_streaming_asr(self) -> bool:
         """Check if the ASR provider supports streaming."""
@@ -210,28 +211,31 @@ class CascadeGradioUI:
                 outputs=[record_btn, status_box, chatbot],
             )
 
+            # Set up polling timer for continuous mode (only active in continuous mode)
+            poll_timer = gr.Timer(0.5, active=False)
+
             # Continuous mode toggle handler
             def toggle_continuous_mode(
                 enabled: bool, chat_history: List[Dict[str, Any]]
-            ) -> tuple[str, str, List[Dict[str, Any]], bool]:
+            ) -> tuple[str, str, List[Dict[str, Any]], bool, gr.Timer]:
                 """Toggle continuous VAD mode on/off."""
                 if enabled:
                     # Start continuous mode
                     recorder = self._get_vad_recorder()
                     status = recorder.start()
                     self.continuous_mode = True
-                    return "🎤 (Continuous Active)", status, chat_history, True
+                    return "🎤 (Continuous Active)", status, chat_history, True, gr.Timer(active=True)
                 else:
                     # Stop continuous mode
                     recorder = self._get_vad_recorder()
                     status = recorder.stop()
                     self.continuous_mode = False
-                    return "🎤 START Recording", status, chat_history, False
+                    return "🎤 START Recording", status, chat_history, False, gr.Timer(active=False)
 
             continuous_checkbox.change(
                 fn=toggle_continuous_mode,
                 inputs=[continuous_checkbox, chatbot],
-                outputs=[record_btn, status_box, chatbot, continuous_checkbox],
+                outputs=[record_btn, status_box, chatbot, continuous_checkbox, poll_timer],
             )
 
             # Polling for continuous mode updates (updates chat when VAD detects speech)
@@ -261,7 +265,7 @@ class CascadeGradioUI:
                 )
 
                 new_history = []
-                for msg in self.handler.conversation_history:
+                for msg_idx, msg in enumerate(self.handler.conversation_history):
                     role = msg.get("role")
                     content = msg.get("content", "")
 
@@ -286,7 +290,31 @@ class CascadeGradioUI:
 
                     elif role == "tool" and msg.get("name") not in ("speak", None):
                         tool_name = msg.get("name")
-                        if tool_name != "camera":  # Camera handled separately with image display
+                        if tool_name == "camera":
+                            # Display camera image from the base64 data in conversation history
+                            try:
+                                tool_content = json.loads(content) if isinstance(content, str) else content
+                                if "b64_im" in tool_content:
+                                    import base64
+                                    import cv2
+                                    import numpy as np
+                                    # Decode base64 to numpy array
+                                    img_bytes = base64.b64decode(tool_content["b64_im"])
+                                    np_arr = np.frombuffer(img_bytes, np.uint8)
+                                    np_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                                    if np_img is not None:
+                                        rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
+                                        new_history.append({
+                                            "role": "assistant",
+                                            "content": gr.Image(value=rgb_frame),
+                                        })
+                                        # Only log once per camera image
+                                        if msg_idx not in self._shown_camera_indices:
+                                            self._shown_camera_indices.add(msg_idx)
+                                            logger.info(f"poll_continuous_updates: Added camera image (idx={msg_idx})")
+                            except Exception as e:
+                                logger.warning(f"poll_continuous_updates: Failed to add camera image: {e}")
+                        else:
                             # Display other tool executions with metadata
                             tool_content = msg.get("content", "{}")
                             new_history.append({
@@ -297,8 +325,7 @@ class CascadeGradioUI:
 
                 return new_history if new_history else chat_history, status
 
-            # Set up polling timer for continuous mode (every 500ms)
-            poll_timer = gr.Timer(0.5, active=True)
+            # Wire up the poll timer (created earlier, before toggle handler)
             poll_timer.tick(
                 fn=poll_continuous_updates,
                 inputs=[chatbot],
@@ -353,16 +380,36 @@ class CascadeGradioUI:
 
                 # Add assistant responses
                 if result.get("responses"):
-                    for response in result["responses"]:
+                    for i, response in enumerate(result["responses"]):
                         if isinstance(response, dict):
-                            # Response already has role/content/metadata (e.g., tool messages)
-                            chat_history.append(response)
-                            content_preview = str(response.get("content", ""))[:50]
-                            logger.debug(f"Added formatted response to chat_history: {content_preview}...")
+                            content = response.get("content", "")
+                            # Check for image path marker from async context
+                            if isinstance(content, dict) and "_image_path" in content:
+                                image_path = content["_image_path"]
+                                # Create gr.Image in sync context - exactly like realtime mode
+                                import cv2
+                                np_img = cv2.imread(image_path)
+                                if np_img is not None:
+                                    rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
+                                    img = gr.Image(value=rgb_frame)
+                                    chat_history.append({
+                                        "role": "assistant",
+                                        "content": img,
+                                    })
+                                    logger.info(f"Response[{i}]: Created gr.Image for: {image_path}")
+                                else:
+                                    logger.warning(f"Response[{i}]: Failed to read image: {image_path}")
+                            else:
+                                # Response already has role/content/metadata (e.g., tool messages)
+                                chat_history.append(response)
+                                content_type = type(content).__name__
+                                content_preview = str(content)[:50]
+                                logger.debug(f"Response[{i}]: {content_type} = {content_preview}...")
                         else:
                             # Plain string response (e.g., speak tool message text)
                             chat_history.append({"role": "assistant", "content": response})
-                            logger.debug(f"Added assistant response to chat_history: {response[:50]}...")
+                            logger.debug(f"Response[{i}]: plain string = {response[:50]}...")
+                    logger.info(f"Final chat_history length: {len(chat_history)}")
 
                 status = "Message processed successfully!"
             else:
@@ -371,6 +418,11 @@ class CascadeGradioUI:
         except Exception as e:
             logger.exception(f"Error processing audio: {e}")
             status = f"Error processing audio: {str(e)}"
+
+        # Debug: log chat_history content types before returning
+        for idx, msg in enumerate(chat_history):
+            content = msg.get("content", "")
+            logger.info(f"chat_history[{idx}]: role={msg.get('role')}, content_type={type(content).__name__}")
 
         return chat_history, status
 
@@ -455,31 +507,39 @@ class CascadeGradioUI:
                             pass
                     elif tool_name == "camera":
                         # Display camera image in chat
+                        logger.info("Processing camera tool for UI display")
                         try:
-                            tool_content = json.loads(message.get("content", "{}"))
-                            if "b64_im" in tool_content and self.handler.deps.camera_worker is not None:
-                                # Get the latest camera frame as numpy array
+                            raw_content = message.get("content", "{}")
+                            tool_content = json.loads(raw_content)
+                            has_b64 = "b64_im" in tool_content
+                            has_worker = self.handler.deps.camera_worker is not None
+                            logger.info(f"Camera conditions: has_b64_im={has_b64}, has_camera_worker={has_worker}")
+                            if has_b64 and has_worker:
                                 np_img = self.handler.deps.camera_worker.get_latest_frame()
-
-                                # Save to temporary file for Gradio Chatbot display
-                                import tempfile
-
-                                from PIL import Image
-
-                                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg", dir="/tmp")
-                                # Convert RGB numpy array to PIL Image and save
-                                pil_img = Image.fromarray(np_img)
-                                pil_img.save(temp_file.name, format="JPEG", quality=85)
-                                temp_file.close()
-
-                                # Add as Gradio FileData format for proper image display
-                                result["responses"].append({
-                                    "role": "assistant",
-                                    "content": {"path": temp_file.name},
-                                })
-                                logger.info(f"Added camera image to chat display: {temp_file.name}")
-                        except json.JSONDecodeError:
-                            logger.warning("Failed to parse camera tool result")
+                                if np_img is not None:
+                                    import cv2
+                                    import tempfile
+                                    import os
+                                    # Save to temp file for Gradio Chatbot display
+                                    temp_file = tempfile.NamedTemporaryFile(
+                                        suffix=".jpg", delete=False, dir="/tmp"
+                                    )
+                                    temp_path = temp_file.name
+                                    temp_file.close()
+                                    # cv2.imwrite expects BGR which is what camera provides
+                                    success = cv2.imwrite(temp_path, np_img)
+                                    file_size = os.path.getsize(temp_path) if os.path.exists(temp_path) else 0
+                                    logger.info(f"Image save: success={success}, path={temp_path}, size={file_size} bytes, shape={np_img.shape}")
+                                    # Store image path - FileData will be created in sync context
+                                    result["responses"].append({
+                                        "role": "assistant",
+                                        "content": {"_image_path": temp_path},
+                                    })
+                                    logger.info(f"Added camera image path to responses: {temp_path}")
+                                else:
+                                    logger.warning("camera_worker.get_latest_frame() returned None")
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Failed to parse camera tool result: {e}")
                         except Exception as e:
                             logger.exception(f"Failed to add camera image to chat: {e}")
                     elif tool_name:
@@ -710,6 +770,7 @@ class CascadeGradioUI:
     def _clear_history(self) -> tuple[List[Dict[str, Any]], str]:
         """Clear conversation history."""
         self.handler.conversation_history = []
+        self._shown_camera_indices.clear()
         return [], "History cleared"
 
     def launch(self, **kwargs: Any) -> None:
