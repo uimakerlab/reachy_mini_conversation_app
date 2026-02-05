@@ -25,6 +25,7 @@ class OpenAITTS(TTSProvider):
         model: str = "tts-1",
         voice: str = "alloy",
         response_format: AudioFormat = "pcm",
+        cost_per_1m_chars: float = 0.0,
     ):
         """Initialize OpenAI TTS.
 
@@ -34,12 +35,15 @@ class OpenAITTS(TTSProvider):
                    Note: tts-1 has lower latency than tts-1-hd
             voice: Voice to use (alloy, echo, fable, onyx, nova, shimmer)
             response_format: Audio format (pcm, mp3, opus, aac, flac, wav)
+            cost_per_1m_chars: Cost per 1M characters (from cascade.yaml)
 
         """
         self.client = AsyncOpenAI(api_key=api_key)
         self.model = model
         self.default_voice = voice
         self.response_format = response_format
+        self.cost_per_1m_chars = cost_per_1m_chars
+        self.last_cost: float = 0.0
         logger.info(f"Initialized OpenAI TTS with model: {model}, voice: {voice} (format: {response_format})")
 
     async def synthesize(self, text: str, voice: Optional[str] = None) -> AsyncIterator[bytes]:
@@ -97,6 +101,13 @@ class OpenAITTS(TTSProvider):
                         logger.info("TTS: First chunk ready (can start playback now!)")
                     chunk_count += 1
                     yield chunk
+
+            # Calculate and accumulate cost after synthesis completes
+            # Use += to accumulate across multiple calls (e.g., per-sentence in Gradio mode)
+            if self.cost_per_1m_chars > 0:
+                call_cost = len(text) * self.cost_per_1m_chars / 1e6
+                self.last_cost += call_cost
+                logger.info(f"TTS Cost: ${call_cost:.6f} ({len(text)} chars, model={self.model})")
 
             logger.info(f"TTS: Synthesis complete - {chunk_count} chunks for '{text[:50]}...'")
 

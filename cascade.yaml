@@ -2,7 +2,7 @@
 # API keys are in .env file (OPENAI_API_KEY, DEEPGRAM_API_KEY, GEMINI_API_KEY, ELEVENLABS_API_KEY)
 
 asr:
-  provider: parakeet_mlx_streaming  # deepgram, whisper_openai, parakeet_mlx, parakeet_mlx_streaming
+  provider: whisper_openai  # deepgram, whisper_openai, parakeet_mlx, parakeet_mlx_streaming
 
   providers:
     # ========== CLOUD PROVIDERS ==========
@@ -16,6 +16,8 @@ asr:
       description: "OpenAI Whisper API - high quality cloud batch ASR"
       # Settings
       model: whisper-1
+      # Pricing (Feb 2026): $0.006/minute = $0.0001/second
+      cost_per_second: 0.0001
 
     deepgram:
       module: deepgram
@@ -86,10 +88,23 @@ asr:
 
 
 llm:
-  provider: gemini  # openai_gpt, gemini
+  provider: gpt-5.2-chat  # openai_gpt, gemini
 
   providers:
-    openai_gpt:
+
+    gpt-5.2-chat:
+      module: openai
+      class: OpenAILLM
+      location: cloud
+      requires: [ OPENAI_API_KEY ]
+      description: "OpenAI GPT 5.2 Chat"
+      # Settings
+      model: gpt-5.2-chat-latest
+      # Pricing (Feb 2026)
+      input_cost_per_1m: 1.75
+      output_cost_per_1m: 14.00
+
+    gpt-4o-mini:
       module: openai
       class: OpenAILLM
       location: cloud
@@ -97,6 +112,9 @@ llm:
       description: "OpenAI GPT models"
       # Settings
       model: gpt-4o-mini
+      # Pricing (Feb 2026)
+      input_cost_per_1m: 0.15
+      output_cost_per_1m: 0.60
 
     gemini:
       module: gemini
@@ -106,10 +124,13 @@ llm:
       description: "Google Gemini models"
       # Settings
       model: gemini-2.5-flash-lite
+      # Pricing (Feb 2026)
+      input_cost_per_1m: 0.075
+      output_cost_per_1m: 0.30
 
 
 tts:
-  provider: kokoro  # openai_tts, kokoro, elevenlabs
+  provider: openai_tts  # openai_tts, kokoro, elevenlabs
   trim_silence: true
 
   providers:
@@ -121,6 +142,9 @@ tts:
       description: "OpenAI TTS API"
       # Settings
       voice: alloy
+      model: tts-1  # tts-1 or tts-1-hd
+      # Pricing (Feb 2026): $15/1M chars for tts-1, $30/1M chars for tts-1-hd
+      cost_per_1m_chars: 15.0
 
     kokoro:
       module: kokoro
@@ -131,6 +155,7 @@ tts:
       description: "Kokoro local TTS for Apple Silicon"
       # Settings
       voice: am_adam
+      # No cost for local providers
 
     elevenlabs:
       module: elevenlabs
@@ -141,3 +166,5 @@ tts:
       # Settings
       voice_id: pNInz6obpgDQGcFmaJgB
       model: eleven_flash_v2_5
+      # Pricing (Feb 2026)
+      cost_per_1m_chars: 30.0

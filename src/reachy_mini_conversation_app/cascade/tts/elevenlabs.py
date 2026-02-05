@@ -23,6 +23,7 @@ class ElevenLabsTTS(TTSProvider):
         voice_id: str = "pNInz6obpgDQGcFmaJgB",  # Adam voice
         model: str = "eleven_flash_v2_5",
         output_format: str = "pcm_24000",  # PCM 24kHz to match other TTS providers
+        cost_per_1m_chars: float = 0.0,
     ):
         """Initialize ElevenLabs TTS.
 
@@ -31,12 +32,15 @@ class ElevenLabsTTS(TTSProvider):
             voice_id: Voice ID to use (default: Adam)
             model: TTS model (eleven_flash_v2_5 for lowest latency, eleven_multilingual_v2 for quality)
             output_format: Audio format (pcm_24000 for 24kHz 16-bit PCM)
+            cost_per_1m_chars: Cost per 1M characters (from cascade.yaml)
 
         """
         self.client = ElevenLabs(api_key=api_key)
         self.voice_id = voice_id
         self.model = model
         self.output_format = output_format
+        self.cost_per_1m_chars = cost_per_1m_chars
+        self.last_cost: float = 0.0
         logger.info(f"Initialized ElevenLabs TTS with model: {model}, voice: {voice_id}, format: {output_format}")
 
     async def synthesize(self, text: str, voice: Optional[str] = None) -> AsyncIterator[bytes]:
@@ -149,6 +153,12 @@ class ElevenLabsTTS(TTSProvider):
                 if i == 0:
                     logger.info("ElevenLabs TTS: First chunk ready (can start playback now!)")
                 yield chunk
+
+            # Calculate and accumulate cost after synthesis completes
+            if self.cost_per_1m_chars > 0:
+                call_cost = len(text) * self.cost_per_1m_chars / 1e6
+                self.last_cost += call_cost
+                logger.info(f"TTS Cost: ${call_cost:.6f} ({len(text)} chars, model={self.model})")
 
             logger.info(f"ElevenLabs TTS: Synthesis complete for '{text[:50]}...'")
 

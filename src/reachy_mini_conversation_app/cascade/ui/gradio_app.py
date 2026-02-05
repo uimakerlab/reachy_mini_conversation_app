@@ -472,8 +472,11 @@ class CascadeGradioUI:
                                 pil_img.save(temp_file.name, format="JPEG", quality=85)
                                 temp_file.close()
 
-                                # Add file path as string (Gradio Chatbot accepts file paths)
-                                result["responses"].append(temp_file.name)
+                                # Add as Gradio FileData format for proper image display
+                                result["responses"].append({
+                                    "role": "assistant",
+                                    "content": {"path": temp_file.name},
+                                })
                                 logger.info(f"Added camera image to chat display: {temp_file.name}")
                         except json.JSONDecodeError:
                             logger.warning("Failed to parse camera tool result")
@@ -612,6 +615,9 @@ class CascadeGradioUI:
             # Wait for all sentence generations to complete
             await asyncio.gather(*tasks)
             logger.info(f"Parallel TTS complete: All {len(sentences)} sentences generated")
+
+            # Aggregate TTS cost after all sentences are synthesized
+            self.handler._aggregate_cost(self.handler.tts, "TTS")
 
             logger.info(f"Generated {total_chunks} total audio chunks from {len(sentences)} sentences")
 

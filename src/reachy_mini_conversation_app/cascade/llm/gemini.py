@@ -22,6 +22,8 @@ class GeminiLLM(LLMProvider):
         api_key: str,
         model: str = "gemini-2.5-flash",
         system_instructions: Optional[str] = None,
+        input_cost_per_1m: float = 0.0,
+        output_cost_per_1m: float = 0.0,
     ):
         """Initialize Gemini LLM.
 
@@ -29,10 +31,15 @@ class GeminiLLM(LLMProvider):
             api_key: Google Gemini API key
             model: Model name (default: gemini-2.5-flash)
             system_instructions: System prompt
+            input_cost_per_1m: Cost per 1M input tokens (from cascade.yaml)
+            output_cost_per_1m: Cost per 1M output tokens (from cascade.yaml)
 
         """
         self.client = genai.Client(api_key=api_key)
         self.model = model
+        self.input_cost_per_1m = input_cost_per_1m
+        self.output_cost_per_1m = output_cost_per_1m
+        self.last_cost: float = 0.0
         logger.info(f"Initialized Gemini LLM with model: {model}")
         self.system_instructions = system_instructions
 
@@ -137,6 +144,7 @@ class GeminiLLM(LLMProvider):
             chunk_count = 0
 
             first_chunk_time = None
+            usage_metadata = None
             async for chunk in stream:
                 chunk_count += 1
                 if first_chunk_time is None:
@@ -145,6 +153,10 @@ class GeminiLLM(LLMProvider):
                 if first_token and (chunk.text or (hasattr(chunk, "candidates") and chunk.candidates)):
                     tracker.mark("llm_first_token")
                     first_token = False
+
+                # Capture usage metadata (available on final chunk)
+                if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                    usage_metadata = chunk.usage_metadata
 
                 # Handle text content
                 if chunk.text:
@@ -185,6 +197,16 @@ class GeminiLLM(LLMProvider):
                     "first_chunk_ms": round(first_chunk_latency, 1) if first_chunk_latency else None,
                 },
             )
+
+            # Calculate cost from usage metadata
+            if usage_metadata and (self.input_cost_per_1m > 0 or self.output_cost_per_1m > 0):
+                prompt_tokens = getattr(usage_metadata, "prompt_token_count", 0)
+                completion_tokens = getattr(usage_metadata, "candidates_token_count", 0)
+                self.last_cost = (
+                    prompt_tokens * self.input_cost_per_1m / 1e6
+                    + completion_tokens * self.output_cost_per_1m / 1e6
+                )
+                logger.info(f"LLM Cost: ${self.last_cost:.6f} (in={prompt_tokens}, out={completion_tokens})")
 
             yield LLMChunk(type="done")
 

@@ -10,7 +10,7 @@ import asyncio
 import logging
 import importlib
 import threading
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 from reachy_mini_conversation_app.prompts import get_session_instructions
 from reachy_mini_conversation_app.cascade.asr import ASRProvider, StreamingASRProvider
@@ -76,6 +76,9 @@ class CascadeHandler:
         # Get tool specs and convert to Chat Completions format
         # Note : get_tool_specs() returns Realtime API format, so we need Chat Completions format
         self.tool_specs = self._convert_tool_specs_to_chat_format(get_tool_specs())
+
+        # Cost tracking
+        self.cumulative_cost: float = 0.0
 
         logger.info(
             f"Cascade handler initialized (skip_audio_playback={skip_audio_playback}, streaming_asr={self.is_streaming_asr})"
@@ -159,6 +162,14 @@ class CascadeHandler:
         """Initialize TTS provider from cascade.yaml config."""
         return self._init_provider("tts")
 
+    def _aggregate_cost(self, provider: Union[ASRProvider, LLMProvider, TTSProvider], provider_name: str) -> None:
+        """Aggregate cost from a provider if it tracks costs."""
+        if hasattr(provider, "last_cost") and provider.last_cost > 0:
+            cost = provider.last_cost
+            self.cumulative_cost += cost
+            logger.info(f"Cost ({provider_name}): ${cost:.4f} | Cumulative: ${self.cumulative_cost:.4f}")
+            provider.last_cost = 0.0  # Reset for next call
+
     async def process_audio_manual(self, audio_bytes: bytes) -> str:
         """Process recorded audio through the cascade pipeline.
 
@@ -187,6 +198,7 @@ class CascadeHandler:
                 tracker.mark("transcribing_start")
                 transcript = await self.asr.transcribe(audio_bytes, language="en")
                 tracker.mark("asr_complete", {"transcript_len": len(transcript)})
+                self._aggregate_cost(self.asr, "ASR")
                 logger.info(f"User said: {transcript}")
 
                 if not transcript.strip():
@@ -276,6 +288,7 @@ class CascadeHandler:
                     tracker.mark("transcribing_start")
                     transcript = await self.asr.end_stream()
                     tracker.mark("asr_complete", {"transcript_len": len(transcript)})
+                    self._aggregate_cost(self.asr, "ASR")
                 else:
                     # Fallback to batch (shouldn't happen if UI checks properly)
                     logger.warning("ASR provider does not support streaming, this shouldn't happen")
@@ -337,6 +350,9 @@ class CascadeHandler:
                     logger.debug("LLM generation complete")
                     break
 
+            # Aggregate LLM cost after generator completes
+            self._aggregate_cost(self.llm, "LLM")
+
             # Create assistant message with text, tool calls...
             assistant_message: Dict[str, Any] = {"role": "assistant"}
             full_text = ""
@@ -374,8 +390,11 @@ class CascadeHandler:
 
     async def _execute_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> None:
         """Execute tool calls and handle camera and speak tool specially."""
-        has_camera_tool = False
+        camera_image_bytes: bytes | None = None
 
+        # First pass: execute all tools and add ALL tool results to conversation
+        # This must be done before adding any other messages (OpenAI requires all tool
+        # responses immediately after the assistant message with tool_calls)
         for tool_call in tool_calls:
             try:
                 call_id, tool_name, arguments = self.llm.parse_tool_call(tool_call)
@@ -409,28 +428,12 @@ class CascadeHandler:
                 )
                 logger.debug(f"Added tool result to history: name={tool_name}, history_len={len(self.conversation_history)}")
 
-                # Special handling for camera tool
+                # Special handling for camera tool - store image for later
                 if tool_name == "camera":
-                    has_camera_tool = True  # Always trigger follow-up LLM call for camera
                     if "b64_im" in result:
                         b64_im = result["b64_im"]
-                        logger.info("Camera tool executed - adding image to conversation for LLM analysis")
-
-                        # Add image to conversation as a user message (for LLM to analyze)
-                        # Decode base64 to raw bytes for Gemini inline_data format
-                        image_bytes = base64.b64decode(b64_im)
-
-                        self.conversation_history.append(
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "image",
-                                        "image": image_bytes,  # Will be converted to Gemini format in LLM
-                                    }
-                                ],
-                            }
-                        )
+                        logger.info("Camera tool executed - will add image to conversation for LLM analysis")
+                        camera_image_bytes = base64.b64decode(b64_im)
                     else:
                         # Camera failed - error already in tool result, LLM will see it
                         logger.warning(f"Camera tool returned error: {result}")
@@ -459,8 +462,19 @@ class CascadeHandler:
                     }
                 )
 
-        # If camera tool was used, call LLM again to analyze the image
-        if has_camera_tool:
+        # After all tool results are added, add camera image as user message and call LLM
+        if camera_image_bytes is not None:
+            self.conversation_history.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "image": camera_image_bytes,  # Will be converted to provider format in LLM
+                        }
+                    ],
+                }
+            )
             logger.info("Camera image added to conversation - calling LLM to analyze it")
             await self._process_llm_response()
 
@@ -497,6 +511,9 @@ class CascadeHandler:
                 chunk_duration = len(chunk) / (2 * 24000)
                 # Sleep for 95% of chunk duration to stay slightly ahead
                 await asyncio.sleep(chunk_duration * 0.95)
+
+            # Aggregate TTS cost after generator completes
+            self._aggregate_cost(self.tts, "TTS")
 
             logger.info(f"Generated {len(audio_chunks)} audio chunks for head animation")
 
