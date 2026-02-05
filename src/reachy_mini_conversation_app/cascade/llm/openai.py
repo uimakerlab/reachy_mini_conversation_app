@@ -1,6 +1,7 @@
 """OpenAI LLM implementation."""
 
 from __future__ import annotations
+import time
 import base64
 import logging
 from typing import Any, Dict, List, Optional, AsyncIterator
@@ -88,6 +89,8 @@ class OpenAILLM(LLMProvider):
             LLMChunk with text deltas or tool calls
 
         """
+        from reachy_mini_conversation_app.cascade.timing import tracker
+
         # Prepend system message if provided
         full_messages = []
         if self.system_instructions:
@@ -114,13 +117,24 @@ class OpenAILLM(LLMProvider):
                 kwargs["tool_choice"] = "auto"
 
             # Stream response
+            tracker.mark("llm_request_sending")
+            request_start = time.perf_counter()
+
             stream = await self.client.chat.completions.create(**kwargs)
 
+            stream_open_ms = (time.perf_counter() - request_start) * 1000
+            tracker.mark("llm_stream_opened", {"stream_open_ms": round(stream_open_ms, 1)})
+
+            accumulated_text = ""
             accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
             usage_data: Any = None
             finished = False
+            first_token = True
+            chunk_count = 0
 
             async for chunk in stream:
+                chunk_count += 1
+
                 # Capture usage data from final chunk (sent after finish_reason with empty choices)
                 if hasattr(chunk, "usage") and chunk.usage is not None:
                     usage_data = chunk.usage
@@ -130,8 +144,14 @@ class OpenAILLM(LLMProvider):
 
                 delta = chunk.choices[0].delta
 
+                # Track first token
+                if first_token and (delta.content or delta.tool_calls):
+                    tracker.mark("llm_first_token")
+                    first_token = False
+
                 # Handle text content
                 if delta.content:
+                    accumulated_text += delta.content
                     yield LLMChunk(type="text_delta", content=delta.content)
 
                 # Handle tool calls
@@ -165,6 +185,17 @@ class OpenAILLM(LLMProvider):
                     for tool_call in accumulated_tool_calls.values():
                         logger.info(f"Tool call: {tool_call['function']['name']}")
                         yield LLMChunk(type="tool_call", tool_call=tool_call)
+
+            total_ms = (time.perf_counter() - request_start) * 1000
+            tracker.mark(
+                "llm_complete",
+                {
+                    "text_len": len(accumulated_text),
+                    "tool_calls": len(accumulated_tool_calls),
+                    "chunks": chunk_count,
+                    "total_ms": round(total_ms, 1),
+                },
+            )
 
             # Calculate cost from usage data (after stream fully consumed)
             if usage_data and (self.input_cost_per_1m > 0 or self.output_cost_per_1m > 0):

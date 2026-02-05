@@ -651,9 +651,7 @@ class CascadeGradioUI:
                     # Track first chunk queued
                     if not first_chunk_queued:
                         first_chunk_queued = True
-                        tracker.mark("audio_first_chunk_queued")
                         tracker.mark("audio_playback_started")
-                        tracker.mark("wobbler_first_chunk")
                         logger.info("First audio chunk playing - playback started while TTS continues in background")
 
                 # Signal next sentence can queue

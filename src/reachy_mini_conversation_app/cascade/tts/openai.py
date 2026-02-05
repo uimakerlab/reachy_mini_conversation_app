@@ -57,6 +57,8 @@ class OpenAITTS(TTSProvider):
             Audio bytes
 
         """
+        from reachy_mini_conversation_app.cascade.timing import tracker
+
         if not text.strip():
             logger.warning("Empty text provided for synthesis")
             return
@@ -64,9 +66,17 @@ class OpenAITTS(TTSProvider):
         voice_to_use = voice or self.default_voice
         logger.info(f"TTS: Starting synthesis for '{text[:50]}...'")
 
+        tracker.mark("tts_start", {"text_len": len(text)})
+
         try:
+            import time
+
             # OpenAI TTS streaming - collect all chunks first to check for silence
+            tracker.mark("tts_api_request_sending")
+            request_start = time.perf_counter()
+
             all_chunks = []
+            first_byte = True
             async with self.client.audio.speech.with_streaming_response.create(
                 model=self.model,
                 voice=voice_to_use,
@@ -75,11 +85,18 @@ class OpenAITTS(TTSProvider):
             ) as response:
                 async for chunk in response.iter_bytes(chunk_size=1024):
                     if chunk:
+                        if first_byte:
+                            ttfb_ms = (time.perf_counter() - request_start) * 1000
+                            tracker.mark("tts_api_first_byte", {"ttfb_ms": round(ttfb_ms, 1)})
+                            first_byte = False
                         all_chunks.append(chunk)
+
+            tracker.mark("tts_api_complete")
 
             # Combine all chunks to check for leading silence
             import numpy as np
 
+            tracker.mark("tts_processing_start")
             full_audio = b"".join(all_chunks)
             audio_array = np.frombuffer(full_audio, dtype=np.int16)
 
@@ -94,6 +111,10 @@ class OpenAITTS(TTSProvider):
             trimmed_bytes = audio_array.tobytes()
             chunk_size = 1024
             chunk_count = 0
+
+            tracker.mark("tts_processing_end")
+            tracker.mark("tts_first_chunk_ready")
+
             for i in range(0, len(trimmed_bytes), chunk_size):
                 chunk = trimmed_bytes[i : i + chunk_size]
                 if chunk:

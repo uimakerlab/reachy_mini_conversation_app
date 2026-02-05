@@ -166,15 +166,24 @@ class CascadeLocalStream:
 
     async def _process_vad(self, audio_chunk: np.ndarray) -> None:
         """Process audio chunk through VAD state machine."""
+        streaming = self.handler.is_streaming_asr
+
         if self._state == VADState.LISTENING:
             speech_started, _ = self._vad.process_chunk(audio_chunk, SILERO_SAMPLE_RATE)
             if speech_started:
                 self._state = VADState.RECORDING
                 self._speech_chunks = [audio_chunk]
                 logger.info("Speech detected, recording...")
+                if streaming:
+                    await self.handler.process_audio_streaming_start()
+                    wav_bytes = self._audio_to_wav(audio_chunk, SILERO_SAMPLE_RATE)
+                    await self.handler.process_audio_streaming_chunk(wav_bytes)
 
         elif self._state == VADState.RECORDING:
             self._speech_chunks.append(audio_chunk)
+            if streaming:
+                wav_bytes = self._audio_to_wav(audio_chunk, SILERO_SAMPLE_RATE)
+                await self.handler.process_audio_streaming_chunk(wav_bytes)
             _, speech_ended = self._vad.process_chunk(audio_chunk, SILERO_SAMPLE_RATE)
             if speech_ended:
                 self._state = VADState.PROCESSING
@@ -182,7 +191,21 @@ class CascadeLocalStream:
                 # Start latency tracking from speech end
                 tracker.reset("vad_speech_end")
                 tracker.mark("vad_speech_end")
-                await self._process_recorded_audio()
+
+                if streaming:
+                    # Mark recording_captured before ASR finalization
+                    # (audio was already streamed, so capture is instant)
+                    audio_data = np.concatenate(self._speech_chunks)
+                    duration = len(audio_data) / SILERO_SAMPLE_RATE
+                    tracker.mark("recording_captured", {"duration_s": round(duration, 2)})
+                    transcript = await self.handler.process_audio_streaming_end()
+                    if transcript:
+                        logger.info(f"User: {transcript}")
+                    else:
+                        logger.info("No speech detected")
+                    tracker.print_summary()
+                else:
+                    await self._process_recorded_audio()
 
                 # Reset for next utterance
                 self._speech_chunks = []

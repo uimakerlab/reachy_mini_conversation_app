@@ -525,10 +525,10 @@ class CascadeHandler:
 
                 # Send to console playback callback (console mode only)
                 if not self.skip_audio_playback and self._playback_callback:
+                    await self._playback_callback(chunk)
                     if not first_chunk_sent:
                         tracker.mark("audio_playback_started")
                         first_chunk_sent = True
-                    await self._playback_callback(chunk)
 
                 # Rate limiting: match audio generation speed
                 # PCM int16 at 24kHz: 2 bytes per sample
