@@ -223,9 +223,9 @@ class CascadeHandler:
                 logger.info("Generating LLM response...")
                 tracker.mark("llm_start")
                 await self._process_llm_response()
-                tracker.mark("llm_complete")
 
-                # Note: summary will be printed in gradio_ui after TTS completes
+                # Note: summary will be printed in gradio_ui/console after TTS completes
+                # llm_complete is already marked inside the LLM provider
 
                 return transcript
 
@@ -318,7 +318,7 @@ class CascadeHandler:
                 logger.info("Generating LLM response...")
                 tracker.mark("llm_start")
                 await self._process_llm_response()
-                tracker.mark("llm_complete")
+                # llm_complete is already marked inside the LLM provider
 
                 # Reset partial transcript tracking
                 self._last_partial_transcript = ""
@@ -500,6 +500,8 @@ class CascadeHandler:
         3. Sends audio to playback callback (console mode only)
         4. Rate-limits to match real-time audio playback speed
         """
+        from reachy_mini_conversation_app.cascade.timing import tracker
+
         try:
             # Start head wobbler if available
             if self.deps.head_wobbler:
@@ -511,6 +513,7 @@ class CascadeHandler:
 
             # Stream TTS audio for head wobbler animation
             audio_chunks = []
+            first_chunk_sent = False
             async for chunk in self.tts.synthesize(text):
                 audio_chunks.append(chunk)
 
@@ -522,6 +525,9 @@ class CascadeHandler:
 
                 # Send to console playback callback (console mode only)
                 if not self.skip_audio_playback and self._playback_callback:
+                    if not first_chunk_sent:
+                        tracker.mark("audio_playback_started")
+                        first_chunk_sent = True
                     await self._playback_callback(chunk)
 
                 # Rate limiting: match audio generation speed
@@ -535,10 +541,9 @@ class CascadeHandler:
 
             logger.info(f"Generated {len(audio_chunks)} audio chunks for head animation")
 
-            # Wait for animation to finish (estimate based on audio length)
-            total_bytes = sum(len(chunk) for chunk in audio_chunks)
-            duration_seconds = total_bytes / (2 * 24000)
-            await asyncio.sleep(duration_seconds + 0.5)  # Add buffer
+            # Small buffer to let remaining audio drain from queue/speaker
+            # (we already waited 95% of duration during streaming)
+            await asyncio.sleep(0.5)
 
             # Reset head wobbler
             if self.deps.head_wobbler:

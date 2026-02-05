@@ -39,9 +39,9 @@ class LookAround(Tool):
         current_antenna2 = antenna_joints[1]
 
         # Define sweep parameters (fast for latency testing)
-        max_angle = 0.5 * 3.1415  # Maximum rotation angle (radians)
-        transition_duration = 0.25  # Time to move between positions
-        hold_duration = 0.1  # Time to hold at each extreme
+        max_angle = 0.2 * 3.1415  # Maximum rotation angle (radians)
+        transition_duration = 0.1  # Time to move between positions
+        hold_duration = 0.05  # Time to hold at each extreme
 
         # Move 1: Sweep to the left (positive yaw for both body and head)
         left_head_pose = create_head_pose(0, 0, 0, 0, 0, max_angle, degrees=False)

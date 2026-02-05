@@ -86,23 +86,18 @@ class KokoroTTS(TTSProvider):
 
                 chunks = []
 
+                import numpy as np
+
                 # Track model generation start
                 tracker.mark("tts_model_generation_start")
                 generation_start = time.perf_counter()
 
+                # Kokoro pipeline returns a lazy generator — actual synthesis happens on iteration
                 result = self.pipeline(text, voice=voice_to_use)
-
-                # Track model generation complete (time to first byte equivalent for local models)
-                generation_time_ms = (time.perf_counter() - generation_start) * 1000
-                tracker.mark("tts_model_generation_complete", {"generation_ms": round(generation_time_ms, 1)})
-
-                # Kokoro returns a Result object with 'audio' attribute
-                import numpy as np
 
                 if hasattr(result, "audio"):
                     audio_data = result.audio
                 else:
-                    # Fallback: if it's an iterator, collect chunks
                     audio_data = []
                     for chunk in result:
                         if hasattr(chunk, "audio"):
@@ -110,6 +105,10 @@ class KokoroTTS(TTSProvider):
                         else:
                             audio_data.append(chunk)
                     audio_data = np.concatenate(audio_data) if len(audio_data) > 0 else np.array([])
+
+                # Track model generation complete (after actual synthesis, not just generator creation)
+                generation_time_ms = (time.perf_counter() - generation_start) * 1000
+                tracker.mark("tts_model_generation_complete", {"generation_ms": round(generation_time_ms, 1)})
 
                 logger.debug(
                     f"Kokoro audio data shape: {audio_data.shape}, dtype: {audio_data.dtype}, min: {audio_data.min():.3f}, max: {audio_data.max():.3f}"

@@ -114,8 +114,9 @@ class LatencyTracker:
         asr_to_llm_gap = self.get_duration("asr_complete", "llm_start")
         llm_to_tts_gap = self.get_duration("llm_complete", "tts_start")
 
-        # Total perceived latency
-        total_latency = self.get_duration(user_stop_event, "audio_playback_started")
+        # Total perceived latencies
+        total_to_audio = self.get_duration(user_stop_event, "audio_playback_started")
+        total_to_tool = self.get_duration(user_stop_event, "llm_complete")
 
         # Display main stages
         logger.info("")
@@ -136,9 +137,13 @@ class LatencyTracker:
 
         logger.info("")
         logger.info("TOTAL PERCEIVED LATENCY:")
-        if total_latency is not None:
-            label = "Speech End → First Audio" if is_vad_flow else "Click → First Audio"
-            logger.info(f"     {label}{'.' * (40 - len(label))} {total_latency:>8.1f}ms")
+        stop_label = "Speech End" if is_vad_flow else "Click"
+        if total_to_tool is not None:
+            label = f"{stop_label} → First Tool"
+            logger.info(f"     {label}{'.' * (40 - len(label))} {total_to_tool:>8.1f}ms")
+        if total_to_audio is not None:
+            label = f"{stop_label} → First Audio"
+            logger.info(f"     {label}{'.' * (40 - len(label))} {total_to_audio:>8.1f}ms")
 
         logger.info("=" * 80)
 

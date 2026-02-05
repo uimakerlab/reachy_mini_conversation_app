@@ -17,6 +17,7 @@ import numpy as np
 from scipy.signal import resample
 
 from reachy_mini_conversation_app.cascade.vad import SILERO_SAMPLE_RATE, SileroVAD
+from reachy_mini_conversation_app.cascade.timing import tracker
 
 
 if TYPE_CHECKING:
@@ -178,6 +179,9 @@ class CascadeLocalStream:
             if speech_ended:
                 self._state = VADState.PROCESSING
                 logger.info(f"Speech ended, {len(self._speech_chunks)} chunks")
+                # Start latency tracking from speech end
+                tracker.reset("vad_speech_end")
+                tracker.mark("vad_speech_end")
                 await self._process_recorded_audio()
 
                 # Reset for next utterance
@@ -193,7 +197,9 @@ class CascadeLocalStream:
             return
 
         audio_data = np.concatenate(self._speech_chunks)
-        logger.info(f"Processing {len(audio_data)} samples ({len(audio_data) / SILERO_SAMPLE_RATE:.2f}s)")
+        duration = len(audio_data) / SILERO_SAMPLE_RATE
+        logger.info(f"Processing {len(audio_data)} samples ({duration:.2f}s)")
+        tracker.mark("recording_captured", {"duration_s": round(duration, 2)})
 
         wav_bytes = self._audio_to_wav(audio_data, SILERO_SAMPLE_RATE)
         logger.info("Transcribing...")
@@ -203,6 +209,9 @@ class CascadeLocalStream:
             logger.info(f"User: {transcript}")
         else:
             logger.info("No speech detected")
+
+        # Print latency summary for this turn
+        tracker.print_summary()
 
     def _audio_to_wav(self, audio: np.ndarray, sample_rate: int) -> bytes:
         """Convert int16 audio array to WAV bytes."""
