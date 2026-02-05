@@ -314,11 +314,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     logger.debug("Response done")
 
                     # Cost tracking from usage data (pricing as of Feb 2026 https://openai.com/fr-FR/api/pricing/)
-                    AUDIO_INPUT_COST_PER_1M: Final[float] = 32.0
-                    AUDIO_OUTPUT_COST_PER_1M: Final[float] = 64.0
-                    TEXT_INPUT_COST_PER_1M: Final[float] = 4.0
-                    TEXT_OUTPUT_COST_PER_1M: Final[float] = 16.0
-                    IMAGE_INPUT_COST_PER_1M: Final[float] = 5.0
+                    AUDIO_INPUT_COST_PER_1M = 32.0
+                    AUDIO_OUTPUT_COST_PER_1M = 64.0
+                    TEXT_INPUT_COST_PER_1M = 4.0
+                    TEXT_OUTPUT_COST_PER_1M = 16.0
+                    IMAGE_INPUT_COST_PER_1M = 5.0
 
                     response = getattr(event, "response", None)
                     usage = getattr(response, "usage", None) if response else None
