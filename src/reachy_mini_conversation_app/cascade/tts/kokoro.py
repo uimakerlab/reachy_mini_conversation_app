@@ -1,14 +1,20 @@
 """Kokoro TTS provider for cascade pipeline (Apple Silicon optimized)."""
 
 from __future__ import annotations
+import time
+import asyncio
 import logging
-from typing import List, Optional, AsyncIterator
+from typing import Optional, AsyncIterator
+
+import numpy as np
 
 from .base import TTSProvider
 from .utils import trim_leading_silence
 
 
 logger = logging.getLogger(__name__)
+
+CHUNK_SIZE = 4096  # samples per sub-chunk (~170ms at 24kHz)
 
 
 class KokoroTTS(TTSProvider):
@@ -52,14 +58,15 @@ class KokoroTTS(TTSProvider):
         logger.info(f"Kokoro TTS initialized with voice: {voice}, lang: {lang_code}")
 
     async def synthesize(self, text: str, voice: Optional[str] = None) -> AsyncIterator[bytes]:
-        """Synthesize text using Kokoro TTS with streaming.
+        """Synthesize text using Kokoro TTS with true streaming.
 
-        Args:
-            text: Text to synthesize
-            voice: Voice override (uses default if not provided)
+        Launches a producer thread that iterates KPipeline (sync generator) and
+        pushes sub-chunks through an asyncio.Queue. The async generator yields
+        each sub-chunk as soon as it arrives, giving ~150-200ms time-to-first-audio
+        instead of waiting for the full synthesis to complete.
 
         Yields:
-            Audio bytes (PCM 16-bit, 24kHz mono)
+            Audio bytes (PCM 16-bit, 24kHz mono, 4096-sample sub-chunks)
 
         """
         from reachy_mini_conversation_app.cascade.timing import tracker
@@ -73,83 +80,58 @@ class KokoroTTS(TTSProvider):
 
         tracker.mark("tts_start", {"text_len": len(text)})
 
-        try:
-            # Pipeline is already loaded at init
-            # Generate audio (this returns chunks)
-            import asyncio
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
 
-            # Run synthesis in thread pool since Kokoro is synchronous
-            def _synthesize_sync() -> List[bytes]:
-                import time
+        def _producer():
+            """Iterate KPipeline in a thread, push sub-chunks to the async queue."""
+            tracker.mark("tts_model_generation_start")
+            generation_start = time.perf_counter()
+            is_first_chunk = True
 
-                from reachy_mini_conversation_app.cascade.timing import tracker
+            try:
+                for result in self.pipeline(text, voice=voice_to_use):
+                    audio_data = result.audio if hasattr(result, "audio") else result
+                    # KPipeline yields PyTorch tensors — convert to numpy
+                    if hasattr(audio_data, "numpy"):
+                        audio_data = audio_data.numpy()
 
-                chunks = []
+                    if is_first_chunk:
+                        tracker.mark("tts_model_first_chunk")
+                        audio_data = trim_leading_silence(audio_data, provider_name="Kokoro TTS")
+                        is_first_chunk = False
 
-                import numpy as np
+                    # Convert float32 to int16 PCM
+                    audio_int16 = (audio_data * 32767).astype(np.int16)
 
-                # Track model generation start
-                tracker.mark("tts_model_generation_start")
-                generation_start = time.perf_counter()
+                    # Split into sub-chunks and push to queue
+                    for i in range(0, len(audio_int16), CHUNK_SIZE):
+                        sub_chunk = audio_int16[i : i + CHUNK_SIZE].tobytes()
+                        loop.call_soon_threadsafe(queue.put_nowait, sub_chunk)
 
-                # Kokoro pipeline returns a lazy generator — actual synthesis happens on iteration
-                result = self.pipeline(text, voice=voice_to_use)
-
-                if hasattr(result, "audio"):
-                    audio_data = result.audio
-                else:
-                    audio_data = []
-                    for chunk in result:
-                        if hasattr(chunk, "audio"):
-                            audio_data.append(chunk.audio)
-                        else:
-                            audio_data.append(chunk)
-                    audio_data = np.concatenate(audio_data) if len(audio_data) > 0 else np.array([])
-
-                # Track model generation complete (after actual synthesis, not just generator creation)
                 generation_time_ms = (time.perf_counter() - generation_start) * 1000
                 tracker.mark("tts_model_generation_complete", {"generation_ms": round(generation_time_ms, 1)})
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
 
-                logger.debug(
-                    f"Kokoro audio data shape: {audio_data.shape}, dtype: {audio_data.dtype}, min: {audio_data.min():.3f}, max: {audio_data.max():.3f}"
-                )
+        # Launch producer thread
+        future = asyncio.ensure_future(asyncio.to_thread(_producer))
 
-                # Start audio processing
-                tracker.mark("tts_processing_start")
-
-                # Trim leading silence if enabled (float32 audio)
-                audio_data = trim_leading_silence(audio_data, provider_name="Kokoro TTS")
-
-                # Convert float32 to int16 PCM
-                audio_int16 = (audio_data * 32767).astype(np.int16)
-
-                # Split into chunks for streaming (4096 samples = ~170ms at 24kHz)
-                chunk_size = 4096
-                for i in range(0, len(audio_int16), chunk_size):
-                    chunk = audio_int16[i : i + chunk_size]
-                    chunks.append(chunk.tobytes())
-
-                # Mark processing complete
-                tracker.mark("tts_processing_end")
-
-                return chunks
-
-            # Run in thread pool
-            chunks = await asyncio.to_thread(_synthesize_sync)
-
-            logger.info(f"Kokoro TTS: Generated {len(chunks)} audio chunks")
-
-            # Mark first chunk ready
-            tracker.mark("tts_first_chunk_ready")
-
-            # Yield chunks
-            for i, chunk in enumerate(chunks):
-                if i == 0:
+        try:
+            first_yielded = True
+            chunk_count = 0
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                chunk_count += 1
+                if first_yielded:
+                    tracker.mark("tts_first_chunk_ready")
                     logger.info("Kokoro TTS: First chunk ready (can start playback now!)")
+                    first_yielded = False
                 yield chunk
 
-            logger.info(f"Kokoro TTS: Synthesis complete for '{text[:50]}...'")
-
-        except Exception as e:
-            logger.error(f"Kokoro TTS synthesis failed: {e}")
-            raise
+            logger.info(f"Kokoro TTS: Generated {chunk_count} audio chunks for '{text[:50]}...'")
+        finally:
+            # Propagate any exception from the producer thread
+            await future
