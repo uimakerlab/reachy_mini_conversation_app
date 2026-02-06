@@ -66,18 +66,14 @@ class CascadeGradioUI:
             return None
 
         def on_start() -> None:
-            future = asyncio.run_coroutine_threadsafe(
-                self.handler.process_audio_streaming_start(), self.handler.loop
-            )
+            future = asyncio.run_coroutine_threadsafe(self.handler.process_audio_streaming_start(), self.handler.loop)
             try:
                 future.result(timeout=5.0)
             except Exception as e:
                 logger.error(f"Failed to start streaming ASR: {e}")
 
         def on_chunk(chunk_wav: bytes) -> None:
-            asyncio.run_coroutine_threadsafe(
-                self.handler.process_audio_streaming_chunk(chunk_wav), self.handler.loop
-            )
+            asyncio.run_coroutine_threadsafe(self.handler.process_audio_streaming_chunk(chunk_wav), self.handler.loop)
 
         return StreamingASRCallbacks(on_start=on_start, on_chunk=on_chunk)
 
@@ -95,9 +91,7 @@ class CascadeGradioUI:
     def _on_vad_speech_captured(self, wav_bytes: bytes) -> None:
         """Handle speech captured by VAD recorder."""
         try:
-            future = asyncio.run_coroutine_threadsafe(
-                self._process_audio_async(wav_bytes), self.handler.loop
-            )
+            future = asyncio.run_coroutine_threadsafe(self._process_audio_async(wav_bytes), self.handler.loop)
             result = future.result(timeout=60)
 
             if result["success"]:
@@ -219,18 +213,21 @@ class CascadeGradioUI:
                                 tool_content = json.loads(content) if isinstance(content, str) else content
                                 if "b64_im" in tool_content:
                                     import base64
+
                                     import cv2
-                                    import numpy as np
+
                                     # Decode base64 to numpy array
                                     img_bytes = base64.b64decode(tool_content["b64_im"])
                                     np_arr = np.frombuffer(img_bytes, np.uint8)
                                     np_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                                     if np_img is not None:
                                         rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
-                                        new_history.append({
-                                            "role": "assistant",
-                                            "content": gr.Image(value=rgb_frame),
-                                        })
+                                        new_history.append(
+                                            {
+                                                "role": "assistant",
+                                                "content": gr.Image(value=rgb_frame),
+                                            }
+                                        )
                                         # Only log once per camera image
                                         if msg_idx not in self._shown_camera_indices:
                                             self._shown_camera_indices.add(msg_idx)
@@ -240,11 +237,13 @@ class CascadeGradioUI:
                         else:
                             # Display other tool executions with metadata
                             tool_content = msg.get("content", "{}")
-                            new_history.append({
-                                "role": "assistant",
-                                "content": tool_content,
-                                "metadata": {"title": f"🛠️ Used tool {tool_name}", "status": "done"},
-                            })
+                            new_history.append(
+                                {
+                                    "role": "assistant",
+                                    "content": tool_content,
+                                    "metadata": {"title": f"🛠️ Used tool {tool_name}", "status": "done"},
+                                }
+                            )
 
                 return new_history if new_history else chat_history, status
 
@@ -355,24 +354,28 @@ class CascadeGradioUI:
                             if has_b64 and has_worker:
                                 np_img = self.handler.deps.camera_worker.get_latest_frame()
                                 if np_img is not None:
-                                    import cv2
-                                    import tempfile
                                     import os
+                                    import tempfile
+
+                                    import cv2
+
                                     # Save to temp file for Gradio Chatbot display
-                                    temp_file = tempfile.NamedTemporaryFile(
-                                        suffix=".jpg", delete=False, dir="/tmp"
-                                    )
+                                    temp_file = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False, dir="/tmp")
                                     temp_path = temp_file.name
                                     temp_file.close()
                                     # cv2.imwrite expects BGR which is what camera provides
                                     success = cv2.imwrite(temp_path, np_img)
                                     file_size = os.path.getsize(temp_path) if os.path.exists(temp_path) else 0
-                                    logger.info(f"Image save: success={success}, path={temp_path}, size={file_size} bytes, shape={np_img.shape}")
+                                    logger.info(
+                                        f"Image save: success={success}, path={temp_path}, size={file_size} bytes, shape={np_img.shape}"
+                                    )
                                     # Store image path - FileData will be created in sync context
-                                    result["responses"].append({
-                                        "role": "assistant",
-                                        "content": {"_image_path": temp_path},
-                                    })
+                                    result["responses"].append(
+                                        {
+                                            "role": "assistant",
+                                            "content": {"_image_path": temp_path},
+                                        }
+                                    )
                                     logger.info(f"Added camera image path to responses: {temp_path}")
                                 else:
                                     logger.warning("camera_worker.get_latest_frame() returned None")
@@ -383,11 +386,13 @@ class CascadeGradioUI:
                     elif tool_name:
                         # Display other tool executions with metadata (collapsible in Gradio)
                         tool_content = message.get("content", "{}")
-                        result["responses"].append({
-                            "role": "assistant",
-                            "content": tool_content,  # Already JSON string from handler
-                            "metadata": {"title": f"🛠️ Used tool {tool_name}", "status": "done"},
-                        })
+                        result["responses"].append(
+                            {
+                                "role": "assistant",
+                                "content": tool_content,  # Already JSON string from handler
+                                "metadata": {"title": f"🛠️ Used tool {tool_name}", "status": "done"},
+                            }
+                        )
 
             # In case there are several speech messages in a single stream (it shouldn't happen too much), concatenate them.
             if speak_messages:
@@ -455,15 +460,47 @@ class CascadeGradioUI:
 
                 logger.debug(f"TTS sentence {idx + 1}/{len(sentences)}: '{sentence}' (PARALLEL)")
                 sentence_chunks: list[npt.NDArray[np.int16]] = []
-                raw_chunks: list[bytes] = []  # Buffer raw chunks for wobbler
                 sentence_start = time.time()
 
-                # Buffer all chunks during TTS streaming
-                async for chunk in self.handler.tts.synthesize(sentence):
-                    total_chunks += 1
-                    audio_array = np.frombuffer(chunk, dtype=np.int16)
-                    sentence_chunks.append(audio_array)
-                    raw_chunks.append(chunk)
+                # If gate is already open (sentence 0), stream directly to playback
+                gate_is_open = queue_events[idx].is_set()
+
+                if gate_is_open:
+                    # Stream each chunk to playback as it arrives — no buffering
+                    async for chunk in self.handler.tts.synthesize(sentence):
+                        total_chunks += 1
+                        audio_array = np.frombuffer(chunk, dtype=np.int16)
+                        sentence_chunks.append(audio_array)
+                        audio_chunks.append(audio_array)
+                        self.playback.put_audio(audio_array)
+                        self.playback.put_wobbler(chunk)
+                        if not first_chunk_queued:
+                            first_chunk_queued = True
+                            tracker.mark("audio_playback_started")
+                            logger.info(
+                                "First audio chunk playing - playback started while TTS continues in background"
+                            )
+                else:
+                    # Buffer all chunks, then wait for gate before queuing
+                    raw_chunks: list[bytes] = []
+                    async for chunk in self.handler.tts.synthesize(sentence):
+                        total_chunks += 1
+                        audio_array = np.frombuffer(chunk, dtype=np.int16)
+                        sentence_chunks.append(audio_array)
+                        raw_chunks.append(chunk)
+
+                    await queue_events[idx].wait()
+
+                    for audio_array, raw_chunk in zip(sentence_chunks, raw_chunks):
+                        audio_chunks.append(audio_array)
+                        self.playback.put_audio(audio_array)
+                        self.playback.put_wobbler(raw_chunk)
+                        if not first_chunk_queued:
+                            first_chunk_queued = True
+                            tracker.mark("audio_playback_started")
+                            logger.info(
+                                "First audio chunk playing - playback started while TTS continues in background"
+                            )
 
                 gen_duration = time.time() - sentence_start
                 if sentence_chunks:
@@ -471,26 +508,6 @@ class CascadeGradioUI:
                     logger.debug(
                         f"Sentence {idx + 1} generated: {len(sentence_chunks)} chunks ({total_samples} samples, {total_samples / 24000:.2f}s) in {gen_duration:.2f}s"
                     )
-
-                # Wait for our turn to queue (ensures sentence order)
-                await queue_events[idx].wait()
-
-                # Queue all chunks for this sentence
-                for audio_array, raw_chunk in zip(sentence_chunks, raw_chunks):
-                    # Collect for Gradio output
-                    audio_chunks.append(audio_array)
-
-                    # Queue for immediate playback
-                    self.playback.put_audio(audio_array)
-
-                    # Queue for wobbler
-                    self.playback.put_wobbler(raw_chunk)
-
-                    # Track first chunk queued
-                    if not first_chunk_queued:
-                        first_chunk_queued = True
-                        tracker.mark("audio_playback_started")
-                        logger.info("First audio chunk playing - playback started while TTS continues in background")
 
                 # Signal next sentence can queue
                 if idx + 1 < len(queue_events):
