@@ -73,9 +73,17 @@ class CascadeHandler:
         # Store streaming status based on config
         self.is_streaming_asr = config.is_asr_streaming()
 
+        # Dynamic tool gating based on available capabilities
+        exclusion_list: list[str] = []
+        if deps.vision_manager is None:
+            exclusion_list.append("describe_scene")
+
         # Get tool specs and convert to Chat Completions format
         # Note : get_tool_specs() returns Realtime API format, so we need Chat Completions format
-        self.tool_specs = self._convert_tool_specs_to_chat_format(get_tool_specs())
+        self.tool_specs = self._convert_tool_specs_to_chat_format(get_tool_specs(exclusion_list=exclusion_list))
+
+        # Side-channel storage for see_image frames (JPEG bytes, indexed)
+        self._captured_frames: list[bytes] = []
 
         # Cost tracking
         self.cumulative_cost: float = 0.0
@@ -396,7 +404,7 @@ class CascadeHandler:
             logger.exception(f"Error processing LLM response: {e}")
 
     async def _execute_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> None:
-        """Execute tool calls and handle camera and speak tool specially."""
+        """Execute tool calls and handle camera/see_image and speak tool specially."""
         camera_image_bytes: bytes | None = None
 
         # First pass: execute all tools and add ALL tool results to conversation
@@ -415,12 +423,9 @@ class CascadeHandler:
                     self.deps,
                 )
 
-                # Do not log full result if the tool_name was camera (base64 is huge)
-                if tool_name == "camera":
-                    if "b64_im" in result:
-                        logger.info("Tool result: [camera image in base64, not shown]")
-                    else:
-                        logger.info(f"Tool result: {result}")  # Log errors normally
+                # Do not log full result if the tool returned base64 (huge)
+                if tool_name in ("camera", "see_image") and "b64_im" in result:
+                    logger.info("Tool result: [image in base64, not shown]")
                 else:
                     logger.info(f"Tool result: {result}")
 
@@ -437,8 +442,23 @@ class CascadeHandler:
                     f"Added tool result to history: name={tool_name}, history_len={len(self.conversation_history)}"
                 )
 
-                # Special handling for camera tool - store image for later
-                if tool_name == "camera":
+                # Special handling for see_image tool - store frame, replace heavy b64
+                if tool_name == "see_image":
+                    if "b64_im" in result:
+                        b64_im = result["b64_im"]
+                        camera_image_bytes = base64.b64decode(b64_im)
+                        frame_index = len(self._captured_frames)
+                        self._captured_frames.append(camera_image_bytes)
+                        # Replace the heavy b64 blob in conversation history with a lightweight marker
+                        self.conversation_history[-1]["content"] = json.dumps(
+                            {"status": "image_captured", "frame_index": frame_index}
+                        )
+                        logger.info("see_image: stored frame %d, will add image to conversation", frame_index)
+                    else:
+                        logger.warning(f"see_image returned error: {result}")
+
+                # Special handling for camera tool (backward compat) - store image for later
+                elif tool_name == "camera":
                     if "b64_im" in result:
                         b64_im = result["b64_im"]
                         logger.info("Camera tool executed - will add image to conversation for LLM analysis")

@@ -207,8 +207,29 @@ class CascadeGradioUI:
 
                     elif role == "tool" and msg.get("name") not in ("speak", None):
                         tool_name = msg.get("name")
-                        if tool_name == "camera":
-                            # Display camera image from the base64 data in conversation history
+                        if tool_name == "see_image":
+                            # Display image from side-channel frame storage
+                            try:
+                                tool_content = json.loads(content) if isinstance(content, str) else content
+                                frame_index = tool_content.get("frame_index")
+                                if frame_index is not None and frame_index < len(self.handler._captured_frames):
+                                    import cv2
+                                    jpeg_bytes = self.handler._captured_frames[frame_index]
+                                    np_arr = np.frombuffer(jpeg_bytes, np.uint8)
+                                    np_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                                    if np_img is not None:
+                                        rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
+                                        new_history.append({
+                                            "role": "assistant",
+                                            "content": gr.Image(value=rgb_frame),
+                                        })
+                                        if msg_idx not in self._shown_camera_indices:
+                                            self._shown_camera_indices.add(msg_idx)
+                                            logger.info(f"poll_continuous_updates: Added see_image frame {frame_index} (idx={msg_idx})")
+                            except Exception as e:
+                                logger.warning(f"poll_continuous_updates: Failed to add see_image: {e}")
+                        elif tool_name == "camera":
+                            # Display camera image from the base64 data in conversation history (backward compat)
                             try:
                                 tool_content = json.loads(content) if isinstance(content, str) else content
                                 if "b64_im" in tool_content:
@@ -342,8 +363,42 @@ class CascadeGradioUI:
                                 speak_messages.append(tool_content["message"])
                         except json.JSONDecodeError:
                             pass
+                    elif tool_name == "see_image":
+                        # Display image from side-channel frame storage
+                        logger.info("Processing see_image tool for UI display")
+                        try:
+                            raw_content = message.get("content", "{}")
+                            tool_content = json.loads(raw_content)
+                            frame_index = tool_content.get("frame_index")
+                            if frame_index is not None and frame_index < len(self.handler._captured_frames):
+                                import os
+                                import tempfile
+
+                                import cv2
+                                jpeg_bytes = self.handler._captured_frames[frame_index]
+                                np_arr = np.frombuffer(jpeg_bytes, np.uint8)
+                                np_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                                if np_img is not None:
+                                    temp_file = tempfile.NamedTemporaryFile(
+                                        suffix=".jpg", delete=False, dir="/tmp"
+                                    )
+                                    temp_path = temp_file.name
+                                    temp_file.close()
+                                    success = cv2.imwrite(temp_path, np_img)
+                                    file_size = os.path.getsize(temp_path) if os.path.exists(temp_path) else 0
+                                    logger.info(f"see_image save: success={success}, path={temp_path}, size={file_size} bytes")
+                                    result["responses"].append({
+                                        "role": "assistant",
+                                        "content": {"_image_path": temp_path},
+                                    })
+                                else:
+                                    logger.warning("see_image: failed to decode stored frame %d", frame_index)
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Failed to parse see_image tool result: {e}")
+                        except Exception as e:
+                            logger.exception(f"Failed to add see_image to chat: {e}")
                     elif tool_name == "camera":
-                        # Display camera image in chat
+                        # Display camera image in chat (backward compat)
                         logger.info("Processing camera tool for UI display")
                         try:
                             raw_content = message.get("content", "{}")
@@ -638,6 +693,7 @@ class CascadeGradioUI:
     def _clear_history(self) -> tuple[List[Dict[str, Any]], str]:
         """Clear conversation history."""
         self.handler.conversation_history = []
+        self.handler._captured_frames.clear()
         self._shown_camera_indices.clear()
         return [], "History cleared"
 
