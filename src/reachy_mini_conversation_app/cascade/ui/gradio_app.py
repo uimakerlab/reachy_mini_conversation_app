@@ -13,7 +13,7 @@ import numpy as np
 import gradio as gr
 
 from .audio_playback import AudioPlaybackSystem
-from .audio_recording import ContinuousState, PushToTalkRecorder, ContinuousVADRecorder, StreamingASRCallbacks
+from .audio_recording import ContinuousState, ContinuousVADRecorder, StreamingASRCallbacks
 
 
 if TYPE_CHECKING:
@@ -43,7 +43,6 @@ class CascadeGradioUI:
         self.handler.skip_audio_playback = True
 
         self.shutdown_event = threading.Event()
-        self._last_click_time: float = 0.0
 
         # Create playback system (pre-warmed threads)
         self.playback = AudioPlaybackSystem(
@@ -52,8 +51,7 @@ class CascadeGradioUI:
             shutdown_event=self.shutdown_event,
         )
 
-        # Recorders created lazily after handler.start() provides event loop
-        self._ptt_recorder: PushToTalkRecorder | None = None
+        # VAD recorder created lazily after handler.start() provides event loop
         self._vad_recorder: ContinuousVADRecorder | None = None
         self.continuous_mode = False
         self._shown_camera_indices: set[int] = set()  # Track which camera messages have been shown
@@ -82,16 +80,6 @@ class CascadeGradioUI:
             )
 
         return StreamingASRCallbacks(on_start=on_start, on_chunk=on_chunk)
-
-    def _get_ptt_recorder(self) -> PushToTalkRecorder:
-        """Get or create push-to-talk recorder (lazy initialization)."""
-        if self._ptt_recorder is None:
-            self._ptt_recorder = PushToTalkRecorder(
-                sample_rate=16000,
-                streaming_asr_callbacks=self._create_streaming_callbacks(),
-                event_loop=self.handler.loop,
-            )
-        return self._ptt_recorder
 
     def _get_vad_recorder(self) -> ContinuousVADRecorder:
         """Get or create VAD recorder (lazy initialization)."""
@@ -122,24 +110,8 @@ class CascadeGradioUI:
 
     def create_interface(self) -> gr.Blocks:
         """Create and return Gradio interface."""
-        # Custom CSS to change button color based on recording state
-        custom_css = """
-        button:has(span:contains("STOP")) {
-            background: linear-gradient(to bottom right, #dc2626, #991b1b) !important;
-            border-color: #991b1b !important;
-        }
-        button:has(span:contains("START")) {
-            background: linear-gradient(to bottom right, #16a34a, #15803d) !important;
-            border-color: #15803d !important;
-        }
-        """
-
-        with gr.Blocks(title="Reachy Mini - Cascade Mode", css=custom_css) as demo:
+        with gr.Blocks(title="Reachy Mini - Cascade Mode") as demo:
             gr.Markdown("# Reachy Mini Conversation (Cascade Mode)")
-            gr.Markdown(
-                "**Instructions:** Click the button to **START** recording, speak your message, "
-                "then click again to **STOP** and process automatically!"
-            )
 
             # Chat display
             chatbot = gr.Chatbot(
@@ -148,94 +120,45 @@ class CascadeGradioUI:
                 height=400,
             )
 
-            # Recording toggle button (single button for start/stop)
-            with gr.Row():
-                record_btn = gr.Button(
-                    "🎤 START Recording",
-                    scale=2,
-                    variant="primary",
-                    size="lg",
-                )
-                continuous_checkbox = gr.Checkbox(
-                    label="Continuous Mode (VAD)",
-                    value=False,
-                    scale=1,
-                    info="Auto-detect speech start/end",
-                )
-
             # Status display
             status_box = gr.Textbox(
                 label="Status",
                 interactive=False,
-                value="Ready to record...",
-                placeholder="Status updates will appear here",
+                value="Ready. Toggle 'Listening' to start.",
             )
 
-            # Clear button
+            # Controls
             with gr.Row():
-                clear_btn = gr.Button("🗑️ Clear History", scale=1)
+                listening_checkbox = gr.Checkbox(
+                    label="Listening",
+                    value=False,
+                    scale=1,
+                    info="Toggle microphone on/off",
+                )
+                clear_btn = gr.Button("Clear History", scale=1)
 
-            # Toggle recording button logic
-            def toggle_recording_wrapper(chat_history: List[Dict[str, Any]]) -> tuple[str, str, List[Dict[str, Any]]]:
-                """Toggle between start and stop recording."""
-                # Prevent rapid double-clicks (debounce)
-                current_time = time.time()
-                if current_time - self._last_click_time < 0.5:  # 500ms debounce
-                    recorder = self._get_ptt_recorder()
-                    if recorder.is_recording:
-                        return "STOP Recording", "Recording... (speak now)", chat_history
-                    else:
-                        return "START Recording", "Ready to record...", chat_history
-                self._last_click_time = current_time
-
-                recorder = self._get_ptt_recorder()
-                if not recorder.is_recording:
-                    # Start recording
-                    recorder.start()
-                    return "STOP Recording", "Recording... (speak now)", chat_history
-                else:
-                    # Stop recording and process
-                    _, save_status = recorder.stop()
-
-                    # Auto-process if recording was successful
-                    wav_bytes = recorder.get_wav_bytes()
-                    if wav_bytes:
-                        chat_history, process_status = self._process_audio_sync(wav_bytes, chat_history)
-                        return "START Recording", process_status, chat_history
-                    else:
-                        return "START Recording", save_status, chat_history
-
-            record_btn.click(
-                fn=toggle_recording_wrapper,
-                inputs=[chatbot],
-                outputs=[record_btn, status_box, chatbot],
-            )
-
-            # Set up polling timer for continuous mode (only active in continuous mode)
-            poll_timer = gr.Timer(0.5, active=False)
-
-            # Continuous mode toggle handler
-            def toggle_continuous_mode(
+            # Listening toggle handler
+            def toggle_listening(
                 enabled: bool, chat_history: List[Dict[str, Any]]
-            ) -> tuple[str, str, List[Dict[str, Any]], bool, gr.Timer]:
-                """Toggle continuous VAD mode on/off."""
+            ) -> tuple[str, List[Dict[str, Any]], bool, gr.Timer]:
+                """Toggle continuous VAD listening on/off."""
                 if enabled:
-                    # Start continuous mode
                     recorder = self._get_vad_recorder()
                     status = recorder.start()
                     self.continuous_mode = True
-                    return "🎤 (Continuous Active)", status, chat_history, True, gr.Timer(active=True)
+                    return status, chat_history, True, gr.Timer(active=True)
                 else:
-                    # Stop continuous mode
                     recorder = self._get_vad_recorder()
                     status = recorder.stop()
                     self.continuous_mode = False
-                    return "🎤 START Recording", status, chat_history, False, gr.Timer(active=False)
+                    return status, chat_history, False, gr.Timer(active=False)
 
-            continuous_checkbox.change(
-                fn=toggle_continuous_mode,
-                inputs=[continuous_checkbox, chatbot],
-                outputs=[record_btn, status_box, chatbot, continuous_checkbox, poll_timer],
+            poll_timer = gr.Timer(0.5, active=False)
+
+            listening_checkbox.change(
+                fn=toggle_listening,
+                inputs=[listening_checkbox, chatbot],
+                outputs=[status_box, chatbot, listening_checkbox, poll_timer],
             )
 
             # Polling for continuous mode updates (updates chat when VAD detects speech)
@@ -340,91 +263,6 @@ class CascadeGradioUI:
             )
 
         return demo  # type: ignore[no-any-return]
-
-    def _process_audio_sync(
-        self, audio_bytes: bytes, chat_history: List[Dict[str, Any]]
-    ) -> tuple[List[Dict[str, Any]], str]:
-        """Process audio bytes (sync wrapper for async handler).
-
-        Args:
-            audio_bytes: WAV audio bytes
-            chat_history: Current chat history
-
-        Returns:
-            Tuple of (updated_chat_history, status_message)
-
-        """
-        if not audio_bytes or len(audio_bytes) == 0:
-            return chat_history, "No audio data. Please record first."
-
-        logger.debug(f"Processing {len(audio_bytes)} bytes of audio")
-
-        try:
-            # Use handler's event loop via run_coroutine_threadsafe
-            # This avoids conflicts with the handler's background event loop
-            if not self.handler.loop:
-                return chat_history, "Error: Event loop not available"
-
-            future = asyncio.run_coroutine_threadsafe(self._process_audio_async(audio_bytes), self.handler.loop)
-
-            # Wait for result with timeout
-            result = future.result(timeout=60)
-
-            logger.debug(f"_process_audio_sync: received result - success={result.get('success')}, responses_count={len(result.get('responses', []))}")
-
-            # Update chat history
-            if result["success"]:
-                # Add user message
-                if result.get("transcript"):
-                    chat_history.append({"role": "user", "content": result["transcript"]})
-
-                # Add assistant responses
-                if result.get("responses"):
-                    for i, response in enumerate(result["responses"]):
-                        if isinstance(response, dict):
-                            content = response.get("content", "")
-                            # Check for image path marker from async context
-                            if isinstance(content, dict) and "_image_path" in content:
-                                image_path = content["_image_path"]
-                                # Create gr.Image in sync context - exactly like realtime mode
-                                import cv2
-                                np_img = cv2.imread(image_path)
-                                if np_img is not None:
-                                    rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
-                                    img = gr.Image(value=rgb_frame)
-                                    chat_history.append({
-                                        "role": "assistant",
-                                        "content": img,
-                                    })
-                                    logger.info(f"Response[{i}]: Created gr.Image for: {image_path}")
-                                else:
-                                    logger.warning(f"Response[{i}]: Failed to read image: {image_path}")
-                            else:
-                                # Response already has role/content/metadata (e.g., tool messages)
-                                chat_history.append(response)
-                                content_type = type(content).__name__
-                                content_preview = str(content)[:50]
-                                logger.debug(f"Response[{i}]: {content_type} = {content_preview}...")
-                        else:
-                            # Plain string response (e.g., speak tool message text)
-                            chat_history.append({"role": "assistant", "content": response})
-                            logger.debug(f"Response[{i}]: plain string = {response[:50]}...")
-                    logger.info(f"Final chat_history length: {len(chat_history)}")
-
-                status = "Message processed successfully!"
-            else:
-                status = f"Error: {result.get('error', 'Unknown error')}"
-
-        except Exception as e:
-            logger.exception(f"Error processing audio: {e}")
-            status = f"Error processing audio: {str(e)}"
-
-        # Debug: log chat_history content types before returning
-        for idx, msg in enumerate(chat_history):
-            content = msg.get("content", "")
-            logger.info(f"chat_history[{idx}]: role={msg.get('role')}, content_type={type(content).__name__}")
-
-        return chat_history, status
 
     async def _process_audio_async(self, audio_bytes: bytes) -> Dict[str, Any]:
         """Process audio through cascade pipeline (async).
@@ -793,10 +631,6 @@ class CascadeGradioUI:
 
     def close(self) -> None:
         """Close Gradio interface and shutdown all subsystems."""
-        # Stop recording if still active
-        if self._ptt_recorder and self._ptt_recorder.is_recording:
-            self._ptt_recorder.stop()
-
         # Stop continuous mode if active
         if self._vad_recorder and self._vad_recorder.is_active:
             self._vad_recorder.stop()
