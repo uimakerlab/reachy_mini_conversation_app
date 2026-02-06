@@ -69,6 +69,7 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
         self.stable_text = ""  # Finalized tokens only
         self.unstable_tail = ""  # Draft tokens after stable part
         self.num_finalized_tokens = 0  # Track how many tokens are finalized
+        self.last_result_text = ""  # Last non-empty result.text seen during streaming
 
         # Audio tracking
         self.chunk_buffer: list[npt.NDArray[np.float32]] = []
@@ -159,6 +160,7 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
             self.stable_text = ""
             self.unstable_tail = ""
             self.num_finalized_tokens = 0
+            self.last_result_text = ""
             self.is_streaming = True
             self.chunk_buffer = []
             self.total_buffered_samples = 0
@@ -214,6 +216,8 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
                 # Update tracking
                 self.cumulative_samples_sent += batch_size
                 current_text = self.transcriber.result.text if self.transcriber.result else ""
+                if current_text:
+                    self.last_result_text = current_text
                 text_preview = f" | Text: '{current_text[:50]}...'" if current_text else ""
                 logger.debug(
                     f"✓ Sent {batch_size} samples ({batch_size / self.target_sample_rate * 1000:.0f}ms) | "
@@ -357,6 +361,11 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
                 if not final_transcript and self.unstable_tail:
                     logger.warning(f"⚠️ No finalized tokens! Using draft as fallback: '{self.unstable_tail}'")
                     final_transcript = self.unstable_tail
+
+                # Ultimate fallback: use last non-empty result.text seen during streaming
+                if not final_transcript and self.last_result_text:
+                    logger.warning(f"⚠️ No finalized tokens and no draft! Using last result.text as fallback: '{self.last_result_text}'")
+                    final_transcript = self.last_result_text
 
                 # Apply repetition cleanup
                 final_transcript = self._cleanup_repetitions(final_transcript)
