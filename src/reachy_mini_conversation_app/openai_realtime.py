@@ -261,7 +261,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             },
                         },
                         "tools": get_tool_specs(exclusion_list=(
-                            ["speak"]
+                            ["speak"] +
+                            ["describe_camera_image"] if self.deps.vision_manager is None
+                            else ["see_image_through_camera"]
                         )),  # type: ignore[typeddict-item]
                         "tool_choice": "auto",
                     },
@@ -406,10 +408,22 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     try:
                         tool_result = await dispatch_tool_call(tool_name, args_json_str, self.deps)
                         logger.debug("Tool '%s' executed successfully", tool_name)
-                        logger.debug("Tool result: %s", tool_result)
+                        logger.debug("Tool result: %.500s", tool_result)
                     except Exception as e:
                         logger.error("Tool '%s' failed", tool_name)
                         tool_result = {"error": str(e)}
+
+                    # For see_image_through_camera/camera with b64 result: send a lightweight tool result
+                    # and inject the image as a proper user message instead.
+                    is_image_tool = tool_name in ("camera", "see_image_through_camera") and "b64_im" in tool_result
+                    if is_image_tool:
+                        b64_im = tool_result["b64_im"]
+                        if not isinstance(b64_im, str):
+                            logger.warning("Unexpected type for b64_im: %s", type(b64_im))
+                            b64_im = str(b64_im)
+                        tool_result_for_api = {"status": "Image captured, will be provided next."}
+                    else:
+                        tool_result_for_api = tool_result
 
                     # send the tool result back
                     if isinstance(call_id, str):
@@ -417,7 +431,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             item={
                                 "type": "function_call_output",
                                 "call_id": call_id,
-                                "output": json.dumps(tool_result),
+                                "output": json.dumps(tool_result_for_api),
                             },
                         )
 
@@ -425,18 +439,13 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         AdditionalOutputs(
                             {
                                 "role": "assistant",
-                                "content": json.dumps(tool_result),
+                                "content": json.dumps(tool_result_for_api),
                                 "metadata": {"title": f"🛠️ Used tool {tool_name}", "status": "done"},
                             },
                         ),
                     )
 
-                    if tool_name == "camera" and "b64_im" in tool_result:
-                        # use raw base64, don't json.dumps (which adds quotes)
-                        b64_im = tool_result["b64_im"]
-                        if not isinstance(b64_im, str):
-                            logger.warning("Unexpected type for b64_im: %s", type(b64_im))
-                            b64_im = str(b64_im)
+                    if is_image_tool:
                         await self.connection.conversation.item.create(
                             item={
                                 "type": "message",
