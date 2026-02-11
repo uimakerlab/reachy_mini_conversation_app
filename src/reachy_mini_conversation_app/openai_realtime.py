@@ -11,11 +11,11 @@ import cv2
 import numpy as np
 import gradio as gr
 from openai import AsyncOpenAI
-from openai.resources.realtime.realtime import AsyncRealtimeConnection
 from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_to_int16
 from numpy.typing import NDArray
 from scipy.signal import resample
 from websockets.exceptions import ConnectionClosedError
+from openai.resources.realtime.realtime import AsyncRealtimeConnection
 
 from reachy_mini_conversation_app.config import config
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
@@ -331,7 +331,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             logger.info("Realtime session updated successfully")
 
             # Manage event received from the openai server
-            self.connection: AsyncRealtimeConnection = conn
+            self.connection = conn
             try:
                 self._connected_event.set()
             except Exception:
