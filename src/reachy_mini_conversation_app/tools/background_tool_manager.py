@@ -9,30 +9,15 @@ from __future__ import annotations
 import time
 import asyncio
 import logging
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, Callable, Optional, Coroutine
+from typing import Any, Dict, Callable, Optional, Coroutine
 
 from pydantic import Field, BaseModel, PrivateAttr
 
+from reachy_mini_conversation_app.tools.core_tools import ToolDependencies, dispatch_tool_call
+from reachy_mini_conversation_app.tools.tool_constants import ToolState, SystemTool
 
-if TYPE_CHECKING:
-    from reachy_mini_conversation_app.tools.core_tools import ToolDependencies, dispatch_tool_call
 
 logger = logging.getLogger(__name__)
-
-class SystemTool(Enum):
-    """System tools are tools that are used to manage the background tool manager."""
-
-    TOOL_STATUS = "tool_status"
-    TOOL_CANCEL = "tool_cancel"
-
-class ToolState(Enum):
-    """Status of a background tool."""
-
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
 
 class ToolProgress(BaseModel):
     """Progress of a background tool."""
@@ -56,14 +41,14 @@ class ToolCallRoutine(BaseModel):
     args_json_str: str
 
     """the dependencies for the tool call"""
-    deps: ToolDependencies
+    deps: "ToolDependencies"
 
     async def __call__(self, tool_manager: BackgroundToolManager) -> Any:
         """Execute the stored callable with its arguments."""
         if self.tool_name in SystemTool:
             # For safety purposes, we only allow system tools to be called with the tool manager
-            return await dispatch_tool_call(self.tool_name, self.args_json_str, self.deps, tool_manager)
-        return await dispatch_tool_call(self.tool_name, self.args_json_str, self.deps)
+            return await dispatch_tool_call(tool_name=self.tool_name, args_json=self.args_json_str, deps=self.deps, tool_manager=tool_manager)
+        return await dispatch_tool_call(tool_name=self.tool_name, args_json=self.args_json_str, deps=self.deps)
 
 
 class ToolNotification(BaseModel):
@@ -127,7 +112,7 @@ class BackgroundToolManager(BaseModel):
     - Start async tools without blocking the conversation
     - Track tool status and progress
     - Cancel running tools
-    - Silent notification queue for completion announcements
+
     """
 
     """the dictionary of tools"""
@@ -160,10 +145,7 @@ class BackgroundToolManager(BaseModel):
         else:
             try:
                 self._loop = asyncio.get_running_loop()
-                logger.warning("BackgroundToolManager: getting running loop")
             except RuntimeError:
-                # No running event loop - this can happen during setup
-                logger.warning("BackgroundToolManager: creating new event loop")
                 self._loop = asyncio.new_event_loop()
         logger.warning("BackgroundToolManager: event loop set")
 
@@ -322,6 +304,13 @@ class BackgroundToolManager(BaseModel):
         asyncio.create_task(_cleanup(), name="bg-tool-cleanup")
         asyncio.create_task(_listener(), name="bg-tool-listener-callback")
 
+        logger.info(
+            "BackgroundToolManager started. "
+            "Max tool execution duration: %s seconds (tools running longer will be auto-cancelled). "
+            "Max tool memory retention: %s seconds (completed/failed/cancelled tools older than this are purged).",
+            self._max_tool_duration_seconds, self._max_tool_memory_seconds,
+        )
+
     async def timeout_tools(self) -> int:
         """Cancel tools that have been running too long.
 
@@ -376,11 +365,11 @@ class BackgroundToolManager(BaseModel):
         """Get all currently running tools."""
         return [t for t in self._tools.values() if t.status == ToolState.RUNNING]
 
-    def get_all_tools(self, limit: int = -1) -> list[BackgroundTool]:
+    def get_all_tools(self, limit: Optional[int] = None) -> list[BackgroundTool]:
         """Get recent tools (most recent first).
 
         Args:
-            limit: Maximum number of tools to return
+            limit: Maximum number of tools to return (None means all)
 
         Returns:
             List of tools sorted by start time (most recent first)
@@ -391,4 +380,6 @@ class BackgroundToolManager(BaseModel):
             key=lambda t: t.started_at,
             reverse=True,
         )
-        return sorted_tools[:limit]
+        if limit is not None:
+            return sorted_tools[:limit]
+        return sorted_tools

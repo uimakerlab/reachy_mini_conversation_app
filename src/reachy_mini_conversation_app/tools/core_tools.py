@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from reachy_mini import ReachyMini
 # Import config to ensure .env is loaded before reading REACHY_MINI_CUSTOM_PROFILE
 from reachy_mini_conversation_app.config import config  # noqa: F401
-from reachy_mini_conversation_app.tools.background_tool_manager import SystemTool, BackgroundToolManager
+from reachy_mini_conversation_app.tools.tool_constants import SystemTool
 
 
 logger = logging.getLogger(__name__)
@@ -212,7 +212,7 @@ def _safe_load_obj(args_json: str) -> Dict[str, Any]:
         return {}
 
 
-async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies, tool_manager: BackgroundToolManager | None = None) -> Dict[str, Any]:
+async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
     """Dispatch a tool call by name with JSON args and dependencies."""
     tool = ALL_TOOLS.get(tool_name)
 
@@ -220,6 +220,7 @@ async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependenc
         return {"error": f"unknown tool: {tool_name}"}
 
     args = _safe_load_obj(args_json)
+    tool_manager = kwargs.get("tool_manager")
     if tool_manager is not None:
         args["tool_manager"] = tool_manager
     try:
