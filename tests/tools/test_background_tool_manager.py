@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from reachy_mini_conversation_app.tools.tool_constants import ToolState
