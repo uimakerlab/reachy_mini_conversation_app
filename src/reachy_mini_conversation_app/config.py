@@ -41,13 +41,20 @@ class Config:
     # Required
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # The key is downloaded in console.py if needed
 
+    # Handler selection
+    HANDLER_TYPE = os.getenv("HANDLER_TYPE", "openai")  # "openai" or "speech_to_speech"
+
+    # Speech-to-Speech configuration
+    SPEECH_TO_SPEECH_SERVER_URL = os.getenv("SPEECH_TO_SPEECH_SERVER_URL", "ws://localhost:8765")
+
     # Optional
     MODEL_NAME = os.getenv("MODEL_NAME", "gpt-realtime")
     HF_HOME = os.getenv("HF_HOME", "./cache")
     LOCAL_VISION_MODEL = os.getenv("LOCAL_VISION_MODEL", "HuggingFaceTB/SmolVLM2-2.2B-Instruct")
     HF_TOKEN = os.getenv("HF_TOKEN")  # Optional, falls back to hf auth login if not set
 
-    logger.debug(f"Model: {MODEL_NAME}, HF_HOME: {HF_HOME}, Vision Model: {LOCAL_VISION_MODEL}")
+    logger.debug(f"Handler: {HANDLER_TYPE}, Model: {MODEL_NAME}, HF_HOME: {HF_HOME}, Vision Model: {LOCAL_VISION_MODEL}")
+    logger.debug(f"Speech-to-Speech Server: {SPEECH_TO_SPEECH_SERVER_URL}")
 
     REACHY_MINI_CUSTOM_PROFILE = LOCKED_PROFILE or os.getenv("REACHY_MINI_CUSTOM_PROFILE")
     logger.debug(f"Custom Profile: {REACHY_MINI_CUSTOM_PROFILE}")

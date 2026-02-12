@@ -46,6 +46,8 @@ def run(
     from reachy_mini_conversation_app.moves import MovementManager
     from reachy_mini_conversation_app.console import LocalStream
     from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler
+    from reachy_mini_conversation_app.speech_to_speech_handler import SpeechToSpeechHandler
+    from reachy_mini_conversation_app.config import config
     from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
     from reachy_mini_conversation_app.audio.head_wobbler import HeadWobbler
 
@@ -126,7 +128,14 @@ def run(
     )
     logger.debug(f"Chatbot avatar images: {chatbot.avatar_images}")
 
-    handler = OpenaiRealtimeHandler(deps, gradio_mode=args.gradio, instance_path=instance_path)
+    # Select handler based on configuration
+    handler_type = config.HANDLER_TYPE.lower()
+    if handler_type == "speech_to_speech":
+        logger.info("Using Speech-to-Speech handler")
+        handler = SpeechToSpeechHandler(deps, gradio_mode=args.gradio, instance_path=instance_path)
+    else:
+        logger.info("Using OpenAI handler")
+        handler = OpenaiRealtimeHandler(deps, gradio_mode=args.gradio, instance_path=instance_path)
 
     stream_manager: gr.Blocks | LocalStream | None = None
 
