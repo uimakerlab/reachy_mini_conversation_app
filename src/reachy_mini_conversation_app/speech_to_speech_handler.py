@@ -161,9 +161,22 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
         if audio_24k.ndim == 2:
             audio_24k = audio_24k[0]  # Take first channel for mono
 
+        # Ensure we have audio data
+        if len(audio_24k) == 0:
+            return
+
         # Resample from 24kHz to 16kHz for speech-to-speech
         num_samples_16k = int(len(audio_24k) * SPEECH_TO_SPEECH_SAMPLE_RATE / FASTRTC_SAMPLE_RATE)
+
+        # Skip very small chunks that would result in invalid tensors
+        if num_samples_16k < 1:
+            return
+
         audio_16k = resample(audio_24k, num_samples_16k).astype(np.int16)
+
+        # Ensure output is 1-dimensional array
+        if audio_16k.ndim == 0:
+            audio_16k = np.array([audio_16k])
 
         # Send as raw PCM bytes
         try:
