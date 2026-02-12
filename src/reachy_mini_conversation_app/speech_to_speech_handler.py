@@ -52,6 +52,10 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
         self.receive_task: Optional[asyncio.Task] = None
         self._shutdown_requested: bool = False
 
+        # Audio buffering for VAD (requires 512 samples at 16kHz)
+        self.audio_buffer = np.array([], dtype=np.int16)
+        self.vad_chunk_size = 512  # VAD expects exactly 512 samples at 16kHz
+
     def copy(self) -> "SpeechToSpeechHandler":
         """Create a copy of the handler."""
         return SpeechToSpeechHandler(self.deps, self.gradio_mode, self.instance_path)
@@ -82,11 +86,14 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
 
     async def _receive_loop(self) -> None:
         """Background task to receive audio and text messages from server."""
+        logger.info("Starting receive loop")
         try:
             async for message in self.websocket:
+                logger.debug(f"Received message: type={type(message)}, size={len(message) if isinstance(message, (bytes, str)) else 0}")
                 if isinstance(message, bytes):
                     # Binary message: audio data (16kHz PCM int16)
                     audio_16k = np.frombuffer(message, dtype=np.int16)
+                    logger.debug(f"Received audio: {len(audio_16k)} samples @ 16kHz")
 
                     # Resample from 16kHz to 24kHz for FastRTC
                     num_samples_24k = int(len(audio_16k) * FASTRTC_SAMPLE_RATE / SPEECH_TO_SPEECH_SAMPLE_RATE)
@@ -100,18 +107,22 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
 
                 elif isinstance(message, str):
                     # Text message: JSON with transcripts and tool calls
+                    logger.debug(f"Received text message: {message[:200]}")
                     try:
                         data = json.loads(message)
+                        logger.debug(f"Parsed JSON: type={data.get('type')}, keys={list(data.keys())}")
 
                         if data.get("type") == "assistant_text":
                             text = data.get("text", "")
                             tools = data.get("tools", [])
+                            logger.info(f"Assistant text: '{text}', tools: {[t['name'] for t in tools]}")
 
                             # Emit transcript to UI
                             if text:
                                 await self.output_queue.put(
                                     AdditionalOutputs({"role": "assistant", "content": text})
                                 )
+                                logger.debug(f"Emitted transcript to UI")
 
                             # Execute tools
                             for tool in tools:
@@ -153,36 +164,74 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
     async def receive(self, frame: Tuple[int, NDArray[np.int16]]) -> None:
         """Receive audio from FastRTC and send to speech-to-speech server."""
         if self._shutdown_requested or not self.websocket:
+            logger.debug(f"Skipping receive: shutdown={self._shutdown_requested}, websocket={self.websocket is not None}")
             return
 
-        sample_rate, audio_24k = frame
+        sample_rate, audio_data = frame
+        logger.debug(f"Received audio frame: rate={sample_rate}, shape={audio_data.shape}, samples={audio_data.shape[0] if audio_data.ndim > 0 else 0}")
 
         # Extract audio data (remove channel dimension if present)
-        if audio_24k.ndim == 2:
-            audio_24k = audio_24k[0]  # Take first channel for mono
+        if audio_data.ndim == 2:
+            # Shape is (frames, channels) - extract first channel
+            audio_data = audio_data[:, 0]  # Take all frames from first channel
+            logger.debug(f"Extracted mono channel: shape={audio_data.shape}")
+        elif audio_data.ndim == 1:
+            # Already mono
+            pass
+        else:
+            logger.error(f"Unexpected audio shape: {audio_data.shape}")
+            return
 
         # Ensure we have audio data
-        if len(audio_24k) == 0:
+        if len(audio_data) == 0:
+            logger.debug("Skipping empty audio chunk")
             return
 
-        # Resample from 24kHz to 16kHz for speech-to-speech
-        num_samples_16k = int(len(audio_24k) * SPEECH_TO_SPEECH_SAMPLE_RATE / FASTRTC_SAMPLE_RATE)
+        # Convert float audio to int16 if needed
+        if audio_data.dtype == np.float32 or audio_data.dtype == np.float64:
+            # Audio is in float format (-1.0 to 1.0), convert to int16 (-32768 to 32767)
+            audio_data = (audio_data * 32767).astype(np.int16)
 
-        # Skip very small chunks that would result in invalid tensors
-        if num_samples_16k < 1:
-            return
+        # Check if resampling is needed
+        if sample_rate == SPEECH_TO_SPEECH_SAMPLE_RATE:
+            # Already at 16kHz, no resampling needed
+            audio_16k = audio_data.astype(np.int16)
+            logger.debug(f"Audio already at 16kHz: {len(audio_16k)} samples")
+        else:
+            # Resample to 16kHz for speech-to-speech
+            num_samples_16k = int(len(audio_data) * SPEECH_TO_SPEECH_SAMPLE_RATE / sample_rate)
 
-        audio_16k = resample(audio_24k, num_samples_16k).astype(np.int16)
+            # Skip very small chunks that would result in invalid tensors
+            if num_samples_16k < 1:
+                logger.debug(f"Skipping chunk too small for resampling: {num_samples_16k} samples")
+                return
+
+            audio_16k = resample(audio_data, num_samples_16k).astype(np.int16)
+            logger.debug(f"Resampled audio: {len(audio_data)} samples @ {sample_rate}Hz -> {len(audio_16k)} samples @ 16kHz")
 
         # Ensure output is 1-dimensional array
         if audio_16k.ndim == 0:
+            logger.warning("Converting 0-d tensor to 1-d array")
             audio_16k = np.array([audio_16k])
 
-        # Send as raw PCM bytes
-        try:
-            await self.websocket.send(audio_16k.tobytes())
-        except Exception as e:
-            logger.error(f"Failed to send audio to server: {e}")
+        # Buffer audio and send in multiples of 512 samples (VAD requirement)
+        self.audio_buffer = np.concatenate([self.audio_buffer, audio_16k])
+
+        # Send multiple complete 512-sample chunks together to reduce WebSocket overhead
+        num_complete_chunks = len(self.audio_buffer) // self.vad_chunk_size
+
+        if num_complete_chunks > 0:
+            samples_to_send = num_complete_chunks * self.vad_chunk_size
+            audio_to_send = self.audio_buffer[:samples_to_send]
+            self.audio_buffer = self.audio_buffer[samples_to_send:]
+
+            try:
+                await self.websocket.send(audio_to_send.tobytes())
+                logger.debug(f"Sent {num_complete_chunks} chunks ({len(audio_to_send)} samples, {len(audio_to_send.tobytes())} bytes) to server, {len(self.audio_buffer)} samples buffered")
+            except Exception as e:
+                logger.error(f"Failed to send audio to server: {e}")
+        else:
+            logger.debug(f"Buffering audio: {len(self.audio_buffer)} samples (need {self.vad_chunk_size} to send)")
 
     async def emit(self) -> Tuple[int, NDArray[np.int16]] | AdditionalOutputs:
         """Emit audio or additional outputs to FastRTC."""
