@@ -100,13 +100,20 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
                     num_samples_24k = int(len(audio_16k) * FASTRTC_SAMPLE_RATE / SPEECH_TO_SPEECH_SAMPLE_RATE)
                     audio_24k = resample(audio_16k, num_samples_24k).astype(np.int16)
 
+                    # Feed audio to head wobbler (expects base64-encoded string at 24kHz)
+                    if self.deps.head_wobbler is not None:
+                        import base64
+                        audio_24k_flat = audio_24k.flatten()
+                        audio_b64 = base64.b64encode(audio_24k_flat.tobytes()).decode('utf-8')
+                        self.deps.head_wobbler.feed(audio_b64)
+
                     # Add channel dimension for FastRTC (mono -> 1xN)
                     audio_24k = audio_24k.reshape(1, -1)
 
                     # Queue audio for playback
-                    logger.info(f">>> Queueing audio: {len(audio_24k[0])} samples")
+                    logger.debug(f"Queueing audio: {len(audio_24k[0])} samples")
                     await self.output_queue.put((FASTRTC_SAMPLE_RATE, audio_24k))
-                    logger.info(f">>> Audio queued successfully")
+                    logger.debug(f"Audio queued successfully")
 
                 elif isinstance(message, str):
                     # Text message: JSON with transcripts and tool calls
@@ -117,15 +124,17 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
 
                         if data.get("type") == "speech_started":
                             # User started speaking - stop antenna movements for visual feedback
+                            logger.info("⚫ speech_started received - stopping antennas")
                             if self.deps.head_wobbler is not None:
                                 self.deps.head_wobbler.reset()
                             self.deps.movement_manager.set_listening(True)
-                            logger.debug("User speech started - antennas stopped")
+                            logger.info("⚫ Antennas stopped (listening=True)")
 
                         elif data.get("type") == "speech_stopped":
                             # User stopped speaking - resume antenna movements
+                            logger.info("🟢 speech_stopped received - resuming antennas")
                             self.deps.movement_manager.set_listening(False)
-                            logger.debug("User speech stopped - antennas resumed")
+                            logger.info("🟢 Called set_listening(False) to resume antennas")
 
                         elif data.get("type") == "assistant_text":
                             text = data.get("text", "")
@@ -244,23 +253,25 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
                 await self.websocket.send(audio_to_send.tobytes())
                 logger.debug(f"Sent {num_complete_chunks} chunks ({len(audio_to_send)} samples, {len(audio_to_send.tobytes())} bytes) to server, {len(self.audio_buffer)} samples buffered")
             except Exception as e:
-                logger.error(f"Failed to send audio to server: {e}")
+                # Suppress normal WebSocket close messages (1000 = OK)
+                error_msg = str(e)
+                if "1000 (OK)" not in error_msg:
+                    logger.error(f"Failed to send audio to server: {e}")
+                else:
+                    logger.debug(f"WebSocket closed normally during send: {e}")
         else:
             logger.debug(f"Buffering audio: {len(self.audio_buffer)} samples (need {self.vad_chunk_size} to send)")
 
     async def emit(self) -> Tuple[int, NDArray[np.int16]] | AdditionalOutputs:
         """Emit audio or additional outputs to FastRTC."""
-        logger.info("=== emit() called ===")
+        logger.debug("emit() called")
         try:
-            logger.info("emit() waiting on queue.get()...")
             result = await self.output_queue.get()
-            logger.info(f"emit() got result from queue!")
             if isinstance(result, tuple) and len(result) == 2:
                 sample_rate, audio = result
-                logger.info(f"Emitting audio: {audio.shape}, {len(audio[0]) if len(audio.shape) > 1 else len(audio)} samples @ {sample_rate}Hz")
+                logger.debug(f"Emitting audio: {audio.shape}, {len(audio[0]) if len(audio.shape) > 1 else len(audio)} samples @ {sample_rate}Hz")
             else:
-                logger.info(f"Emitting AdditionalOutputs")
-            logger.info("emit() returning result")
+                logger.debug(f"Emitting AdditionalOutputs")
             return result
         except Exception as e:
             logger.error(f"Error in emit(): {e}", exc_info=True)
