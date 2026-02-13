@@ -112,7 +112,21 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
                         data = json.loads(message)
                         logger.debug(f"Parsed JSON: type={data.get('type')}, keys={list(data.keys())}")
 
-                        if data.get("type") == "assistant_text":
+                        if data.get("type") == "speech_started":
+                            # User started speaking - stop antenna movements
+                            if hasattr(self, "_clear_queue") and callable(self._clear_queue):
+                                self._clear_queue()
+                            if self.deps.head_wobbler is not None:
+                                self.deps.head_wobbler.reset()
+                            self.deps.movement_manager.set_listening(True)
+                            logger.debug("User speech started - antennas stopped")
+
+                        elif data.get("type") == "speech_stopped":
+                            # User stopped speaking - resume antenna movements
+                            self.deps.movement_manager.set_listening(False)
+                            logger.debug("User speech stopped - antennas resumed")
+
+                        elif data.get("type") == "assistant_text":
                             text = data.get("text", "")
                             tools = data.get("tools", [])
                             logger.info(f"Assistant text: '{text}', tools: {[t['name'] for t in tools]}")
