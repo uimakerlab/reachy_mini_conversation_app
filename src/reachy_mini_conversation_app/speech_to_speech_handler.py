@@ -116,9 +116,7 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
                         logger.debug(f"Parsed JSON: type={data.get('type')}, keys={list(data.keys())}")
 
                         if data.get("type") == "speech_started":
-                            # User started speaking - stop antenna movements
-                            if hasattr(self, "_clear_queue") and callable(self._clear_queue):
-                                self._clear_queue()
+                            # User started speaking - stop antenna movements for visual feedback
                             if self.deps.head_wobbler is not None:
                                 self.deps.head_wobbler.reset()
                             self.deps.movement_manager.set_listening(True)
