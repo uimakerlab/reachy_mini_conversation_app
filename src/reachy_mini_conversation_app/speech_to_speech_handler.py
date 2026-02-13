@@ -22,6 +22,7 @@ from reachy_mini_conversation_app.config import config
 from reachy_mini_conversation_app.tools.core_tools import (
     ToolDependencies,
     dispatch_tool_call,
+    get_tool_specs,
 )
 
 
@@ -72,6 +73,24 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
             try:
                 self.websocket = await websockets.connect(server_url)
                 logger.info("Connected to speech-to-speech server")
+
+                # Send tool definitions to server
+                tool_specs = get_tool_specs()
+                # Convert from OpenAI format to apply_chat_template format (remove "type": "function" wrapper)
+                tools = []
+                for spec in tool_specs:
+                    if spec.get("type") == "function":
+                        tools.append({
+                            "name": spec["name"],
+                            "description": spec["description"],
+                            "parameters": spec["parameters"]
+                        })
+                    else:
+                        tools.append(spec)
+
+                tools_message = {"type": "register_tools", "tools": tools}
+                await self.websocket.send(json.dumps(tools_message))
+                logger.info(f"Sent {len(tools)} tool definitions to server")
 
                 # Start background task to receive audio and text messages
                 self.receive_task = asyncio.create_task(self._receive_loop())
