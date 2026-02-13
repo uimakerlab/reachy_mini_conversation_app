@@ -58,10 +58,12 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
 
     def copy(self) -> "SpeechToSpeechHandler":
         """Create a copy of the handler."""
-        return SpeechToSpeechHandler(self.deps, self.gradio_mode, self.instance_path)
+        # Return self to share the same output_queue between all references
+        return self
 
     async def start_up(self) -> None:
         """Connect to speech-to-speech WebSocket server."""
+        logger.info("=== SpeechToSpeechHandler start_up() called ===")
         server_url = config.SPEECH_TO_SPEECH_SERVER_URL
         logger.info(f"Connecting to speech-to-speech server at {server_url}")
 
@@ -89,7 +91,6 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
         logger.info("Starting receive loop")
         try:
             async for message in self.websocket:
-                logger.debug(f"Received message: type={type(message)}, size={len(message) if isinstance(message, (bytes, str)) else 0}")
                 if isinstance(message, bytes):
                     # Binary message: audio data (16kHz PCM int16)
                     audio_16k = np.frombuffer(message, dtype=np.int16)
@@ -103,7 +104,9 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
                     audio_24k = audio_24k.reshape(1, -1)
 
                     # Queue audio for playback
+                    logger.info(f">>> Queueing audio: {len(audio_24k[0])} samples")
                     await self.output_queue.put((FASTRTC_SAMPLE_RATE, audio_24k))
+                    logger.info(f">>> Audio queued successfully")
 
                 elif isinstance(message, str):
                     # Text message: JSON with transcripts and tool calls
@@ -249,7 +252,21 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
 
     async def emit(self) -> Tuple[int, NDArray[np.int16]] | AdditionalOutputs:
         """Emit audio or additional outputs to FastRTC."""
-        return await self.output_queue.get()
+        logger.info("=== emit() called ===")
+        try:
+            logger.info("emit() waiting on queue.get()...")
+            result = await self.output_queue.get()
+            logger.info(f"emit() got result from queue!")
+            if isinstance(result, tuple) and len(result) == 2:
+                sample_rate, audio = result
+                logger.info(f"Emitting audio: {audio.shape}, {len(audio[0]) if len(audio.shape) > 1 else len(audio)} samples @ {sample_rate}Hz")
+            else:
+                logger.info(f"Emitting AdditionalOutputs")
+            logger.info("emit() returning result")
+            return result
+        except Exception as e:
+            logger.error(f"Error in emit(): {e}", exc_info=True)
+            raise
 
     async def shutdown(self) -> None:
         """Gracefully shutdown the handler."""
