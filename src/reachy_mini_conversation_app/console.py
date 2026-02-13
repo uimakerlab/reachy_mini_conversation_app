@@ -443,7 +443,12 @@ class LocalStream:
             self._robot.media.audio.clear_player()
         elif self._robot.media.backend == MediaBackend.DEFAULT or self._robot.media.backend == MediaBackend.DEFAULT_NO_VIDEO:
             self._robot.media.audio.clear_output_buffer()
-        self.handler.output_queue = asyncio.Queue()
+        # Clear the queue without replacing it (to avoid breaking the reference in _receive_loop)
+        while not self.handler.output_queue.empty():
+            try:
+                self.handler.output_queue.get_nowait()
+            except:
+                break
 
     async def record_loop(self) -> None:
         """Read mic frames from the recorder and forward them to the handler."""
