@@ -241,12 +241,13 @@ This is useful for creating dedicated clones of the app with a fixed personality
 #### Dependencies
 To include dependencies for the cascade of models:
 ```
-uv sync --extra cascade             # For cascade pipeline (base, includes OpenAI providers)
-uv sync --extra cascade_parakeet    # Add Parakeet ASR (local, Apple Silicon)
-uv sync --extra cascade_kokoro      # Add Kokoro TTS (local, Apple Silicon)
-uv sync --extra cascade_elevenlabs  # Add ElevenLabs TTS
-uv sync --extra cascade_gemini      # Add Google Gemini LLM
-uv sync --extra cascade_all         # All cascade providers
+uv sync --extra cascade                       # For cascade pipeline (base, includes OpenAI providers)
+uv sync --extra cascade_parakeet              # Add Parakeet ASR batch/RNNT streaming (local, Apple Silicon)
+uv sync --extra cascade_parakeet_progressive  # Add Parakeet ASR progressive (recommended local ASR, Apple Silicon)
+uv sync --extra cascade_kokoro                # Add Kokoro TTS (local, Apple Silicon)
+uv sync --extra cascade_elevenlabs            # Add ElevenLabs TTS
+uv sync --extra cascade_gemini                # Add Google Gemini LLM
+uv sync --extra cascade_all                   # All cascade providers
 ```
 
 #### Running with cascade

@@ -8,6 +8,7 @@ from .base_streaming import StreamingASRProvider
 from .whisper_openai import WhisperOpenAIASR
 from .openai_realtime_asr import OpenAIRealtimeASR
 from .parakeet_mlx_streaming import ParakeetMLXStreamingASR
+from .parakeet_mlx_progressive import ParakeetMLXProgressiveASR
 
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "NemotronASR",
     "OpenAIRealtimeASR",
     "ParakeetMLXASR",
+    "ParakeetMLXProgressiveASR",
     "ParakeetMLXStreamingASR",
     "WhisperOpenAIASR",
 ]

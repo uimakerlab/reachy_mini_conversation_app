@@ -44,7 +44,8 @@ cascade/
 │   ├── base_streaming.py              # StreamingASRProvider abstract base
 │   ├── whisper_openai.py              # OpenAI Whisper implementation
 │   ├── parakeet_mlx.py                # Parakeet MLX batch implementation
-│   ├── parakeet_mlx_streaming.py      # Parakeet MLX streaming implementation
+│   ├── parakeet_mlx_streaming.py      # Parakeet MLX streaming implementation (RNNT, experimental)
+│   ├── parakeet_mlx_progressive.py    # Parakeet MLX progressive (sentence-aware sliding window)
 │   ├── deepgram.py                    # Deepgram streaming implementation
 │   ├── nemotron.py                    # Nemotron ASR implementation
 │   └── openai_realtime_asr.py         # OpenAI Realtime streaming implementation
@@ -206,8 +207,9 @@ class StreamingASRProvider(ASRProvider):
 | Provider | Type | Description |
 |----------|------|-------------|
 | `WhisperOpenAIASR` | Batch | OpenAI Whisper API |
-| `ParakeetMLXASR` | Batch | Local Parakeet via MLX |
-| `ParakeetMLXStreamingASR` | Streaming | Local streaming via MLX |
+| `ParakeetMLXASR` | Batch | Local Parakeet via MLX (parakeet-mlx) |
+| `ParakeetMLXStreamingASR` | Streaming | Local RNNT streaming via MLX (parakeet-mlx, experimental) |
+| `ParakeetMLXProgressiveASR` | Streaming | Local progressive with sentence-aware sliding window (mlx-audio) |
 | `DeepgramASR` | Streaming | Deepgram Nova via WebSocket |
 | `NemotronASR` | Streaming | NVIDIA Nemotron ASR |
 | `OpenAIRealtimeASR` | Streaming | OpenAI Realtime API via WebSocket |
