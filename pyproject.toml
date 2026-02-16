@@ -69,7 +69,7 @@ cascade_kokoro = ["kokoro>=0.9.4"]
 cascade_elevenlabs = ["elevenlabs>=1.0.0"]
 cascade_gemini = ["google-genai>=0.6.0"]
 cascade_deepgram = ["deepgram-sdk>=3.0.0,<4.0.0"]
-cascade_openai_realtime = ["websockets>=12.0"]
+cascade_gliner = ["gliner>=0.2.0"]
 cascade_all = [
   "reachy_mini_conversation_app[cascade]",
   "reachy_mini_conversation_app[cascade_silero_vad]",

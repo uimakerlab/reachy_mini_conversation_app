@@ -1,0 +1,10 @@
+# GLiNER model (optional, defaults to gliner_small-v2.1)
+gliner_model: "urchade/gliner_small-v2.1"
+
+# Keyword-based reactions
+keywords:
+  music: "excited_about_music"
+
+# Entity-based reactions (using GLiNER NER)
+entities:
+  food: "react_to_food_entity"

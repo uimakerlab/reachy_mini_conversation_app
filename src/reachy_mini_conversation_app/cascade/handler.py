@@ -19,7 +19,10 @@ from reachy_mini_conversation_app.tools.core_tools import (
     get_tool_specs,
     dispatch_tool_call,
 )
-
+from reachy_mini_conversation_app.cascade.transcript_analysis import (
+    NoOpTranscriptManager,
+    TranscriptAnalysisManager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +87,11 @@ class CascadeHandler:
 
         # Side-channel storage for see_image frames (JPEG bytes, indexed)
         self._captured_frames: list[bytes] = []
+
+        # Transcript analysis (NoOp if no reactions configured)
+        self.transcript_manager: TranscriptAnalysisManager | NoOpTranscriptManager = (
+            self._init_transcript_analysis()
+        )
 
         # Cost tracking
         self.cumulative_cost: float = 0.0
@@ -175,6 +183,78 @@ class CascadeHandler:
         """
         self._playback_callback = callback
 
+    def _init_transcript_analysis(self) -> TranscriptAnalysisManager | NoOpTranscriptManager:
+        """Initialize transcript analysis from profile reactions.
+
+        Returns:
+            TranscriptAnalysisManager if profile has reactions, NoOpTranscriptManager otherwise
+
+        """
+        from reachy_mini_conversation_app.cascade.transcript_analysis import (
+            KeywordAnalyzer,
+            TranscriptAnalyzer,
+            get_profile_reactions,
+        )
+
+        reactions = get_profile_reactions()
+        if not reactions:
+            logger.info("No profile reactions configured, transcript analysis disabled")
+            return NoOpTranscriptManager()
+
+        analyzers: List[TranscriptAnalyzer] = []
+
+        # Add keyword analyzer if keywords defined
+        if reactions.get("keywords"):
+            analyzers.append(KeywordAnalyzer(reactions["keywords"]))
+            logger.info(f"  Keyword analyzer: {len(reactions['keywords'])} keywords")
+
+        # Add entity analyzer if entities defined (requires optional gliner extra)
+        if reactions.get("entities"):
+            try:
+                from reachy_mini_conversation_app.cascade.transcript_analysis import EntityAnalyzer
+
+                # Get GLiNER model (configurable per demo)
+                gliner_model = reactions.get("gliner_model", "urchade/gliner_small-v2.1")
+
+                analyzers.append(EntityAnalyzer(reactions["entities"], model_name=gliner_model))
+                logger.info(f"  Entity analyzer: {len(reactions['entities'])} entity types (model: {gliner_model})")
+            except ImportError:
+                logger.warning(
+                    "GLiNER not installed, skipping entity analyzer. "
+                    "Install with: pip install 'reachy_mini_conversation_app[cascade_gliner]'"
+                )
+
+        if not analyzers:
+            logger.info("No analyzers configured (keywords and entities both empty)")
+            return NoOpTranscriptManager()
+
+        return TranscriptAnalysisManager(analyzers=analyzers, deps=self.deps)
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Transcript Analysis Helpers (fire-and-forget, never block pipeline)
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _get_stable_text(self, partial: str) -> str:
+        """Get stable text for analysis (if ASR supports it)."""
+        if hasattr(self.asr, "get_stable_text"):
+            stable = self.asr.get_stable_text()
+            if stable and stable != partial:
+                logger.debug(f"📌 Using stable text for analysis: '{stable[:60]}...'")
+                return stable
+        return partial
+
+    async def _on_transcript_partial(self, text: str) -> None:
+        """Notify partial transcript for real-time reactions (streaming only)."""
+        await self.transcript_manager.analyze_partial(text)
+
+    def _on_transcript_final(self, text: str) -> None:
+        """Notify final transcript (fire-and-forget, parallel with LLM)."""
+        asyncio.create_task(self.transcript_manager.analyze_final(text))
+
+    def _on_turn_complete(self) -> None:
+        """Reset transcript analysis between conversation turns."""
+        self.transcript_manager.reset()
+
     def _aggregate_cost(self, provider: Union[ASRProvider, LLMProvider, TTSProvider], provider_name: str) -> None:
         """Aggregate cost from a provider if it tracks costs."""
         if hasattr(provider, "last_cost") and provider.last_cost > 0:
@@ -227,13 +307,19 @@ class CascadeHandler:
                 if self.deps.movement_manager:
                     self.deps.movement_manager.set_listening(False)
 
+                # Analyze final transcript (parallel with LLM, fire-and-forget)
+                self._on_transcript_final(transcript)
+
                 # 2. LLM: Text → Response + Tool Calls
                 logger.info("Generating LLM response...")
                 tracker.mark("llm_start")
                 await self._process_llm_response()
+                tracker.mark("llm_complete")
 
-                # Note: summary will be printed in gradio_ui/console after TTS completes
-                # llm_complete is already marked inside the LLM provider
+                # Reset transcript analysis for next conversation
+                self._on_turn_complete()
+
+                # Note: summary will be printed in gradio_ui after TTS completes
 
                 return transcript
 
@@ -279,6 +365,19 @@ class CascadeHandler:
                 logger.info(f"🎤 Partial: {partial}")
                 self._last_partial_transcript = partial
 
+            # Analyze partial transcript (debounced, fire-and-forget)
+            if partial:
+                # Only log if transcript changed (reduce spam)
+                if partial != self._last_partial_transcript:
+                    logger.debug(f"🎤 Got partial transcript: '{partial[:60]}...'")
+                    self._last_partial_transcript = partial
+
+                # Use stable text for entity extraction to avoid noisy draft tokens
+                stable_text = self._get_stable_text(partial)
+                await self._on_transcript_partial(stable_text)
+
+            if partial and partial != self._last_partial_transcript:
+                logger.debug(f"Partial transcript: {partial}")
             return partial
         return None
 
@@ -322,11 +421,17 @@ class CascadeHandler:
                 if self.deps.movement_manager:
                     self.deps.movement_manager.set_listening(False)
 
+                # Analyze final transcript (parallel with LLM, fire-and-forget)
+                self._on_transcript_final(transcript)
+
                 # 2. LLM: Text → Response + Tool Calls
                 logger.info("Generating LLM response...")
                 tracker.mark("llm_start")
                 await self._process_llm_response()
                 # llm_complete is already marked inside the LLM provider
+
+                # Reset transcript analysis for next conversation
+                self._on_turn_complete()
 
                 # Reset partial transcript tracking
                 self._last_partial_transcript = ""
