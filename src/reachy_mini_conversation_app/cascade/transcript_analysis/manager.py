@@ -32,8 +32,12 @@ class TranscriptAnalysisManager:
         self._pending_tasks: List[asyncio.Task[Any]] = []
         self._last_analysis_time = 0.0
         self.triggered_reactions: set[str] = set()
+        # For repeatable entity reactions: track (reaction_name, entity_text) already fired
+        self._triggered_entity_keys: set[tuple[str, str]] = set()
 
         # Partition reactions by trigger type and build analyzers
+        # _all_reaction_groups maps real name → list of synthetic group names
+        self._all_reaction_groups: dict[str, list[str]] = {}
         self.keyword_analyzer = self._build_keyword_analyzer(reactions)
         self.entity_analyzer = self._build_entity_analyzer(reactions)
 
@@ -51,8 +55,20 @@ class TranscriptAnalysisManager:
 
         reaction_words: dict[str, list[str]] = {}
         for r in reactions:
+            # Simple word triggers
             if r.trigger.words:
                 reaction_words[r.name] = r.trigger.words
+
+            # Boolean `all` triggers: register each group as a synthetic entry
+            if r.trigger.all:
+                group_names: list[str] = []
+                for i, sub_trigger in enumerate(r.trigger.all):
+                    if sub_trigger.words:
+                        synthetic_name = f"{r.name}__all_{i}"
+                        reaction_words[synthetic_name] = sub_trigger.words
+                        group_names.append(synthetic_name)
+                if group_names:
+                    self._all_reaction_groups[r.name] = group_names
 
         if not reaction_words:
             return None
@@ -128,13 +144,32 @@ class TranscriptAnalysisManager:
                 else:
                     entity_matches = results[idx]
 
+            # Evaluate boolean `all` triggers: merge synthetic groups into real reactions
+            for real_name, group_names in self._all_reaction_groups.items():
+                real_reaction = self.reactions[real_name]
+                if not real_reaction.repeatable and real_name in self.triggered_reactions:
+                    # Already fired — just strip synthetic entries
+                    for g in group_names:
+                        keyword_matches.pop(g, None)
+                    continue
+                if all(g in keyword_matches for g in group_names):
+                    merged_words: list[str] = []
+                    for g in group_names:
+                        merged_words.extend(keyword_matches.pop(g))
+                    keyword_matches[real_name] = merged_words
+                else:
+                    # Not all groups matched — strip synthetic entries
+                    for g in group_names:
+                        keyword_matches.pop(g, None)
+
             # Dispatch keyword-triggered reactions
             for reaction_name, matched_words in keyword_matches.items():
                 if reaction_name in self.triggered_reactions:
                     continue
-                self.triggered_reactions.add(reaction_name)
 
                 reaction = self.reactions[reaction_name]
+                if not reaction.repeatable:
+                    self.triggered_reactions.add(reaction_name)
                 match = TriggerMatch(words=matched_words)
                 logger.info(f"Reaction triggered: {reaction_name} (words: {matched_words})")
                 asyncio.create_task(self._execute(reaction, match))
@@ -144,9 +179,16 @@ class TranscriptAnalysisManager:
                 for reaction_name in self.entity_reaction_map.get(em.label, []):
                     if reaction_name in self.triggered_reactions:
                         continue
-                    self.triggered_reactions.add(reaction_name)
 
                     reaction = self.reactions[reaction_name]
+                    if reaction.repeatable:
+                        # Deduplicate by (reaction, entity_text) so each unique entity fires once
+                        entity_key = (reaction_name, em.text.lower())
+                        if entity_key in self._triggered_entity_keys:
+                            continue
+                        self._triggered_entity_keys.add(entity_key)
+                    else:
+                        self.triggered_reactions.add(reaction_name)
                     match = TriggerMatch(entities=[em])
                     logger.info(f"Reaction triggered: {reaction_name} (entity: {em.text} [{em.label}])")
                     asyncio.create_task(self._execute(reaction, match))
@@ -165,6 +207,7 @@ class TranscriptAnalysisManager:
         """Reset deduplication state for next conversation turn."""
         logger.debug(f"Resetting manager ({len(self.triggered_reactions)} reactions triggered)")
         self.triggered_reactions.clear()
+        self._triggered_entity_keys.clear()
         self._pending_tasks.clear()
         self._last_analysis_time = 0.0
 

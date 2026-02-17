@@ -55,10 +55,7 @@ def get_profile_reactions() -> list[ReactionConfig] | None:
                 continue
 
             trigger_raw = entry.get("trigger", {})
-            trigger = TriggerConfig(
-                words=trigger_raw.get("words", []),
-                entities=trigger_raw.get("entities", []),
-            )
+            trigger = _parse_trigger(trigger_raw)
 
             params = entry.get("params", {})
 
@@ -67,6 +64,7 @@ def get_profile_reactions() -> list[ReactionConfig] | None:
                 callback=callback,
                 trigger=trigger,
                 params=params,
+                repeatable=entry.get("repeatable", False),
             ))
 
         logger.info(f"Loaded {len(reactions)} reactions from profile '{profile}'")
@@ -75,6 +73,19 @@ def get_profile_reactions() -> list[ReactionConfig] | None:
     except Exception as e:
         logger.warning(f"Failed to load reactions from profile '{profile}': {e}")
         return None
+
+
+def _parse_trigger(raw: dict[str, Any]) -> TriggerConfig:
+    """Parse a trigger dict from YAML into a TriggerConfig."""
+    all_groups = [
+        TriggerConfig(words=group.get("words", []), entities=group.get("entities", []))
+        for group in raw.get("all", [])
+    ]
+    return TriggerConfig(
+        words=raw.get("words", []),
+        entities=raw.get("entities", []),
+        all=all_groups,
+    )
 
 
 def _import_callback(profile: str, callback_name: str) -> Optional[Callable[..., Any]]:

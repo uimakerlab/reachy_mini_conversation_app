@@ -25,10 +25,14 @@ class TriggerMatch:
 
 @dataclass
 class TriggerConfig:
-    """Trigger definition from YAML: which words/entities activate this reaction."""
+    """Trigger definition from YAML: which words/entities activate this reaction.
+
+    Use `all` for boolean AND: every sub-trigger must match for the reaction to fire.
+    """
 
     words: list[str] = field(default_factory=list)
     entities: list[str] = field(default_factory=list)
+    all: list[TriggerConfig] = field(default_factory=list)
 
 
 @dataclass
@@ -39,6 +43,7 @@ class ReactionConfig:
     callback: Callable[..., Awaitable[None]]
     trigger: TriggerConfig
     params: dict[str, Any] = field(default_factory=dict)
+    repeatable: bool = False
 
 
 class TranscriptAnalyzer(ABC):
