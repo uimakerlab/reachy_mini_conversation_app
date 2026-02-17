@@ -1,15 +1,6 @@
-"""Transcript analysis for real-time reaction to user speech.
+"""Transcript analysis for real-time reaction to user speech."""
 
-This module provides tools for analyzing transcripts (both partial and final)
-and triggering demo-configured reactions based on keywords and named entities.
-
-Example usage in a demo:
-
-TODO : UPDATE THIS
-
-"""
-
-from .base import Reaction, TranscriptAnalyzer
+from .base import EntityMatch, TriggerMatch, TriggerConfig, ReactionConfig, TranscriptAnalyzer
 from .loader import get_profile_reactions
 from .manager import NoOpTranscriptManager, TranscriptAnalysisManager
 from .keyword_analyzer import KeywordAnalyzer
@@ -20,7 +11,10 @@ try:
     from .entity_analyzer import EntityAnalyzer
 
     __all__ = [
-        "Reaction",
+        "EntityMatch",
+        "TriggerMatch",
+        "TriggerConfig",
+        "ReactionConfig",
         "TranscriptAnalyzer",
         "KeywordAnalyzer",
         "EntityAnalyzer",
@@ -30,7 +24,10 @@ try:
     ]
 except ImportError:
     __all__ = [
-        "Reaction",
+        "EntityMatch",
+        "TriggerMatch",
+        "TriggerConfig",
+        "ReactionConfig",
         "TranscriptAnalyzer",
         "KeywordAnalyzer",
         "TranscriptAnalysisManager",

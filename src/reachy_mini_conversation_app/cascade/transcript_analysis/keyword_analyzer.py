@@ -2,73 +2,41 @@
 
 from __future__ import annotations
 import logging
-from typing import Dict, List, Callable, Awaitable
 
-from .base import Reaction, TranscriptAnalyzer
+from .base import TranscriptAnalyzer
 
 
 logger = logging.getLogger(__name__)
 
 
 class KeywordAnalyzer(TranscriptAnalyzer):
-    """Analyzes transcripts for keyword matches.
+    """Pure keyword matcher. Returns reaction_name → matched words.
 
-    Features:
-    - Case-insensitive matching
-    - State tracking to prevent duplicate triggers as transcript grows
-    - Simple and fast
-
+    No callbacks, no deduplication — that's the manager's job.
     """
 
-    def __init__(self, keyword_callbacks: Dict[str, Callable[..., Awaitable[None]]]):
+    def __init__(self, reaction_words: dict[str, list[str]]):
         """Initialize keyword analyzer.
 
         Args:
-            keyword_callbacks: Dict mapping keywords (case-insensitive) to async callbacks
-                              Callback signature: async def(deps: ToolDependencies) -> None
+            reaction_words: Dict mapping reaction_name to list of trigger words
 
         """
-        self.keyword_callbacks = keyword_callbacks
-        self.triggered_keywords: set[str] = set()  # Track what already triggered
+        # Pre-lowercase for fast matching
+        self.reaction_words: dict[str, list[str]] = {
+            name: [w.lower() for w in words] for name, words in reaction_words.items()
+        }
+        total = sum(len(ws) for ws in self.reaction_words.values())
+        logger.info(f"KeywordAnalyzer initialized: {total} words across {len(self.reaction_words)} reactions")
 
-        logger.info(f"KeywordAnalyzer initialized with {len(keyword_callbacks)} keywords")
-
-    async def analyze(self, text: str, is_final: bool) -> List[Reaction]:
-        """Analyze text for keyword matches.
-
-        Args:
-            text: Transcript text to analyze
-            is_final: Whether this is the final transcript
-
-        Returns:
-            List of triggered Reaction objects
-
-        """
-        reactions = []
+    async def analyze(self, text: str, is_final: bool) -> dict[str, list[str]]:
+        """Return {reaction_name: [matched_words]} for words found in text."""
         text_lower = text.lower()
+        matches: dict[str, list[str]] = {}
 
-        for keyword, callback in self.keyword_callbacks.items():
-            keyword_lower = keyword.lower()
+        for reaction_name, words in self.reaction_words.items():
+            matched = [w for w in words if w in text_lower]
+            if matched:
+                matches[reaction_name] = matched
 
-            # Check if keyword is in text and hasn't triggered yet
-            if keyword_lower in text_lower and keyword_lower not in self.triggered_keywords:
-                logger.debug(f"Keyword match: '{keyword}' in '{text[:50]}...'")
-
-                reactions.append(
-                    Reaction(
-                        trigger=keyword,
-                        trigger_type="keyword",
-                        callback=callback,
-                        metadata={},
-                    )
-                )
-
-                # Mark as triggered to prevent duplicates
-                self.triggered_keywords.add(keyword_lower)
-
-        return reactions
-
-    def reset(self) -> None:
-        """Reset triggered keywords for next conversation."""
-        logger.debug(f"Resetting KeywordAnalyzer ({len(self.triggered_keywords)} keywords triggered)")
-        self.triggered_keywords.clear()
+        return matches

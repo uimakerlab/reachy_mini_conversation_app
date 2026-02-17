@@ -71,6 +71,10 @@ class CascadeConfig:
         self.tts_providers = self._cascade["tts"]["providers"]
         self.tts_trim_silence = self._cascade["tts"]["trim_silence"]
 
+        # Transcript analysis config (optional section)
+        ta = self._cascade.get("transcript_analysis", {})
+        self.gliner_model: str = ta.get("gliner_model", "urchade/gliner_small-v2.1")
+
         self._log_config()
 
     def get_asr_provider_info(self, name: str | None = None) -> Dict[str, Any]:

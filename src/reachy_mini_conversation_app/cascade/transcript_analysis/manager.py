@@ -3,11 +3,10 @@
 from __future__ import annotations
 import time
 import asyncio
-import inspect
 import logging
-from typing import Any, List, cast
+from typing import Any, List
 
-from .base import Reaction, TranscriptAnalyzer
+from .base import EntityMatch, TriggerMatch, ReactionConfig
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
 
 
@@ -15,148 +14,157 @@ logger = logging.getLogger(__name__)
 
 
 class TranscriptAnalysisManager:
-    """Orchestrates transcript analyzers and executes reactions.
+    """Orchestrates transcript analyzers and dispatches reaction callbacks.
 
-    Features:
-    - Runs multiple analyzers in parallel
-    - Debounces partial transcript analysis (500ms minimum interval)
-    - Fire-and-forget execution (never blocks main pipeline)
-    - Handles both keyword and entity callback signatures
+    Owns:
+    - Analyzer creation (partitions ReactionConfigs by trigger type)
+    - Per-reaction deduplication (each reaction fires at most once per turn)
+    - Callback dispatch with TriggerMatch + params
 
     """
 
-    DEBOUNCE_INTERVAL = 0.4  # minimum between partial analyses
+    DEBOUNCE_INTERVAL = 0.4  # minimum seconds between partial analyses
 
-    def __init__(self, analyzers: List[TranscriptAnalyzer], deps: ToolDependencies):
-        """Initialize transcript analysis manager.
-
-        Args:
-            analyzers: List of TranscriptAnalyzer instances to run
-            deps: Tool dependencies for executing reactions
-
-        """
-        self.analyzers = analyzers
+    def __init__(self, reactions: list[ReactionConfig], deps: ToolDependencies):
+        """Initialize with reaction configs and tool dependencies."""
         self.deps = deps
+        self.reactions = {r.name: r for r in reactions}
         self._pending_tasks: List[asyncio.Task[Any]] = []
         self._last_analysis_time = 0.0
+        self.triggered_reactions: set[str] = set()
 
-        logger.info(f"TranscriptAnalysisManager initialized with {len(analyzers)} analyzers")
+        # Partition reactions by trigger type and build analyzers
+        self.keyword_analyzer = self._build_keyword_analyzer(reactions)
+        self.entity_analyzer = self._build_entity_analyzer(reactions)
+
+        # Map entity label → reaction names for dispatch
+        self.entity_reaction_map: dict[str, list[str]] = {}
+        for r in reactions:
+            for label in r.trigger.entities:
+                self.entity_reaction_map.setdefault(label, []).append(r.name)
+
+        logger.info(f"TranscriptAnalysisManager initialized with {len(reactions)} reactions")
+
+    def _build_keyword_analyzer(self, reactions: list[ReactionConfig]) -> Any | None:
+        """Build KeywordAnalyzer from reactions with word triggers."""
+        from .keyword_analyzer import KeywordAnalyzer
+
+        reaction_words: dict[str, list[str]] = {}
+        for r in reactions:
+            if r.trigger.words:
+                reaction_words[r.name] = r.trigger.words
+
+        if not reaction_words:
+            return None
+        return KeywordAnalyzer(reaction_words)
+
+    def _build_entity_analyzer(self, reactions: list[ReactionConfig]) -> Any | None:
+        """Build EntityAnalyzer from reactions with entity triggers."""
+        all_labels: set[str] = set()
+        for r in reactions:
+            all_labels.update(r.trigger.entities)
+
+        if not all_labels:
+            return None
+
+        try:
+            from .entity_analyzer import EntityAnalyzer
+
+            return EntityAnalyzer(sorted(all_labels))
+        except ImportError:
+            logger.warning(
+                "GLiNER not installed, skipping entity analyzer. "
+                "Install with: pip install 'reachy_mini_conversation_app[cascade_gliner]'"
+            )
+            return None
 
     async def analyze_partial(self, text: str) -> None:
-        """Analyze partial transcript (streaming ASR) with debouncing.
-
-        Fire-and-forget - doesn't block caller.
-
-        Args:
-            text: Partial transcript text to analyze
-
-        """
-        # Debounce: only analyze if at least 500ms since last analysis
+        """Analyze partial transcript with debouncing. Fire-and-forget."""
         current_time = time.time()
         if current_time - self._last_analysis_time < self.DEBOUNCE_INTERVAL:
-            # logger.debug("Debouncing partial analysis (too soon)")
             return
 
         self._last_analysis_time = current_time
+        logger.info(f"Analyzing PARTIAL transcript: '{text[:100]}...' ({len(text)} chars)")
 
-        # Log what we're analyzing
-        logger.info(f"📝 Analyzing PARTIAL transcript: '{text[:100]}...' ({len(text)} chars)")
-
-        # Fire and forget
-        task = asyncio.create_task(self._analyze_and_execute(text, is_final=False))
+        task = asyncio.create_task(self._analyze_and_dispatch(text, is_final=False))
         self._pending_tasks.append(task)
 
     async def analyze_final(self, text: str) -> None:
-        """Analyze final transcript (batch ASR or end of streaming).
+        """Analyze final transcript. Blocks until analysis completes."""
+        logger.info(f"Analyzing FINAL transcript: '{text[:100]}...' ({len(text)} chars)")
+        await self._analyze_and_dispatch(text, is_final=True)
 
-        Blocks until analysis completes (but reactions are still fire-and-forget).
-
-        Args:
-            text: Final transcript text to analyze
-
-        """
-        logger.info(f"📝 Analyzing FINAL transcript: '{text[:100]}...' ({len(text)} chars)")
-        await self._analyze_and_execute(text, is_final=True)
-
-    async def _analyze_and_execute(self, text: str, is_final: bool) -> None:
-        """Run all analyzers and execute triggered reactions.
-
-        Args:
-            text: Transcript text to analyze
-            is_final: Whether this is the final transcript
-
-        """
+    async def _analyze_and_dispatch(self, text: str, is_final: bool) -> None:
+        """Run analyzers and dispatch triggered reactions."""
         try:
-            # Run all analyzers in parallel
-            results = await asyncio.gather(
-                *[analyzer.analyze(text, is_final) for analyzer in self.analyzers],
-                return_exceptions=True,
-            )
+            # Run keyword and entity analyzers in parallel
+            tasks = []
+            if self.keyword_analyzer:
+                tasks.append(self.keyword_analyzer.analyze(text, is_final))
+            if self.entity_analyzer:
+                tasks.append(self.entity_analyzer.analyze(text, is_final))
 
-            # Execute triggered reactions
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.warning(f"Analyzer error: {result}")
+            if not tasks:
+                return
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            idx = 0
+
+            # Process keyword results
+            keyword_matches: dict[str, list[str]] = {}
+            if self.keyword_analyzer:
+                if isinstance(results[idx], Exception):
+                    logger.warning(f"Keyword analyzer error: {results[idx]}")
+                else:
+                    keyword_matches = results[idx]
+                idx += 1
+
+            # Process entity results
+            entity_matches: list[EntityMatch] = []
+            if self.entity_analyzer:
+                if isinstance(results[idx], Exception):
+                    logger.warning(f"Entity analyzer error: {results[idx]}")
+                else:
+                    entity_matches = results[idx]
+
+            # Dispatch keyword-triggered reactions
+            for reaction_name, matched_words in keyword_matches.items():
+                if reaction_name in self.triggered_reactions:
                     continue
+                self.triggered_reactions.add(reaction_name)
 
-                # result is List[Reaction] at this point (not an exception)
-                reactions_list = cast(List[Reaction], result)
-                for reaction in reactions_list:
-                    logger.info(f"🎯 Reaction triggered: {reaction.trigger} ({reaction.trigger_type})")
+                reaction = self.reactions[reaction_name]
+                match = TriggerMatch(words=matched_words)
+                logger.info(f"Reaction triggered: {reaction_name} (words: {matched_words})")
+                asyncio.create_task(self._execute(reaction, match))
 
-                    # Fire and forget - don't wait for reaction to complete
-                    asyncio.create_task(self._execute_reaction(reaction))
+            # Dispatch entity-triggered reactions
+            for em in entity_matches:
+                for reaction_name in self.entity_reaction_map.get(em.label, []):
+                    if reaction_name in self.triggered_reactions:
+                        continue
+                    self.triggered_reactions.add(reaction_name)
+
+                    reaction = self.reactions[reaction_name]
+                    match = TriggerMatch(entities=[em])
+                    logger.info(f"Reaction triggered: {reaction_name} (entity: {em.text} [{em.label}])")
+                    asyncio.create_task(self._execute(reaction, match))
 
         except Exception as e:
             logger.exception(f"Error in transcript analysis: {e}")
 
-    async def _execute_reaction(self, reaction: Reaction) -> None:
-        """Execute a reaction callback with appropriate arguments.
-
-        Inspects callback signature to determine how to call it:
-        - 1 param: keyword callback (deps only)
-        - 4 params: entity callback (deps, entity_text, entity_label, confidence)
-
-        Args:
-            reaction: The Reaction to execute
-
-        """
+    async def _execute(self, reaction: ReactionConfig, match: TriggerMatch) -> None:
+        """Execute a reaction callback with deps, match, and params."""
         try:
-            # Inspect callback signature
-            sig = inspect.signature(reaction.callback)
-            params = list(sig.parameters.keys())
-
-            if len(params) == 1:
-                # Keyword callback: async def callback(deps) -> None
-                await reaction.callback(self.deps)
-
-            elif len(params) >= 4:
-                # Entity callback: async def callback(deps, entity_text, entity_label, confidence) -> None
-                await reaction.callback(
-                    self.deps,
-                    reaction.metadata["entity_text"],
-                    reaction.metadata["entity_label"],
-                    reaction.metadata["confidence"],
-                )
-
-            else:
-                logger.warning(
-                    f"Reaction callback has unexpected signature: {params}. "
-                    f"Expected 1 param (keyword) or 4+ params (entity)"
-                )
-
+            await reaction.callback(self.deps, match, **reaction.params)
         except Exception as e:
-            logger.exception(f"Error executing reaction '{reaction.trigger}': {e}")
+            logger.exception(f"Error executing reaction '{reaction.name}': {e}")
 
     def reset(self) -> None:
-        """Reset all analyzers for next conversation.
-
-        Should be called after each conversation completes.
-
-        """
-        logger.debug("Resetting transcript analysis manager")
-        for analyzer in self.analyzers:
-            analyzer.reset()
+        """Reset deduplication state for next conversation turn."""
+        logger.debug(f"Resetting manager ({len(self.triggered_reactions)} reactions triggered)")
+        self.triggered_reactions.clear()
         self._pending_tasks.clear()
         self._last_analysis_time = 0.0
 
@@ -165,10 +173,10 @@ class NoOpTranscriptManager:
     """No-op manager when transcript analysis is disabled."""
 
     async def analyze_partial(self, text: str) -> None:
-        """No-op: ignore partial transcript."""
+        """No-op."""
 
     async def analyze_final(self, text: str) -> None:
-        """No-op: ignore final transcript."""
+        """No-op."""
 
     def reset(self) -> None:
-        """No-op: nothing to reset."""
+        """No-op."""

@@ -1,18 +1,13 @@
 import logging
 
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
+from reachy_mini_conversation_app.cascade.transcript_analysis.base import TriggerMatch
 
 
 logger = logging.getLogger(__name__)
 
 
-# Reaction callbacks for entities
-async def react_to_food_entity(
-    deps: ToolDependencies,
-    entity_text: str,
-    entity_label: str,
-    confidence: float,
-) -> None:
+async def react_to_food_entity(deps: ToolDependencies, match: TriggerMatch, **kwargs: object) -> None:
     """React when food entity is detected via NER."""
     import os
     import wave
@@ -20,11 +15,12 @@ async def react_to_food_entity(
 
     import numpy as np
 
-    logger.info(f"🧀 FOOD detected {entity_label}: '{entity_text}' (confidence: {confidence:.2f})")
+    entity = match.entities[0]
+    logger.info(f"FOOD detected {entity.label}: '{entity.text}' (confidence: {entity.confidence:.2f})")
 
     # Only react to high-confidence detections
-    if confidence > 0.7:
-        logger.info(f"  → High confidence, playing reaction for '{entity_text}'")
+    if entity.confidence > 0.7:
+        logger.info(f"  High confidence, playing reaction for '{entity.text}'")
 
         try:
             # Get path to audio file (in same directory as this demo)
@@ -38,9 +34,6 @@ async def react_to_food_entity(
                 audio_data = np.frombuffer(frames, dtype=np.int16)
 
             # Determine playback mode based on system's default audio output device
-            # Use robot.media ONLY if:
-            # 1. Robot hardware is available (not simulation)
-            # 2. Default output device is a robot speaker (reSpeaker, etc.)
             import sounddevice as sd
 
             robot_available = hasattr(deps.reachy_mini, "media") and not deps.reachy_mini.client.get_status().get(
@@ -53,7 +46,6 @@ async def react_to_food_entity(
                 try:
                     default_device = sd.query_devices(kind="output")
                     device_name = default_device["name"].lower()
-                    # Common robot speaker names
                     robot_speaker_keywords = ["respeaker", "xvf3800", "reachy"]
                     use_robot_media = any(keyword in device_name for keyword in robot_speaker_keywords)
                     logger.debug(f"Default output device: {default_device['name']}")
@@ -62,7 +54,7 @@ async def react_to_food_entity(
                     logger.warning(f"Failed to detect default audio device: {e}")
 
             if use_robot_media:
-                logger.info("🔊 Playing through robot.media")
+                logger.info("Playing through robot.media")
 
                 # Convert int16 to float32 for robot.media
                 audio_float = audio_data.astype(np.float32) / 32768.0
@@ -87,17 +79,17 @@ async def react_to_food_entity(
 
             else:
                 reason = "laptop/other speaker" if robot_available else "simulation/no robot"
-                logger.info(f"🔊 Playing through sounddevice ({reason})")
+                logger.info(f"Playing through sounddevice ({reason})")
 
                 # Fallback to sounddevice for simulation/laptop
                 sd.play(audio_data, samplerate=sample_rate)
                 sd.wait()
 
-            logger.info("✅ Audio playback complete")
+            logger.info("Audio playback complete")
 
         except FileNotFoundError:
-            logger.error(f"❌ Audio file not found: {audio_file}")
+            logger.error(f"Audio file not found: {audio_file}")
         except Exception as e:
-            logger.error(f"❌ Error playing audio: {e}")
+            logger.error(f"Error playing audio: {e}")
 
         return

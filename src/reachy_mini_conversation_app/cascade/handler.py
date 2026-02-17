@@ -24,6 +24,7 @@ from reachy_mini_conversation_app.cascade.transcript_analysis import (
     TranscriptAnalysisManager,
 )
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -184,51 +185,15 @@ class CascadeHandler:
         self._playback_callback = callback
 
     def _init_transcript_analysis(self) -> TranscriptAnalysisManager | NoOpTranscriptManager:
-        """Initialize transcript analysis from profile reactions.
-
-        Returns:
-            TranscriptAnalysisManager if profile has reactions, NoOpTranscriptManager otherwise
-
-        """
-        from reachy_mini_conversation_app.cascade.transcript_analysis import (
-            KeywordAnalyzer,
-            TranscriptAnalyzer,
-            get_profile_reactions,
-        )
+        """Initialize transcript analysis from profile reactions."""
+        from reachy_mini_conversation_app.cascade.transcript_analysis import get_profile_reactions
 
         reactions = get_profile_reactions()
         if not reactions:
             logger.info("No profile reactions configured, transcript analysis disabled")
             return NoOpTranscriptManager()
 
-        analyzers: List[TranscriptAnalyzer] = []
-
-        # Add keyword analyzer if keywords defined
-        if reactions.get("keywords"):
-            analyzers.append(KeywordAnalyzer(reactions["keywords"]))
-            logger.info(f"  Keyword analyzer: {len(reactions['keywords'])} keywords")
-
-        # Add entity analyzer if entities defined (requires optional gliner extra)
-        if reactions.get("entities"):
-            try:
-                from reachy_mini_conversation_app.cascade.transcript_analysis import EntityAnalyzer
-
-                # Get GLiNER model (configurable per demo)
-                gliner_model = reactions.get("gliner_model", "urchade/gliner_small-v2.1")
-
-                analyzers.append(EntityAnalyzer(reactions["entities"], model_name=gliner_model))
-                logger.info(f"  Entity analyzer: {len(reactions['entities'])} entity types (model: {gliner_model})")
-            except ImportError:
-                logger.warning(
-                    "GLiNER not installed, skipping entity analyzer. "
-                    "Install with: pip install 'reachy_mini_conversation_app[cascade_gliner]'"
-                )
-
-        if not analyzers:
-            logger.info("No analyzers configured (keywords and entities both empty)")
-            return NoOpTranscriptManager()
-
-        return TranscriptAnalysisManager(analyzers=analyzers, deps=self.deps)
+        return TranscriptAnalysisManager(reactions=reactions, deps=self.deps)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # Transcript Analysis Helpers (fire-and-forget, never block pipeline)

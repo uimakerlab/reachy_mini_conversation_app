@@ -3,14 +3,15 @@ import logging
 from reachy_mini.utils import create_head_pose
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
 from reachy_mini_conversation_app.dance_emotion_moves import GotoQueueMove
+from reachy_mini_conversation_app.cascade.transcript_analysis.base import TriggerMatch
 
 
 logger = logging.getLogger(__name__)
 
 
-async def excited_about_music(deps: ToolDependencies) -> dict[str, str]:
-    """React when user mentions music."""
-    logger.info("🎸 User mentioned music! Getting excited!")
+async def excited_about_music(deps: ToolDependencies, match: TriggerMatch, **kwargs: object) -> dict[str, str]:
+    """React when user mentions music-related words."""
+    logger.info(f"User mentioned music words: {match.words} — getting excited!")
 
     # Clear any existing moves
     deps.movement_manager.clear_move_queue()

@@ -182,3 +182,9 @@ tts:
       model: eleven_flash_v2_5
       # Pricing (Feb 2026)
       cost_per_1m_chars: 30.0
+
+
+# Transcript analysis: real-time reactions to keywords/entities in user speech
+# Reactions are defined per-profile in profiles/<name>/reactions.yaml
+transcript_analysis:
+  gliner_model: urchade/gliner_small-v2.1  # GLiNER model for entity recognition
