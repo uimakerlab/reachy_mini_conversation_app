@@ -56,13 +56,21 @@ cascade/
 │   ├── openai.py                      # OpenAI GPT implementation
 │   └── gemini.py                      # Google Gemini implementation
 │
-└── tts/                               # Text-to-Speech
-    ├── __init__.py                    # Provider exports
-    ├── base.py                        # TTSProvider abstract base
-    ├── utils.py                       # Shared TTS utilities (silence trimming)
-    ├── openai.py                      # OpenAI TTS implementation
-    ├── kokoro.py                      # Kokoro local TTS
-    └── elevenlabs.py                  # ElevenLabs API implementation
+├── tts/                               # Text-to-Speech
+│   ├── __init__.py                    # Provider exports
+│   ├── base.py                        # TTSProvider abstract base
+│   ├── utils.py                       # Shared TTS utilities (silence trimming)
+│   ├── openai.py                      # OpenAI TTS implementation
+│   ├── kokoro.py                      # Kokoro local TTS
+│   └── elevenlabs.py                  # ElevenLabs API implementation
+│
+└── transcript_analysis/               # Real-time reactions to user speech
+    ├── __init__.py                    # Package exports (EntityAnalyzer optional)
+    ├── base.py                        # Data classes + TranscriptAnalyzer ABC
+    ├── loader.py                      # YAML loader, callback importer
+    ├── manager.py                     # Orchestrator, deduplication, dispatch
+    ├── keyword_analyzer.py            # Keyword/glob matching
+    └── entity_analyzer.py             # NER via GLiNER (optional dependency)
 ```
 
 ---
@@ -440,7 +448,11 @@ main.py
       │   ├─> config.py
       │   ├─> asr/ providers
       │   ├─> llm/ providers
-      │   └─> tts/ providers
+      │   ├─> tts/ providers
+      │   └─> transcript_analysis/ (TranscriptAnalysisManager)
+      │       ├─> loader.py (reads profiles/<name>/reactions.yaml)
+      │       ├─> keyword_analyzer.py
+      │       └─> entity_analyzer.py (optional, requires gliner)
       │
       └─> ui/gradio_app.py (CascadeGradioUI)
           │
@@ -451,10 +463,11 @@ main.py
 
 **Key relationships:**
 - `entry.py` creates both handler and UI, wires them together
-- Handler owns conversation state and provider instances
+- Handler owns conversation state, provider instances, and transcript analysis
 - UI owns audio I/O and display, reads from handler
 - AudioPlaybackSystem handles pre-warmed playback threads
 - Recording classes encapsulate push-to-talk and VAD modes
+- Transcript analysis runs in parallel with the main ASR → LLM → TTS pipeline
 
 ---
 
@@ -524,6 +537,164 @@ from cascade.timing import tracker
 tracker.reset("pipeline_start")
 tracker.mark("event_name", {"metadata": "value"})
 tracker.print_summary()
+```
+
+---
+
+## Transcript Analysis (Live Reactions)
+
+The transcript analysis system triggers reactive robot behaviors (sounds, movements, emotions) in real time as the user speaks, **independently of the LLM pipeline**. Reactions fire based on keywords or named entities detected in the ASR transcript.
+
+### Architecture
+
+```
+ASR transcript (partial or final)
+  │
+  └─> TranscriptAnalysisManager
+      │
+      ├─ KeywordAnalyzer.analyze(text)  ──→ {reaction_name: [matched_words]}
+      │
+      ├─ EntityAnalyzer.analyze(text)   ──→ [EntityMatch(text, label, confidence)]
+      │
+      ├─ Deduplication (per-turn)
+      │
+      └─ Dispatch → reaction.callback(deps, match, **params)
+```
+
+The handler calls the manager at three points:
+- **`_on_transcript_partial(text)`** — on each streaming ASR partial (debounced at 400ms)
+- **`_on_transcript_final(text)`** — when the final transcript is ready (fire-and-forget, parallel with LLM)
+- **`_on_turn_complete()`** — resets all deduplication state for the next turn
+
+### Reaction Configuration (`reactions.yaml`)
+
+Each profile can define a `reactions.yaml` file. The loader (`loader.py`) reads it and imports callbacks from the profile's Python modules.
+
+```yaml
+# Simple keyword trigger — fires if any word matches
+- name: music_excitement
+  callback: excited_about_music
+  trigger:
+    words: [music, guitar, piano, drum, violin]
+
+# Entity trigger with repeatable — fires once per unique entity
+- name: food_reaction
+  callback: react_to_food_entity
+  trigger:
+    entities: [food]
+  repeatable: true
+
+# Boolean AND trigger — all sub-groups must match
+- name: groovy_dance
+  callback: do_groovy_dance
+  trigger:
+    all:
+      - words: [danc*]
+      - words: [groov*]
+
+# With extra params passed as kwargs to the callback
+- name: turn_left
+  callback: turn_to_direction
+  trigger:
+    all:
+      - words: [turn*]
+      - words: [left]
+  params:
+    direction: left
+```
+
+**Fields:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | yes | Unique reaction identifier |
+| `callback` | yes | Python module name in the profile directory (module must contain a function with the same name) |
+| `trigger` | yes | What activates the reaction (see Trigger Types below) |
+| `params` | no | Extra kwargs passed to the callback |
+| `repeatable` | no | If `true`, can fire multiple times per turn (default: `false`) |
+
+### Trigger Types
+
+#### `words` — Keyword matching
+
+The word list supports three forms, mixable in a single list:
+
+| Form | Example | Matching strategy |
+|------|---------|-------------------|
+| Plain word | `guitar` | **Substring** match on the full transcript text. Matches "guitar", "guitars", "guitarist". |
+| Glob pattern | `music*` | **`fnmatch`** against individual whitespace-split tokens. Matches "music", "musical", "musician". Supports `*` and `?`. |
+| Multi-word phrase | `"grand piano"` | **Substring** match (use YAML quotes). Matches any occurrence of "grand piano" in the text. |
+
+Any one match in the list is enough to trigger the reaction (OR logic).
+
+#### `entities` — Named Entity Recognition
+
+Uses GLiNER (optional dependency) to detect entities by semantic label (e.g. `food`, `person`, `location`). The model is configurable in `cascade.yaml`:
+
+```yaml
+transcript_analysis:
+  gliner_model: "urchade/gliner_small-v2.1"
+```
+
+Entity analysis runs in a thread executor since GLiNER inference is CPU-bound.
+
+#### `all` — Boolean AND
+
+A list of sub-triggers that must **all** match for the reaction to fire. Internally, each sub-trigger is registered as a synthetic keyword entry (`reaction_name__all_0`, `reaction_name__all_1`, etc.) and merged back after analysis.
+
+### Deduplication
+
+By default, each reaction fires **at most once per turn** (per conversation exchange). The manager tracks fired reactions in `triggered_reactions: set[str]` and skips duplicates.
+
+**Repeatable reactions** (`repeatable: true`) bypass this gate. For entity-triggered repeatable reactions, deduplication is per unique entity text: "pizza" triggers once, "zucchini" triggers once, but "pizza" again is skipped. This is tracked via `_triggered_entity_keys: set[tuple[str, str]]`.
+
+All deduplication state resets when `_on_turn_complete()` is called.
+
+### Callback Signature
+
+Every callback must be an async function with this signature:
+
+```python
+async def my_callback(
+    deps: ToolDependencies,
+    match: TriggerMatch,
+    **kwargs,    # receives params from YAML
+) -> None:
+```
+
+`TriggerMatch` contains what matched:
+- `match.words: list[str]` — matched keywords (for word triggers)
+- `match.entities: list[EntityMatch]` — matched entities, each with `.text`, `.label`, `.confidence`
+
+Callbacks are imported from `profiles/<profile_name>/<callback_name>.py` — the module must export a function with the same name as the module.
+
+### Data Classes (`base.py`)
+
+```python
+@dataclass
+class ReactionConfig:
+    name: str
+    callback: Callable[..., Awaitable[None]]
+    trigger: TriggerConfig
+    params: dict[str, Any] = {}
+    repeatable: bool = False
+
+@dataclass
+class TriggerConfig:
+    words: list[str] = []
+    entities: list[str] = []
+    all: list[TriggerConfig] = []
+
+@dataclass
+class TriggerMatch:
+    words: list[str] = []
+    entities: list[EntityMatch] = []
+
+@dataclass
+class EntityMatch:
+    text: str          # e.g. "pizza"
+    label: str         # e.g. "food"
+    confidence: float  # 0.0 – 1.0
 ```
 
 ---
