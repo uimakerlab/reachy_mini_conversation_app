@@ -34,17 +34,19 @@ so to_thread just runs it in the thread pool and returns the mock's value.
 """
 
 import base64
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
+import reachy_mini_conversation_app.tools.see_image_through_camera as see_cam_mod
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
-from reachy_mini_conversation_app.tools.see_image_through_camera import SeeImageThroughCamera
 from reachy_mini_conversation_app.tools.describe_camera_image import DescribeCameraImage
+from reachy_mini_conversation_app.tools.see_image_through_camera import SeeImageThroughCamera
 
 
 def _make_deps(camera_worker=None, vision_manager=None) -> ToolDependencies:
+    """Build ToolDependencies with only camera/vision deps, rest mocked."""
     return ToolDependencies(
         reachy_mini=MagicMock(),
         movement_manager=MagicMock(),
@@ -54,17 +56,21 @@ def _make_deps(camera_worker=None, vision_manager=None) -> ToolDependencies:
 
 
 def _fake_frame() -> np.ndarray:
-    """A small BGR image that cv2.imencode can encode."""
+    """Return a tiny 4x4 black BGR image for cv2.imencode."""
     return np.zeros((4, 4, 3), dtype=np.uint8)
 
 
 # ---------- SeeImageThroughCamera ----------
 
+
 class TestSeeImageThroughCamera:
+    """Test the see_image_through_camera tool."""
+
     tool = SeeImageThroughCamera()
 
     @pytest.mark.asyncio
-    async def test_returns_b64_image(self):
+    async def test_returns_b64_image(self) -> None:
+        """Test happy path: valid frame returns base64-encoded JPEG."""
         cam = MagicMock()
         cam.get_latest_frame.return_value = _fake_frame()
         deps = _make_deps(camera_worker=cam)
@@ -77,13 +83,15 @@ class TestSeeImageThroughCamera:
         assert len(raw) > 0
 
     @pytest.mark.asyncio
-    async def test_error_when_no_camera_worker(self):
+    async def test_error_when_no_camera_worker(self) -> None:
+        """Test error when camera_worker is None."""
         deps = _make_deps(camera_worker=None)
         result = await self.tool(deps)
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_error_when_no_frame(self):
+    async def test_error_when_no_frame(self) -> None:
+        """Test error when camera exists but returns no frame."""
         cam = MagicMock()
         cam.get_latest_frame.return_value = None
         deps = _make_deps(camera_worker=cam)
@@ -92,14 +100,17 @@ class TestSeeImageThroughCamera:
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_error_when_jpeg_encode_fails(self):
+    async def test_error_when_jpeg_encode_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test error dict (not exception) when JPEG encoding fails."""
         cam = MagicMock()
         cam.get_latest_frame.return_value = _fake_frame()
         deps = _make_deps(camera_worker=cam)
 
-        with patch("reachy_mini_conversation_app.tools.see_image_through_camera.cv2") as mock_cv2:
-            mock_cv2.imencode.return_value = (False, None)
-            result = await self.tool(deps)
+        mock_cv2 = MagicMock()
+        mock_cv2.imencode.return_value = (False, None)
+        monkeypatch.setattr(see_cam_mod, "cv2", mock_cv2)
+
+        result = await self.tool(deps)
 
         assert "error" in result
         assert "JPEG" in result["error"]
@@ -107,11 +118,15 @@ class TestSeeImageThroughCamera:
 
 # ---------- DescribeCameraImage ----------
 
+
 class TestDescribeCameraImage:
+    """Test the describe_camera_image tool."""
+
     tool = DescribeCameraImage()
 
     @pytest.mark.asyncio
-    async def test_returns_description(self):
+    async def test_returns_description(self) -> None:
+        """Test happy path: vision model string is wrapped in description key."""
         cam = MagicMock()
         cam.get_latest_frame.return_value = _fake_frame()
         vision = MagicMock()
@@ -123,25 +138,29 @@ class TestDescribeCameraImage:
         assert result == {"description": "A small black square"}
 
     @pytest.mark.asyncio
-    async def test_error_when_empty_question(self):
+    async def test_error_when_empty_question(self) -> None:
+        """Test error when question is empty string."""
         deps = _make_deps(camera_worker=MagicMock(), vision_manager=MagicMock())
         result = await self.tool(deps, question="")
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_error_when_no_camera_worker(self):
+    async def test_error_when_no_camera_worker(self) -> None:
+        """Test error when camera_worker is None."""
         deps = _make_deps(camera_worker=None, vision_manager=MagicMock())
         result = await self.tool(deps, question="What is this?")
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_error_when_no_vision_manager(self):
+    async def test_error_when_no_vision_manager(self) -> None:
+        """Test error when vision_manager is None."""
         deps = _make_deps(camera_worker=MagicMock(), vision_manager=None)
         result = await self.tool(deps, question="What is this?")
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_error_when_no_frame(self):
+    async def test_error_when_no_frame(self) -> None:
+        """Test error when camera exists but returns no frame."""
         cam = MagicMock()
         cam.get_latest_frame.return_value = None
         deps = _make_deps(camera_worker=cam, vision_manager=MagicMock())
@@ -150,7 +169,8 @@ class TestDescribeCameraImage:
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_error_includes_type_for_non_string(self):
+    async def test_error_includes_type_for_non_string(self) -> None:
+        """Test error includes type name when vision returns non-string."""
         cam = MagicMock()
         cam.get_latest_frame.return_value = _fake_frame()
         vision = MagicMock()
