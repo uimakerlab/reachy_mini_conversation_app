@@ -2,7 +2,8 @@ dance
 stop_dance
 play_emotion
 stop_emotion
-camera
+see_image_through_camera
+describe_camera_image
 do_nothing
 head_tracking
 move_head
