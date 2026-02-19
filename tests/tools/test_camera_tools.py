@@ -34,10 +34,12 @@ so to_thread just runs it in the thread pool and returns the mock's value.
 """
 
 import base64
+from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 import reachy_mini_conversation_app.tools.see_image_through_camera as see_cam_mod
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
@@ -45,7 +47,7 @@ from reachy_mini_conversation_app.tools.describe_camera_image import DescribeCam
 from reachy_mini_conversation_app.tools.see_image_through_camera import SeeImageThroughCamera
 
 
-def _make_deps(camera_worker=None, vision_manager=None) -> ToolDependencies:
+def _make_deps(camera_worker: Any = None, vision_manager: Any = None) -> ToolDependencies:
     """Build ToolDependencies with only camera/vision deps, rest mocked."""
     return ToolDependencies(
         reachy_mini=MagicMock(),
@@ -55,7 +57,7 @@ def _make_deps(camera_worker=None, vision_manager=None) -> ToolDependencies:
     )
 
 
-def _fake_frame() -> np.ndarray:
+def _fake_frame() -> NDArray[np.uint8]:
     """Return a tiny 4x4 black BGR image for cv2.imencode."""
     return np.zeros((4, 4, 3), dtype=np.uint8)
 
