@@ -124,6 +124,9 @@ class BackgroundToolManager(BaseModel):
     """the event loop"""
     _loop: Optional[asyncio.AbstractEventLoop] = PrivateAttr(default=None)
 
+    """internal lifecycle tasks (notification listener, periodic cleanup)"""
+    _lifecycle_tasks: list[asyncio.Task[None]] = PrivateAttr(default_factory=list)
+
     """the maximum duration of a tool execution in seconds (default: 1 hour)"""
     _max_tool_duration_seconds: float = PrivateAttr(default=3600)
 
@@ -301,8 +304,10 @@ class BackgroundToolManager(BaseModel):
                 await self.cleanup_tools()
                 await self.timeout_tools()
 
-        asyncio.create_task(_cleanup(), name="bg-tool-cleanup")
-        asyncio.create_task(_listener(), name="bg-tool-listener-callback")
+        self._lifecycle_tasks = [
+            asyncio.create_task(_cleanup(), name="bg-tool-cleanup"),
+            asyncio.create_task(_listener(), name="bg-tool-listener-callback"),
+        ]
 
         logger.info(
             "BackgroundToolManager started. "
@@ -310,6 +315,22 @@ class BackgroundToolManager(BaseModel):
             "Max tool memory retention: %s seconds (completed/failed/cancelled tools older than this are purged).",
             self._max_tool_duration_seconds, self._max_tool_memory_seconds,
         )
+
+    async def shutdown(self) -> None:
+        """Cancel all background tasks (listener, cleanup) and running tools."""
+        for task in self._lifecycle_tasks:
+            task.cancel()
+        for task in self._lifecycle_tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._lifecycle_tasks.clear()
+
+        for tool_id in list(self._tools):
+            await self.cancel_tool(tool_id)
+
+        logger.info("BackgroundToolManager shut down")
 
     async def timeout_tools(self) -> int:
         """Cancel tools that have been running too long.

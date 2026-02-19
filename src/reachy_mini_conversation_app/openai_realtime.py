@@ -718,6 +718,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # Unblock the response sender worker so it can exit
         self._response_done_event.set()
 
+        # Stop background tool manager tasks (listener + cleanup)
+        await self.tool_manager.shutdown()
+
         # Cancel any pending debounce task
         if self.partial_transcript_task and not self.partial_transcript_task.done():
             self.partial_transcript_task.cancel()
