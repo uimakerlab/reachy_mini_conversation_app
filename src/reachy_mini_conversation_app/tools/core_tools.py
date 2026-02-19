@@ -70,6 +70,7 @@ class Tool(abc.ABC):
     name: str
     description: str
     parameters_schema: Dict[str, Any]
+    requires_vision: bool = False
 
     def spec(self) -> Dict[str, Any]:
         """Return the function spec for LLM consumption."""
@@ -193,9 +194,16 @@ def _initialize_tools() -> None:
 _initialize_tools()
 
 
-def get_tool_specs(exclusion_list: list[str] = []) -> list[Dict[str, Any]]:
+def get_tool_specs(exclusion_list: list[str] = [], has_vision: bool = True) -> list[Dict[str, Any]]:
     """Get tool specs, optionally excluding some tools."""
-    return [spec for spec in ALL_TOOL_SPECS if spec.get("name") not in exclusion_list]
+    vision_excluded: set[str] = set()
+    if not has_vision:
+        vision_excluded = {name for name, tool in ALL_TOOLS.items() if tool.requires_vision}
+    return [
+        spec for spec in ALL_TOOL_SPECS
+        if spec.get("name") not in exclusion_list
+        and spec.get("name") not in vision_excluded
+    ]
 
 
 # Dispatcher

@@ -20,6 +20,7 @@ class SeeImageThroughCamera(Tool):
     parameters_schema = {
         "type": "object",
         "properties": {},
+        "required": [],
     }
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
@@ -37,7 +38,7 @@ class SeeImageThroughCamera(Tool):
 
         success, buffer = cv2.imencode(".jpg", frame)
         if not success:
-            raise RuntimeError("Failed to encode frame as JPEG")
+            return {"error": "Failed to encode frame as JPEG"}
 
         b64_encoded = base64.b64encode(buffer.tobytes()).decode("utf-8")
         return {"b64_im": b64_encoded}

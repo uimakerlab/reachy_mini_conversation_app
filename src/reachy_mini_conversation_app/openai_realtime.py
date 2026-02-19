@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 OPEN_AI_INPUT_SAMPLE_RATE: Final[Literal[24000]] = 24000
 OPEN_AI_OUTPUT_SAMPLE_RATE: Final[Literal[24000]] = 24000
+IMAGE_PLACEHOLDER_RESULT: Final[dict[str, str]] = {"status": "Image captured, will be provided next."}
 
 
 class OpenaiRealtimeHandler(AsyncStreamHandler):
@@ -257,10 +258,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                                 "voice": get_session_voice(),
                             },
                         },
-                        "tools": get_tool_specs(exclusion_list=(
-                            ["describe_camera_image"] if self.deps.vision_manager is None
-                            else ["see_image_through_camera"]
-                        )),  # type: ignore[typeddict-item]
+                        "tools": get_tool_specs(has_vision=self.deps.vision_manager is not None),  # type: ignore[typeddict-item]
                         "tool_choice": "auto",
                     },
                 )
@@ -389,10 +387,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     is_image_tool = isinstance(tool_result, dict) and "b64_im" in tool_result
                     if is_image_tool:
                         b64_im = tool_result["b64_im"]
+                        # see_image_through_camera guarantees str, but guard against future tools
                         if not isinstance(b64_im, str):
                             logger.warning("Unexpected type for b64_im: %s", type(b64_im))
                             b64_im = str(b64_im)
-                        tool_result_for_api = {"status": "Image captured, will be provided next."}
+                        tool_result_for_api = IMAGE_PLACEHOLDER_RESULT
                     else:
                         tool_result_for_api = tool_result
 

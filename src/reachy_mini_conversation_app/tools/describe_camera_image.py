@@ -15,6 +15,7 @@ class DescribeCameraImage(Tool):
 
     name = "describe_camera_image"
     description = "Ask a question about what is visible to you through your eyes right now. A vision model will analyze your latest camera frame and answer your question about it."
+    requires_vision = True
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -56,4 +57,4 @@ class DescribeCameraImage(Tool):
         if isinstance(vision_result, str):
             logger.info("Vision model response: %s", vision_result[:500])
             return {"description": vision_result}
-        return {"error": "vision returned non-string"}
+        return {"error": f"vision returned unexpected type: {type(vision_result).__name__}"}
