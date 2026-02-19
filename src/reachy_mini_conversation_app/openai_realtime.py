@@ -384,9 +384,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         logger.error("Tool '%s' failed", tool_name)
                         tool_result = {"error": str(e)}
 
-                    # For see_image_through_camera/camera with b64 result: send a lightweight tool result
+                    # If the tool returned a base64 image, send a lightweight tool result
                     # and inject the image as a proper user message instead.
-                    is_image_tool = tool_name in ("camera", "see_image_through_camera") and "b64_im" in tool_result
+                    is_image_tool = isinstance(tool_result, dict) and "b64_im" in tool_result
                     if is_image_tool:
                         b64_im = tool_result["b64_im"]
                         if not isinstance(b64_im, str):
