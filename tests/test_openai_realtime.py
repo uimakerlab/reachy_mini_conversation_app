@@ -46,8 +46,10 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
     FakeCCE = type("FakeCCE", (Exception,), {})
     monkeypatch.setattr(rt_mod, "ConnectionClosedError", FakeCCE)
 
-    # Make asyncio.sleep return immediately (for backoff)
-    async def _fast_sleep(*_a: Any, **_kw: Any) -> None: return None
+    # Make asyncio.sleep near-instant but still yield to the event loop,
+    # otherwise BackgroundToolManager's _cleanup loop busy-spins and starves all other coroutines.
+    _real_sleep = asyncio.sleep
+    async def _fast_sleep(*_a: Any, **_kw: Any) -> None: await _real_sleep(0)
     monkeypatch.setattr(asyncio, "sleep", _fast_sleep, raising=False)
 
     attempt_counter = {"n": 0}
@@ -115,6 +117,9 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
     # Optional: confirm we logged the unexpected close once
     warnings = [r for r in caplog.records if r.levelname == "WARNING" and "closed unexpectedly" in r.msg]
     assert len(warnings) == 1
+
+    # Clean up background tasks spawned by BackgroundToolManager.start_up()
+    await handler.shutdown()
 
 
 # ---- Cost calculation tests ----

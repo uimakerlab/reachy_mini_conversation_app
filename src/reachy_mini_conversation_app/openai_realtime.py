@@ -642,6 +642,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         """Shutdown the handler."""
         self._shutdown_requested = True
 
+        # Stop background tool manager tasks (listener + cleanup)
+        await self.tool_manager.shutdown()
+
         # Cancel any pending debounce task
         if self.partial_transcript_task and not self.partial_transcript_task.done():
             self.partial_transcript_task.cancel()
