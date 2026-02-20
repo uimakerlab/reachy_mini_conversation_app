@@ -312,7 +312,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     {
                         "role": "assistant",
                         "content": json.dumps(tool_result),
-                        "metadata": {"title": f"🛠️ Used tool {bg_tool.tool_name}", "status": f"{bg_tool.status.value}"},
+                        "metadata": {"title": f"🛠️ Used tool {bg_tool.tool_name}", "status": "done"},
                     },
                 ),
             )
