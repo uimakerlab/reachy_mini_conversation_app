@@ -43,6 +43,8 @@ TEXT_INPUT_COST_PER_1M = 4.0
 TEXT_OUTPUT_COST_PER_1M = 16.0
 IMAGE_INPUT_COST_PER_1M = 5.0
 
+_RESPONSE_DONE_TIMEOUT: Final[float] = 30.0
+
 
 def _compute_response_cost(usage: Any) -> float:
     """Compute dollar cost from a response usage object."""
@@ -298,7 +300,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
             sent = False
             while not sent and self.connection:
-                await self._response_done_event.wait()
+                try:
+                    await asyncio.wait_for(self._response_done_event.wait(), timeout=_RESPONSE_DONE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning("Timed out waiting for previous response to finish; forcing ahead")
+                    self._response_done_event.set()
 
                 if not self.connection:
                     break
@@ -310,8 +316,12 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     logger.warning("_response_sender_loop: send failed: %s", e)
                     break
 
-                # Wait for the response to complete (or for our request to be rejected and the active response to finish).
-                await self._response_done_event.wait()
+                try:
+                    await asyncio.wait_for(self._response_done_event.wait(), timeout=_RESPONSE_DONE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning("Timed out waiting for response.done; assuming response completed")
+                    self._response_done_event.set()
+                    break
 
                 # Check if we were rejected
                 if self._last_response_rejected:
@@ -319,6 +329,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     continue
 
                 sent = True
+
     async def _handle_tool_result(self, bg_tool: ToolNotification) -> None:
         """Process the result of a tool call."""
         try:
@@ -650,6 +661,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
             # Connection closed — stop the response sender worker
             response_sender_task.cancel()
+            # Stop background tool manager tasks (listener + cleanup)
+            await self.tool_manager.shutdown()
+
             try:
                 await response_sender_task
             except asyncio.CancelledError:

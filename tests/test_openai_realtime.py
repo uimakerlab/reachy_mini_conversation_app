@@ -1,3 +1,4 @@
+import random
 import asyncio
 import logging
 from typing import Any
@@ -11,7 +12,6 @@ import reachy_mini_conversation_app.tools.background_tool_manager as btm_mod
 from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler, _compute_response_cost
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
 from reachy_mini_conversation_app.tools.background_tool_manager import ToolCallRoutine
-import random
 
 
 def _build_handler(loop: asyncio.AbstractEventLoop) -> OpenaiRealtimeHandler:
@@ -114,10 +114,6 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
     # Optional: confirm we logged the unexpected close once
     warnings = [r for r in caplog.records if r.levelname == "WARNING" and "closed unexpectedly" in r.msg]
     assert len(warnings) == 1
-
-    # Clean up background tasks spawned by BackgroundToolManager.start_up()
-    await handler.shutdown()
-
 
 # ---- Cost calculation tests ----
 
@@ -266,11 +262,10 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
                         ),
                     )
                 )
-                # The already-active response eventually finishes.
+                await asyncio.sleep(0)
                 await event_queue.put(
                     FakeEvent("response.done", response=MagicMock())
                 )
-                await asyncio.sleep(0)
                 return
 
             # Intentional rejections (simulating a race where another
@@ -289,21 +284,14 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
                         ),
                     )
                 )
+                await asyncio.sleep(0)
             else:
-                # Accepted: server sends response.created → the real handler
-                # at line 506-507 clears _response_done_event.
                 await event_queue.put(FakeEvent("response.created"))
 
-            # Either way the active response eventually finishes → the real
-            # handler at line 510-512 sets _response_done_event.
             await event_queue.put(
                 FakeEvent("response.done", response=MagicMock())
             )
 
-            # Yield so the event loop processes the queued events through
-            # the real _run_realtime_session handler (clear/set the event,
-            # set _last_response_rejected on errors, etc.).
-            await asyncio.sleep(0)
 
         async def cancel(self, **_kw: Any) -> None:
             pass
@@ -344,7 +332,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
             return self
 
         async def __anext__(self) -> FakeEvent:
-            event = await event_queue.get()
+            event: FakeEvent = await event_queue.get()
             if event is None:  # sentinel → end iteration
                 raise StopAsyncIteration
             return event
@@ -359,7 +347,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
 
     monkeypatch.setattr(rt_mod, "AsyncOpenAI", FakeClient)
 
-    # Patch dispatch_tool_call so tools complete instantly with a result.
+    # Patch dispatch_tool_call so tools complete with a result.
     async def _fake_dispatch(
         tool_name: str, args_json: str, deps: Any, **_kw: Any
     ) -> dict[str, Any]:
@@ -374,8 +362,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
     handler = rt_mod.OpenaiRealtimeHandler(deps)
     handler_ref.append(handler)
 
-    handler_task = asyncio.create_task(handler.start_up())
-    await asyncio.wait_for(handler._connected_event.wait(), timeout=2.0)
+    asyncio.create_task(handler.start_up())
 
     # ---- Start tools via the real BackgroundToolManager pipeline ----
     # start_tool → _run_tool → notification queue → listener → _handle_tool_result
@@ -392,27 +379,14 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
         )
 
     # Yield so spawned tool tasks, the listener, and the sender can drain.
-    await asyncio.sleep(1)
-
-    # Poll until the sender has processed all requests (including retries).
-    for _ in range(5000):
-        if fake_response_api._call_count >= EXPECTED_TOTAL_CALLS:
-            break
-        await asyncio.sleep(0)
+    await asyncio.sleep(3)
 
     # ---- Tear down ----
 
     await event_queue.put(None)  # sentinel stops event iteration
-    try:
-        await asyncio.wait_for(handler_task, timeout=2.0)
-    except asyncio.TimeoutError:
-        handler_task.cancel()
-        try:
-            await handler_task
-        except asyncio.CancelledError:
-            pass
 
     await handler.shutdown()
+
 
     # ---- Assertions ----
 
@@ -450,4 +424,116 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
     assert len(retry_logs) == len(REJECT_CALL_NUMBERS), (
         f"Expected {len(REJECT_CALL_NUMBERS)} retry entries from sender loop, "
         f"got {len(retry_logs)}"
+    )
+
+
+# ---- Response creation timeout guard tests ----
+
+
+@pytest.mark.asyncio
+async def test_response_sender_loop_times_out_waiting_for_response_done(
+    monkeypatch: Any, caplog: Any,
+) -> None:
+    """If response.done is never received the sender loop should time out.
+
+    Rather than hang forever, it force-sets the event and moves on.
+    """
+    caplog.set_level(logging.DEBUG)
+
+    monkeypatch.setattr(rt_mod, "_RESPONSE_DONE_TIMEOUT", 0.3)
+
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = rt_mod.OpenaiRealtimeHandler(deps)
+
+    create_count = 0
+
+    class FakeResponse:
+        async def create(self, **_kw: Any) -> None:
+            nonlocal create_count
+            create_count += 1
+            # Simulate response.created clearing the event, but never
+            # send response.done (so the event stays cleared forever).
+            handler._response_done_event.clear()
+
+        async def cancel(self, **_kw: Any) -> None:
+            pass
+
+    fake_conn = MagicMock()
+    fake_conn.response = FakeResponse()
+    handler.connection = fake_conn
+
+    # Queue two requests
+    await handler._safe_response_create(instructions="req1")
+    await handler._safe_response_create(instructions="req2")
+
+    sender_task = asyncio.create_task(handler._response_sender_loop())
+
+    # Give enough time for both requests to time out (0.3s each + margin)
+    await asyncio.sleep(1.5)
+
+    handler.connection = None  # signal the loop to exit
+    handler._response_done_event.set()
+    await asyncio.wait_for(sender_task, timeout=2.0)
+
+    assert create_count == 2, f"Expected 2 response.create calls, got {create_count}"
+
+    timeout_logs = [
+        r for r in caplog.records
+        if "Timed out waiting for response.done" in r.getMessage()
+    ]
+    assert len(timeout_logs) == 2, (
+        f"Expected 2 timeout warnings, got {len(timeout_logs)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_response_sender_loop_times_out_waiting_for_previous_response(
+    monkeypatch: Any, caplog: Any,
+) -> None:
+    """If a previous response never completes, the pre-condition wait times out.
+
+    It should force-set the event and proceed to send.
+    """
+    caplog.set_level(logging.DEBUG)
+
+    monkeypatch.setattr(rt_mod, "_RESPONSE_DONE_TIMEOUT", 0.3)
+
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = rt_mod.OpenaiRealtimeHandler(deps)
+
+    # Pretend a response is already in-flight (event cleared)
+    handler._response_done_event.clear()
+
+    created = asyncio.Event()
+
+    class FakeResponse:
+        async def create(self, **_kw: Any) -> None:
+            # Immediately complete the response cycle so the loop can finish
+            handler._response_done_event.set()
+            created.set()
+
+        async def cancel(self, **_kw: Any) -> None:
+            pass
+
+    fake_conn = MagicMock()
+    fake_conn.response = FakeResponse()
+    handler.connection = fake_conn
+
+    await handler._safe_response_create(instructions="waiting_req")
+
+    sender_task = asyncio.create_task(handler._response_sender_loop())
+
+    # Wait for the request to be sent (after timing out on the pre-condition)
+    await asyncio.wait_for(created.wait(), timeout=2.0)
+
+    handler.connection = None
+    handler._response_done_event.set()
+    await asyncio.wait_for(sender_task, timeout=2.0)
+
+    timeout_logs = [
+        r for r in caplog.records
+        if "Timed out waiting for previous response" in r.getMessage()
+    ]
+    assert len(timeout_logs) == 1, (
+        f"Expected 1 pre-condition timeout warning, got {len(timeout_logs)}"
     )
