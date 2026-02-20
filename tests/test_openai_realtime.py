@@ -115,10 +115,6 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
     warnings = [r for r in caplog.records if r.levelname == "WARNING" and "closed unexpectedly" in r.msg]
     assert len(warnings) == 1
 
-<<<<<<< HEAD
-=======
-
->>>>>>> amir/concurrent_execution_tool
 # ---- Cost calculation tests ----
 
 
