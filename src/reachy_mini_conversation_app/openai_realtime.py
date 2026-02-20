@@ -661,13 +661,13 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
             # Connection closed — stop the response sender worker
             response_sender_task.cancel()
-            # Stop background tool manager tasks (listener + cleanup)
-            await self.tool_manager.shutdown()
-
             try:
                 await response_sender_task
             except asyncio.CancelledError:
                 pass
+
+            # Stop background tool manager tasks (listener + cleanup)
+            await self.tool_manager.shutdown()
 
     # Microphone receive
     async def receive(self, frame: Tuple[int, NDArray[np.int16]]) -> None:
