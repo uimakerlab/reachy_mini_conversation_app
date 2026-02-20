@@ -13,7 +13,10 @@ from dataclasses import dataclass
 
 from reachy_mini import ReachyMini
 from reachy_mini_conversation_app.config import DEFAULT_PROFILES_DIRECTORY as DEFAULT_PROFILES_PATH  # noqa: F401
-from reachy_mini_conversation_app.config import config
+
+# Import config to ensure .env is loaded before reading REACHY_MINI_CUSTOM_PROFILE
+from reachy_mini_conversation_app.config import config  # noqa: F401
+from reachy_mini_conversation_app.tools.tool_constants import SystemTool
 
 
 logger = logging.getLogger(__name__)
@@ -172,18 +175,21 @@ def _load_profile_tools() -> None:
         sys.exit(1)
 
     # Parse tool names (skip comments and blank lines)
-    tool_names = []
+    tool_names = set[str]()
     for line in lines:
         line = line.strip()
         # Skip blank lines and comments
         if not line or line.startswith("#"):
             continue
-        tool_names.append(line)
+        tool_names.add(line)
+
+    # Add system tools
+    tool_names.update({tool.value for tool in SystemTool})
 
     logger.info(f"Found {len(tool_names)} tools to load: {tool_names}")
 
     if config.AUTOLOAD_EXTERNAL_TOOLS and config.TOOLS_DIRECTORY and config.TOOLS_DIRECTORY.is_dir():
-        discovered_external_tools: List[str] = []
+        discovered_external_tools: set[str] = set()
         for tool_file in sorted(config.TOOLS_DIRECTORY.glob("*.py")):
             if tool_file.name.startswith("_"):
                 continue
@@ -191,15 +197,14 @@ def _load_profile_tools() -> None:
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", candidate_name):
                 logger.warning("Skipping external tool with invalid name: %s", tool_file.name)
                 continue
-            discovered_external_tools.append(candidate_name)
+            discovered_external_tools.add(candidate_name)
 
-        extra_tools = [name for name in discovered_external_tools if name not in tool_names]
-        if extra_tools:
-            tool_names.extend(extra_tools)
+        if discovered_external_tools:
+            tool_names.update(discovered_external_tools)
             logger.info(
                 "AUTOLOAD_EXTERNAL_TOOLS enabled: added %d external tool(s): %s",
-                len(extra_tools),
-                extra_tools,
+                len(discovered_external_tools),
+                discovered_external_tools,
             )
 
     for tool_name in tool_names:
@@ -292,7 +297,7 @@ def _safe_load_obj(args_json: str) -> Dict[str, Any]:
         return {}
 
 
-async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies) -> Dict[str, Any]:
+async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
     """Dispatch a tool call by name with JSON args and dependencies."""
     tool = ALL_TOOLS.get(tool_name)
 
@@ -300,9 +305,11 @@ async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependenc
         return {"error": f"unknown tool: {tool_name}"}
 
     args = _safe_load_obj(args_json)
+    tool_manager = kwargs.get("tool_manager")
+    if tool_manager is not None:
+        args["tool_manager"] = tool_manager
     try:
         return await tool(deps, **args)
     except Exception as e:
-        msg = f"{type(e).__name__}: {e}"
-        logger.exception("Tool error in %s: %s", tool_name, msg)
-        return {"error": msg}
+        logger.exception("Tool error in %s: %s", tool_name, e)
+        raise e

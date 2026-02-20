@@ -46,10 +46,6 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
     FakeCCE = type("FakeCCE", (Exception,), {})
     monkeypatch.setattr(rt_mod, "ConnectionClosedError", FakeCCE)
 
-    # Make asyncio.sleep return immediately (for backoff)
-    async def _fast_sleep(*_a: Any, **_kw: Any) -> None: return None
-    monkeypatch.setattr(asyncio, "sleep", _fast_sleep, raising=False)
-
     attempt_counter = {"n": 0}
 
     class FakeConn:

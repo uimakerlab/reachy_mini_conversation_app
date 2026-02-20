@@ -1,4 +1,5 @@
 import json
+import uuid
 import base64
 import random
 import asyncio
@@ -15,13 +16,18 @@ from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_
 from numpy.typing import NDArray
 from scipy.signal import resample
 from websockets.exceptions import ConnectionClosedError
+from openai.resources.realtime.realtime import AsyncRealtimeConnection
 
 from reachy_mini_conversation_app.config import config
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
 from reachy_mini_conversation_app.tools.core_tools import (
     ToolDependencies,
     get_tool_specs,
-    dispatch_tool_call,
+)
+from reachy_mini_conversation_app.tools.background_tool_manager import (
+    ToolCallRoutine,
+    ToolNotification,
+    BackgroundToolManager,
 )
 
 
@@ -94,6 +100,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # Internal lifecycle flags
         self._shutdown_requested: bool = False
         self._connected_event: asyncio.Event = asyncio.Event()
+
+        # Background tool manager
+        self.tool_manager = BackgroundToolManager()
 
         # Cost tracking
         self.cumulative_cost: float = 0.0
@@ -254,6 +263,107 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         except Exception as e:
             logger.warning("_restart_session failed: %s", e)
 
+    async def _handle_tool_result(self, bg_tool: ToolNotification) -> None:
+        """Process the result of a tool call."""
+        try:
+            if bg_tool.error is not None:
+                logger.error("Tool '%s' (id=%s) failed with error: %s", bg_tool.tool_name, bg_tool.id, bg_tool.error)
+                tool_result = {"error": bg_tool.error}
+            elif bg_tool.result is not None:
+                tool_result = bg_tool.result
+                logger.info(
+                    "Tool '%s' (id=%s) executed successfully.",
+                    bg_tool.tool_name, bg_tool.id,
+                )
+                logger.debug("Tool '%s' full result: %s", bg_tool.tool_name, tool_result)
+            else:
+                logger.warning("Tool '%s' (id=%s) returned no result and no error", bg_tool.tool_name, bg_tool.id)
+                tool_result = {"error": "No result returned from tool execution"}
+        except Exception as e:
+            logger.error("Tool '%s' (id=%s) result handling failed: %s: %s", bg_tool.tool_name, bg_tool.id, type(e).__name__, e)
+            tool_result = {"error": str(e)}
+
+        # Connection may have closed while tool was running
+        if not self.connection:
+            logger.warning("Connection closed during tool '%s' (id=%s) execution; cannot send result back", bg_tool.tool_name, bg_tool.id)
+            return
+
+        try:
+            # Send the tool result back
+            if isinstance(bg_tool.id, str):
+                await self.connection.conversation.item.create(
+                    item={
+                        "type": "function_call_output",
+                        "call_id": bg_tool.id,
+                        "output": json.dumps(tool_result),
+                    },
+                )
+
+            await self.output_queue.put(
+                AdditionalOutputs(
+                    {
+                        "role": "assistant",
+                        "content": json.dumps(tool_result),
+                        "metadata": {"title": f"🛠️ Used tool {bg_tool.tool_name}", "status": f"{bg_tool.status.value}"},
+                    },
+                ),
+            )
+
+            if bg_tool.tool_name == "camera" and "b64_im" in tool_result:
+                # use raw base64, don't json.dumps (which adds quotes)
+                b64_im = tool_result["b64_im"]
+                if not isinstance(b64_im, str):
+                    logger.warning("Unexpected type for b64_im: %s", type(b64_im))
+                    b64_im = str(b64_im)
+                await self.connection.conversation.item.create(
+                    item={
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_image",
+                                "image_url": f"data:image/jpeg;base64,{b64_im}",
+                            },
+                        ],
+                    },
+                )
+                logger.info("Added camera image to conversation")
+
+                if self.deps.camera_worker is not None:
+                    np_img = self.deps.camera_worker.get_latest_frame()
+                    if np_img is not None:
+                        # Camera frames are BGR from OpenCV; convert so Gradio displays correct colors.
+                        rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
+                    else:
+                        rgb_frame = None
+                    img = gr.Image(value=rgb_frame)
+
+                    await self.output_queue.put(
+                        AdditionalOutputs(
+                            {
+                                "role": "assistant",
+                                "content": img,
+                            },
+                        ),
+                    )
+
+            # If this tool call was triggered by an idle signal, don't make the robot speak.
+            # For other tool calls, let the robot reply out loud.
+            if not bg_tool.is_idle_tool_call:
+                await self.connection.response.create(
+                    response={
+                        "instructions": "Use the tool result just returned and answer concisely in speech.",
+                    },
+                )
+
+            # Re-synchronize the head wobble after a tool call that may have taken some time
+            if self.deps.head_wobbler is not None:
+                self.deps.head_wobbler.reset()
+
+        except ConnectionClosedError:
+            logger.warning("Connection closed while sending tool result")
+            self.connection = None
+
     async def _run_realtime_session(self) -> None:
         """Establish and manage a single realtime session."""
         async with self.client.realtime.connect(model=config.MODEL_NAME) as conn:
@@ -301,11 +411,15 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             logger.info("Realtime session updated successfully")
 
             # Manage event received from the openai server
-            self.connection = conn
+            self.connection: AsyncRealtimeConnection = conn # type: ignore[no-redef]
             try:
                 self._connected_event.set()
             except Exception:
                 pass
+
+            # Start the background tool manager
+            self.tool_manager.start_up(tool_callbacks=[self._handle_tool_result])
+
             async for event in self.connection:
                 logger.debug(f"OpenAI event: {event.type}")
                 if event.type == "input_audio_buffer.speech_started":
@@ -329,10 +443,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     logger.debug("response completed")
 
                 if event.type == "response.created":
-                    logger.debug("Response created")
+                    logger.debug("Response created (active)")
 
                 if event.type == "response.done":
-                    # Doesn't mean the audio is done playing
                     logger.debug("Response done")
 
 
@@ -403,92 +516,52 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 if event.type == "response.function_call_arguments.done":
                     tool_name = getattr(event, "name", None)
                     args_json_str = getattr(event, "arguments", None)
-                    call_id = getattr(event, "call_id", None)
+                    call_id: str = str(getattr(event, "call_id", uuid.uuid4()))
+
+                    logger.info(
+                        "Tool call received — tool_name=%r, call_id=%s, is_idle=%s, args=%s",
+                        tool_name, call_id, self.is_idle_tool_call, args_json_str,
+                    )
 
                     if not isinstance(tool_name, str) or not isinstance(args_json_str, str):
-                        logger.error("Invalid tool call: tool_name=%s, args=%s", tool_name, args_json_str)
+                        logger.error(
+                            "Invalid tool call: tool_name=%s (type=%s), args=%s (type=%s), call_id=%s",
+                            tool_name, type(tool_name).__name__,
+                            args_json_str, type(args_json_str).__name__,
+                            call_id,
+                        )
                         continue
 
-                    try:
-                        tool_result = await dispatch_tool_call(tool_name, args_json_str, self.deps)
-                        logger.debug("Tool '%s' executed successfully", tool_name)
-                        logger.debug("Tool result: %s", tool_result)
-                    except Exception as e:
-                        logger.error("Tool '%s' failed", tool_name)
-                        tool_result = {"error": str(e)}
-
-                    # send the tool result back
-                    if isinstance(call_id, str):
-                        await self.connection.conversation.item.create(
-                            item={
-                                "type": "function_call_output",
-                                "call_id": call_id,
-                                "output": json.dumps(tool_result),
-                            },
-                        )
+                    bg_tool = await self.tool_manager.start_tool(
+                        call_id=call_id,
+                        tool_call_routine=ToolCallRoutine(
+                            tool_name=tool_name,
+                            args_json_str=args_json_str,
+                            deps=self.deps,
+                        ),
+                        is_idle_tool_call=self.is_idle_tool_call,
+                    )
 
                     await self.output_queue.put(
                         AdditionalOutputs(
                             {
                                 "role": "assistant",
-                                "content": json.dumps(tool_result),
-                                "metadata": {"title": f"🛠️ Used tool {tool_name}", "status": "done"},
+                                "content": f"🛠️ Used tool {tool_name} with args {args_json_str}. The tool is now running. Tool ID: {bg_tool.tool_id}",
                             },
                         ),
                     )
 
-                    if tool_name == "camera" and "b64_im" in tool_result:
-                        # use raw base64, don't json.dumps (which adds quotes)
-                        b64_im = tool_result["b64_im"]
-                        if not isinstance(b64_im, str):
-                            logger.warning("Unexpected type for b64_im: %s", type(b64_im))
-                            b64_im = str(b64_im)
-                        await self.connection.conversation.item.create(
-                            item={
-                                "type": "message",
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "input_image",
-                                        "image_url": f"data:image/jpeg;base64,{b64_im}",
-                                    },
-                                ],
-                            },
-                        )
-                        logger.info("Added camera image to conversation")
-
-                        if self.deps.camera_worker is not None:
-                            np_img = self.deps.camera_worker.get_latest_frame()
-                            if np_img is not None:
-                                # Camera frames are BGR from OpenCV; convert so Gradio displays correct colors.
-                                rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
-                            else:
-                                rgb_frame = None
-                            img = gr.Image(value=rgb_frame)
-
-                            await self.output_queue.put(
-                                AdditionalOutputs(
-                                    {
-                                        "role": "assistant",
-                                        "content": img,
-                                    },
-                                ),
-                            )
-
-                    # if this tool call was triggered by an idle signal, don't make the robot speak
-                    # for other tool calls, let the robot reply out loud
                     if self.is_idle_tool_call:
                         self.is_idle_tool_call = False
                     else:
                         await self.connection.response.create(
                             response={
-                                "instructions": "Use the tool result just returned and answer concisely in speech.",
+                                "instructions": "Notify what the tool has been running giving meaningful information about the task",
                             },
                         )
 
-                    # re synchronize the head wobble after a tool call that may have taken some time
-                    if self.deps.head_wobbler is not None:
-                        self.deps.head_wobbler.reset()
+
+                    logger.info("Started background tool: %s (id=%s, call_id=%s)", tool_name, bg_tool.tool_id, call_id)
 
                 # server error
                 if event.type == "error":
@@ -499,10 +572,14 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     logger.error("Realtime error [%s]: %s (raw=%s)", code, msg, err)
 
                     # Only show user-facing errors, not internal state errors
-                    if code not in ("input_audio_buffer_commit_empty", "conversation_already_has_active_response"):
+                    if code not in ("input_audio_buffer_commit_empty",):
                         await self.output_queue.put(
                             AdditionalOutputs({"role": "assistant", "content": f"[error] {msg}"})
                         )
+
+            # Connection closed
+            # Stop background tool manager tasks (listener + cleanup)
+            await self.tool_manager.shutdown()
 
     # Microphone receive
     async def receive(self, frame: Tuple[int, NDArray[np.int16]]) -> None:
@@ -566,6 +643,10 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
     async def shutdown(self) -> None:
         """Shutdown the handler."""
         self._shutdown_requested = True
+
+        # Stop background tool manager tasks (listener + cleanup)
+        await self.tool_manager.shutdown()
+
         # Cancel any pending debounce task
         if self.partial_transcript_task and not self.partial_transcript_task.done():
             self.partial_transcript_task.cancel()
