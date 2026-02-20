@@ -7,8 +7,11 @@ from unittest.mock import MagicMock
 import pytest
 
 import reachy_mini_conversation_app.openai_realtime as rt_mod
+import reachy_mini_conversation_app.tools.background_tool_manager as btm_mod
 from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler, _compute_response_cost
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
+from reachy_mini_conversation_app.tools.background_tool_manager import ToolCallRoutine
+import random
 
 
 def _build_handler(loop: asyncio.AbstractEventLoop) -> OpenaiRealtimeHandler:
@@ -45,12 +48,6 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
     # Use a local Exception as the module's ConnectionClosedError to avoid ws dependency
     FakeCCE = type("FakeCCE", (Exception,), {})
     monkeypatch.setattr(rt_mod, "ConnectionClosedError", FakeCCE)
-
-    # Make asyncio.sleep near-instant but still yield to the event loop,
-    # otherwise BackgroundToolManager's _cleanup loop busy-spins and starves all other coroutines.
-    _real_sleep = asyncio.sleep
-    async def _fast_sleep(*_a: Any, **_kw: Any) -> None: await _real_sleep(0)
-    monkeypatch.setattr(asyncio, "sleep", _fast_sleep, raising=False)
 
     attempt_counter = {"n": 0}
 
@@ -176,3 +173,281 @@ def test_compute_response_cost(usage_kwargs: dict[str, Any], expect_positive: bo
         assert cost > 0
     else:
         assert cost == 0.0
+
+
+# ---- Stress test: response.create rejection + retry ----
+
+
+@pytest.mark.asyncio
+async def test_response_sender_retries_on_active_response_rejection(monkeypatch: Any, caplog: Any) -> None:
+    """Stress test: response.create rejection + retry via real event processing.
+
+    Tool results (is_idle_tool_call=False) queue response.create calls via
+    _safe_response_create.  When the server rejects some with
+    ``conversation_already_has_active_response``, the error event flows through
+    the event handler and _response_sender_loop retries the rejected request.
+
+    The full _run_realtime_session event loop runs so that the error-handling
+    code path (setting _last_response_rejected) is exercised by real event
+    processing, not mocked out.
+    """
+    caplog.set_level(logging.DEBUG)
+
+    FakeCCE = type("FakeCCE", (Exception,), {})
+    monkeypatch.setattr(rt_mod, "ConnectionClosedError", FakeCCE)
+    monkeypatch.setattr(rt_mod, "get_session_instructions", lambda: "test")
+    monkeypatch.setattr(rt_mod, "get_session_voice", lambda: "alloy")
+    monkeypatch.setattr(rt_mod, "get_tool_specs", lambda: [])
+
+    N_TOOL_RESULTS = 500
+    REJECT_CALL_NUMBERS = {1, 3, 5, 10, 25, 50, 75, 100, 150, 200, 300, 400, 499}
+    EXPECTED_TOTAL_CALLS = N_TOOL_RESULTS + len(REJECT_CALL_NUMBERS)
+
+    event_queue: asyncio.Queue[Any] = asyncio.Queue()
+    response_create_log: list[tuple[int, dict[str, Any]]] = []
+    handler_ref: list[Any] = []
+
+    # ---- Fake event / error objects mirroring the OpenAI SDK shapes ----
+
+    class FakeError:
+        def __init__(self, message: str, code: str) -> None:
+            self.message = message
+            self.code = code
+            self.type = "invalid_request_error"
+            self.event_id = None
+            self.param = None
+
+        def __repr__(self) -> str:
+            return (
+                f"RealtimeError(message='{self.message}', type='{self.type}', "
+                f"code='{self.code}', event_id=None, param=None)"
+            )
+
+    class FakeEvent:
+        def __init__(self, etype: str, **kwargs: Any) -> None:
+            self.type = etype
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    # ---- Fake connection components ----
+
+    class FakeResponseAPI:
+        """Mimics connection.response.
+
+        Pushes server events into the shared event_queue so they flow
+        through the real event-handling code.  Also guards the serialization
+        invariant: every create() must arrive when no response is active.
+        """
+
+        def __init__(self) -> None:
+            self._call_count = 0
+            self._serialization_violations: list[int] = []
+
+        async def create(self, **kwargs: Any) -> None:
+            self._call_count += 1
+            n = self._call_count
+            response_create_log.append((n, kwargs))
+
+            h = handler_ref[0]
+
+            # Real backend rejects when a response is already active.
+            if not h._response_done_event.is_set():
+                self._serialization_violations.append(n)
+                await event_queue.put(
+                    FakeEvent(
+                        "error",
+                        error=FakeError(
+                            message=(
+                                f"Conversation already has an active response in "
+                                f"progress: resp_fake{n}. Wait until the response "
+                                f"is finished before creating a new one."
+                            ),
+                            code="conversation_already_has_active_response",
+                        ),
+                    )
+                )
+                # The already-active response eventually finishes.
+                await event_queue.put(
+                    FakeEvent("response.done", response=MagicMock())
+                )
+                await asyncio.sleep(0)
+                return
+
+            # Intentional rejections (simulating a race where another
+            # response sneaks in right after our check).
+            if n in REJECT_CALL_NUMBERS:
+                await event_queue.put(
+                    FakeEvent(
+                        "error",
+                        error=FakeError(
+                            message=(
+                                f"Conversation already has an active response in "
+                                f"progress: resp_fake{n}. Wait until the response "
+                                f"is finished before creating a new one."
+                            ),
+                            code="conversation_already_has_active_response",
+                        ),
+                    )
+                )
+            else:
+                # Accepted: server sends response.created → the real handler
+                # at line 506-507 clears _response_done_event.
+                await event_queue.put(FakeEvent("response.created"))
+
+            # Either way the active response eventually finishes → the real
+            # handler at line 510-512 sets _response_done_event.
+            await event_queue.put(
+                FakeEvent("response.done", response=MagicMock())
+            )
+
+            # Yield so the event loop processes the queued events through
+            # the real _run_realtime_session handler (clear/set the event,
+            # set _last_response_rejected on errors, etc.).
+            await asyncio.sleep(0)
+
+        async def cancel(self, **_kw: Any) -> None:
+            pass
+
+    fake_response_api = FakeResponseAPI()
+
+    class FakeSession:
+        async def update(self, **_kw: Any) -> None:
+            pass
+
+    class FakeInputAudioBuffer:
+        async def append(self, **_kw: Any) -> None:
+            pass
+
+    class FakeItem:
+        async def create(self, **_kw: Any) -> None:
+            pass
+
+    class FakeConversation:
+        item = FakeItem()
+
+    class FakeConn:
+        session = FakeSession()
+        input_audio_buffer = FakeInputAudioBuffer()
+        conversation = FakeConversation()
+        response = fake_response_api
+
+        async def __aenter__(self) -> "FakeConn":
+            return self
+
+        async def __aexit__(self, *_a: Any) -> bool:
+            return False
+
+        async def close(self) -> None:
+            pass
+
+        def __aiter__(self) -> "FakeConn":
+            return self
+
+        async def __anext__(self) -> FakeEvent:
+            event = await event_queue.get()
+            if event is None:  # sentinel → end iteration
+                raise StopAsyncIteration
+            return event
+
+    class FakeRealtime:
+        def connect(self, **_kw: Any) -> FakeConn:
+            return FakeConn()
+
+    class FakeClient:
+        def __init__(self, **_kw: Any) -> None:
+            self.realtime = FakeRealtime()
+
+    monkeypatch.setattr(rt_mod, "AsyncOpenAI", FakeClient)
+
+    # Patch dispatch_tool_call so tools complete instantly with a result.
+    async def _fake_dispatch(
+        tool_name: str, args_json: str, deps: Any, **_kw: Any
+    ) -> dict[str, Any]:
+        await asyncio.sleep(random.uniform(0.3, 0.5))
+        return {"ok": True, "tool": tool_name}
+
+    monkeypatch.setattr(btm_mod, "dispatch_tool_call", _fake_dispatch)
+
+    # ---- Build handler and start the full realtime session ----
+
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = rt_mod.OpenaiRealtimeHandler(deps)
+    handler_ref.append(handler)
+
+    handler_task = asyncio.create_task(handler.start_up())
+    await asyncio.wait_for(handler._connected_event.wait(), timeout=2.0)
+
+    # ---- Start tools via the real BackgroundToolManager pipeline ----
+    # start_tool → _run_tool → notification queue → listener → _handle_tool_result
+
+    for i in range(N_TOOL_RESULTS):
+        await handler.tool_manager.start_tool(
+            call_id=f"call_{i}",
+            tool_call_routine=ToolCallRoutine(
+                tool_name="test_tool",
+                args_json_str=f'{{"index": {i}}}',
+                deps=deps,
+            ),
+            is_idle_tool_call=False,
+        )
+
+    # Yield so spawned tool tasks, the listener, and the sender can drain.
+    await asyncio.sleep(1)
+
+    # Poll until the sender has processed all requests (including retries).
+    for _ in range(5000):
+        if fake_response_api._call_count >= EXPECTED_TOTAL_CALLS:
+            break
+        await asyncio.sleep(0)
+
+    # ---- Tear down ----
+
+    await event_queue.put(None)  # sentinel stops event iteration
+    try:
+        await asyncio.wait_for(handler_task, timeout=2.0)
+    except asyncio.TimeoutError:
+        handler_task.cancel()
+        try:
+            await handler_task
+        except asyncio.CancelledError:
+            pass
+
+    await handler.shutdown()
+
+    # ---- Assertions ----
+
+    # Serialization: every response.create() must have been called only when
+    # no response was in-flight (_response_done_event was set).  Any violation
+    # means the sender fired a new request before the previous one finished.
+    assert fake_response_api._serialization_violations == [], (
+        f"response.create() was called while a response was still active on "
+        f"call(s) {fake_response_api._serialization_violations}"
+    )
+
+    # Total response.create() calls = tool results + retries for rejected ones
+    assert fake_response_api._call_count == EXPECTED_TOTAL_CALLS, (
+        f"Expected {EXPECTED_TOTAL_CALLS} response.create calls "
+        f"({N_TOOL_RESULTS} results + {len(REJECT_CALL_NUMBERS)} retries), "
+        f"got {fake_response_api._call_count}"
+    )
+
+    # The error event handler must have set _last_response_rejected for each
+    # rejection (the log message comes from the event handler code path).
+    rejection_logs = [
+        r for r in caplog.records
+        if "worker will retry" in getattr(r, "msg", "")
+    ]
+    assert len(rejection_logs) == len(REJECT_CALL_NUMBERS), (
+        f"Expected {len(REJECT_CALL_NUMBERS)} rejection entries from error handler, "
+        f"got {len(rejection_logs)}"
+    )
+
+    # The sender loop must have retried after each rejection.
+    retry_logs = [
+        r for r in caplog.records
+        if "retrying after active response finished" in getattr(r, "msg", "")
+    ]
+    assert len(retry_logs) == len(REJECT_CALL_NUMBERS), (
+        f"Expected {len(REJECT_CALL_NUMBERS)} retry entries from sender loop, "
+        f"got {len(retry_logs)}"
+    )

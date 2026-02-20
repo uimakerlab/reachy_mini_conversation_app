@@ -281,6 +281,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
     async def _response_sender_loop(self) -> None:
         """Dedicated worker that sends ``response.create()`` calls serially.
 
+        This logic was designed to comply with the response.create() docstring specification for event ordering:
+        https://github.com/openai/openai-python/blob/3e0c05b84a2056870abf3bd6a5e7849020209cc3/src/openai/resources/realtime/realtime.py#L649C1-L651C30
+
         For each queued request the worker:
         1. Waits until no response is active (_response_done_event).
         2. Sends response.create().
