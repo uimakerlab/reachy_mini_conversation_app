@@ -14,6 +14,7 @@ from fastrtc import Stream
 from gradio.utils import get_space
 
 from reachy_mini import ReachyMini, ReachyMiniApp
+from reachy_mini_conversation_app.config import config
 from reachy_mini_conversation_app.utils import (
     parse_args,
     setup_logger,
@@ -107,12 +108,23 @@ def run(
 
     head_wobbler = HeadWobbler(set_speech_offsets=movement_manager.set_speech_offsets)
 
+    # Memory system
+    memory_manager = None
+    if config.MEMORY_ENABLED:
+        from reachy_mini_conversation_app.memory import MemoryManager
+
+        memory_manager = MemoryManager(data_dir=config.DATA_DIRECTORY)
+        logger.info("Memory enabled, data_dir=%s", config.DATA_DIRECTORY)
+    else:
+        logger.info("Memory disabled (REACHY_MINI_MEMORY_ENABLED=false)")
+
     deps = ToolDependencies(
         reachy_mini=robot,
         movement_manager=movement_manager,
         camera_worker=camera_worker,
         vision_manager=vision_manager,
         head_wobbler=head_wobbler,
+        memory_manager=memory_manager,
     )
     current_file_path = os.path.dirname(os.path.abspath(__file__))
     logger.debug(f"Current file absolute path: {current_file_path}")

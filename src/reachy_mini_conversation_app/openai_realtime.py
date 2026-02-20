@@ -131,7 +131,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             )
 
             try:
-                instructions = get_session_instructions()
+                instructions = get_session_instructions(memory_manager=self.deps.memory_manager)
                 voice = get_session_voice()
             except BaseException as e:  # catch SystemExit from prompt loader without crashing
                 logger.error("Failed to resolve personality content: %s", e)
@@ -283,6 +283,14 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             logger.error("Tool '%s' (id=%s) result handling failed: %s: %s", bg_tool.tool_name, bg_tool.id, type(e).__name__, e)
             tool_result = {"error": str(e)}
 
+        # Log tool call to conversation logs
+        if self.deps.memory_manager is not None:
+            try:
+                args = json.loads(bg_tool.args_json_str) if bg_tool.args_json_str else {}
+                self.deps.memory_manager.log_tool_call(bg_tool.tool_name, args=args, result=tool_result)
+            except Exception:
+                pass
+
         # Connection may have closed while tool was running
         if not self.connection:
             logger.warning("Connection closed during tool '%s' (id=%s) execution; cannot send result back", bg_tool.tool_name, bg_tool.id)
@@ -371,7 +379,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 await conn.session.update(
                     session={
                         "type": "realtime",
-                        "instructions": get_session_instructions(),
+                        "instructions": get_session_instructions(memory_manager=self.deps.memory_manager),
                         "audio": {
                             "input": {
                                 "format": {
@@ -416,6 +424,10 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 self._connected_event.set()
             except Exception:
                 pass
+
+            # Notify memory manager of new session
+            if self.deps.memory_manager is not None:
+                self.deps.memory_manager.new_session()
 
             # Start the background tool manager
             self.tool_manager.start_up(tool_callbacks=[self._handle_tool_result])
@@ -493,11 +505,15 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             pass
 
                     await self.output_queue.put(AdditionalOutputs({"role": "user", "content": event.transcript}))
+                    if self.deps.memory_manager is not None:
+                        self.deps.memory_manager.log_turn("user", event.transcript)
 
                 # Handle assistant transcription
                 if event.type in ("response.audio_transcript.done", "response.output_audio_transcript.done"):
                     logger.debug(f"Assistant transcript: {event.transcript}")
                     await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": event.transcript}))
+                    if self.deps.memory_manager is not None:
+                        self.deps.memory_manager.log_turn("assistant", event.transcript)
 
                 # Handle audio delta
                 if event.type in ("response.audio.delta", "response.output_audio.delta"):

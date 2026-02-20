@@ -1,6 +1,7 @@
 import re
 import sys
 import logging
+from typing import Any
 from pathlib import Path
 
 from reachy_mini_conversation_app.config import DEFAULT_PROFILES_DIRECTORY, config
@@ -58,8 +59,14 @@ def _expand_prompt_includes(content: str) -> str:
     return '\n'.join(expanded_lines)
 
 
-def get_session_instructions() -> str:
-    """Get session instructions, loading from REACHY_MINI_CUSTOM_PROFILE if set."""
+def get_session_instructions(memory_manager: "Any | None" = None) -> str:
+    """Get session instructions, loading from REACHY_MINI_CUSTOM_PROFILE if set.
+
+    Args:
+        memory_manager: Optional MemoryManager instance. When provided and active
+            memory is non-empty, the memory block is appended to the instructions.
+
+    """
     profile = config.REACHY_MINI_CUSTOM_PROFILE
     if not profile:
         logger.info(f"Loading default prompt from {PROMPTS_LIBRARY_DIRECTORY / 'default_prompt.txt'}")
@@ -81,6 +88,16 @@ def get_session_instructions() -> str:
             if instructions:
                 # Expand [<name>] placeholders with content from prompts library
                 expanded_instructions = _expand_prompt_includes(instructions)
+
+                # Append persistent memory block if available
+                if memory_manager is not None:
+                    try:
+                        memory_block = memory_manager.get_memory_block()
+                        if memory_block:
+                            expanded_instructions += memory_block
+                    except Exception as e:
+                        logger.warning("Failed to inject memory block: %s", e)
+
                 return expanded_instructions
             logger.error(f"Profile '{profile}' has empty {INSTRUCTIONS_FILENAME}")
             sys.exit(1)
