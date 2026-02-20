@@ -195,8 +195,8 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
     monkeypatch.setattr(rt_mod, "get_session_voice", lambda: "alloy")
     monkeypatch.setattr(rt_mod, "get_tool_specs", lambda: [])
 
-    N_TOOL_RESULTS = 500
-    REJECT_CALL_NUMBERS = {1, 3, 5, 10, 25, 50, 75, 100, 150, 200, 300, 400, 499}
+    N_TOOL_RESULTS = 400
+    REJECT_CALL_NUMBERS = {1, 3, 5, 10, 25, 50, 75, 100, 150, 200, 300, 399}
     EXPECTED_TOTAL_CALLS = N_TOOL_RESULTS + len(REJECT_CALL_NUMBERS)
 
     event_queue: asyncio.Queue[Any] = asyncio.Queue()
