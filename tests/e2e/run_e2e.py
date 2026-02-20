@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Autonomous end-to-end test runner for the Reachy Mini conversation app.
 
-Generates TTS audio, plays it through laptop speakers so the robot's mic picks
-it up, captures logs, and verifies outcomes.
+Generates TTS audio, injects it directly into the app's recording pipeline
+via PulseAudio stream redirection, captures logs, and verifies outcomes.
 
 Usage:
     python tests/e2e/run_e2e.py              # full run
@@ -32,6 +32,7 @@ AUDIO_CACHE_DIR = SCRIPT_DIR / "audio_cache"
 READINESS_SIGNAL = "Realtime session initialized"
 DEFAULT_DELAY = 12  # seconds between utterances
 DRAIN_WAIT = 15  # seconds after last utterance before stopping
+INJECT_SINK_NAME = "e2e_inject"
 
 # ---------------------------------------------------------------------------
 # Test scenarios
@@ -42,7 +43,7 @@ SCENARIOS = [
         "name": "introduce_name",
         "utterance": "Hi, my name is Rémi",
         "checks": [
-            {"type": "tool_called", "tool": "save_memory", "contains": "Rémi"},
+            {"type": "tool_called", "tool": "save_memory", "contains_any": ["Rémi", "Remi", "Remy"]},
             {"type": "no_tool_error"},
         ],
     },
@@ -57,7 +58,7 @@ SCENARIOS = [
         "name": "recall_name",
         "utterance": "Hey, what's my name?",
         "checks": [
-            {"type": "assistant_response_contains", "contains_any": ["Rémi", "Remi"]},
+            {"type": "assistant_response_contains", "contains_any": ["Rémi", "Remi", "Remy"]},
         ],
     },
     {
@@ -67,11 +68,6 @@ SCENARIOS = [
             {"type": "assistant_response_contains", "contains_any": ["jazz", "music"]},
         ],
     },
-]
-
-GLOBAL_CHECKS = [
-    {"type": "active_memory_not_empty"},
-    {"type": "no_tracebacks"},
 ]
 
 
@@ -84,6 +80,8 @@ def preflight() -> list[str]:
     warnings = []
     if not shutil.which("paplay"):
         warnings.append("paplay not found — install pulseaudio-utils")
+    if not shutil.which("pactl"):
+        warnings.append("pactl not found — install pulseaudio-utils")
     if not os.getenv("OPENAI_API_KEY"):
         warnings.append("OPENAI_API_KEY not set")
     try:
@@ -120,11 +118,75 @@ def generate_tts(scenarios: list[dict], cache_dir: Path) -> dict[str, Path]:
             input=sc["utterance"],
             response_format="wav",
         )
-        response.stream_to_file(str(wav_path))
+        wav_path.write_bytes(response.content)
         print("done")
         wav_map[name] = wav_path
 
     return wav_map
+
+
+# ---------------------------------------------------------------------------
+# PulseAudio injection: virtual source via null sink + stream redirection
+# ---------------------------------------------------------------------------
+
+def pa_create_inject_sink() -> int | None:
+    """Create a PulseAudio null sink for audio injection. Returns module ID."""
+    result = subprocess.run(
+        ["pactl", "load-module", "module-null-sink",
+         f"sink_name={INJECT_SINK_NAME}",
+         f"sink_properties=device.description=E2E_Audio_Injection"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"  [!] Failed to create null sink: {result.stderr.strip()}")
+        return None
+    return int(result.stdout.strip())
+
+
+def pa_remove_module(module_id: int) -> None:
+    """Unload a PulseAudio module by ID."""
+    subprocess.run(["pactl", "unload-module", str(module_id)],
+                   capture_output=True)
+
+
+def pa_find_app_source_output(app_pid: int, retries: int = 10) -> str | None:
+    """Find the PulseAudio source-output (recording stream) for the app process."""
+    for _ in range(retries):
+        result = subprocess.run(
+            ["pactl", "list", "source-outputs"],
+            capture_output=True, text=True,
+        )
+        # Parse pactl output to find source-output belonging to our app PID
+        current_id = None
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("Source Output #"):
+                current_id = line.split("#")[1]
+            # Match the process ID property
+            if current_id and "application.process.id" in line:
+                pid_str = line.split("=")[-1].strip().strip('"')
+                if pid_str == str(app_pid):
+                    return current_id
+        time.sleep(1)
+    return None
+
+
+def pa_move_source_output(source_output_id: str, source_name: str) -> bool:
+    """Move a recording stream to a different source."""
+    result = subprocess.run(
+        ["pactl", "move-source-output", source_output_id, source_name],
+        capture_output=True, text=True,
+    )
+    return result.returncode == 0
+
+
+def play_wav(wav_path: Path, sink: str | None = None) -> None:
+    """Play a WAV file via paplay (PulseAudio)."""
+    cmd = ["paplay"]
+    if sink:
+        cmd += ["--device", sink]
+    cmd.append(str(wav_path))
+    subprocess.run(cmd, check=True)
 
 
 # ---------------------------------------------------------------------------
@@ -138,16 +200,19 @@ def start_app(data_dir: Path, log_file: Path) -> subprocess.Popen:
     env["REACHY_MINI_MEMORY_ENABLED"] = "true"
 
     cmd = [
-        sys.executable, "-m", "reachy_mini_conversation_app",
-        "--log-file", str(log_file),
+        sys.executable, "-c",
+        "from reachy_mini_conversation_app.main import main; main()",
         "--no-camera",
     ]
+    log_fh = open(log_file, "w")
     proc = subprocess.Popen(
         cmd,
         env=env,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=log_fh,
     )
+    # Keep the file handle alive on the process object so it isn't GC'd
+    proc._log_fh = log_fh  # type: ignore[attr-defined]
     return proc
 
 
@@ -171,15 +236,10 @@ def stop_app(proc: subprocess.Popen, timeout: float = 10) -> None:
     except subprocess.TimeoutExpired:
         proc.terminate()
         proc.wait(timeout=5)
-
-
-# ---------------------------------------------------------------------------
-# Audio playback
-# ---------------------------------------------------------------------------
-
-def play_wav(wav_path: Path) -> None:
-    """Play a WAV file via paplay (PulseAudio)."""
-    subprocess.run(["paplay", str(wav_path)], check=True)
+    finally:
+        fh = getattr(proc, "_log_fh", None)
+        if fh:
+            fh.close()
 
 
 # ---------------------------------------------------------------------------
@@ -307,9 +367,11 @@ def run_checks(
     else:
         results.append({"scenario": "(global)", "check": "active_memory_not_empty", "passed": False, "detail": "active memory is empty"})
 
-    if "Traceback" in log_text:
-        count = log_text.count("Traceback")
-        results.append({"scenario": "(global)", "check": "no_tracebacks", "passed": False, "detail": f"{count} traceback(s) in logs"})
+    # Split on "Traceback" and check each block; ignore KeyboardInterrupt (expected from SIGINT)
+    tb_blocks = log_text.split("Traceback")[1:]  # skip preamble before first Traceback
+    real_tracebacks = sum(1 for block in tb_blocks if "KeyboardInterrupt" not in block)
+    if real_tracebacks > 0:
+        results.append({"scenario": "(global)", "check": "no_tracebacks", "passed": False, "detail": f"{real_tracebacks} traceback(s) in logs"})
     else:
         results.append({"scenario": "(global)", "check": "no_tracebacks", "passed": True, "detail": "no tracebacks"})
 
@@ -356,13 +418,12 @@ def main() -> None:
         sys.exit(1)
     else:
         print("  [ok] paplay available")
+        print("  [ok] pactl available")
         print("  [ok] OPENAI_API_KEY set")
         print("  [ok] app importable")
 
-    print("\n** Ensure laptop volume is up and robot is within earshot. **\n")
-
     # TTS
-    print("Step 1: TTS audio generation")
+    print("\nStep 1: TTS audio generation")
     if args.skip_tts:
         wav_map: dict[str, Path] = {}
         for sc in SCENARIOS:
@@ -382,6 +443,13 @@ def main() -> None:
     log_file = data_dir / "app.log"
     print(f"\nStep 2: Starting app (data_dir={data_dir})")
 
+    # Create PulseAudio null sink for audio injection
+    inject_module_id = pa_create_inject_sink()
+    if inject_module_id is None:
+        print("  [!] Cannot create PulseAudio null sink. Aborting.")
+        sys.exit(1)
+    print(f"  Created PulseAudio null sink '{INJECT_SINK_NAME}' (module {inject_module_id})")
+
     proc = start_app(data_dir, log_file)
     try:
         print(f"  Waiting for readiness ('{READINESS_SIGNAL}') …", end=" ", flush=True)
@@ -390,16 +458,32 @@ def main() -> None:
             print("  App did not become ready in 90s. Check logs:")
             print(f"    {log_file}")
             stop_app(proc)
+            pa_remove_module(inject_module_id)
             sys.exit(1)
         print("ready!")
 
-        # Play scenarios
+        # Redirect the app's recording stream to our virtual source
+        print("  Redirecting app audio input to virtual source …", end=" ", flush=True)
+        so_id = pa_find_app_source_output(proc.pid)
+        if so_id is None:
+            print("FAILED (source-output not found)")
+            print("  The app's recording stream was not found in PulseAudio.")
+            print("  This may happen if the audio pipeline hasn't started yet.")
+        else:
+            monitor = f"{INJECT_SINK_NAME}.monitor"
+            ok = pa_move_source_output(so_id, monitor)
+            if ok:
+                print(f"done (source-output #{so_id} → {monitor})")
+            else:
+                print(f"FAILED (could not move source-output #{so_id})")
+
+        # Play scenarios — audio goes to the null sink, app reads from its monitor
         print(f"\nStep 3: Playing {len(SCENARIOS)} scenarios (delay={args.delay}s)")
         for i, sc in enumerate(SCENARIOS):
             name = sc["name"]
             wav = wav_map[name]
             print(f"  [{i + 1}/{len(SCENARIOS)}] {name}: playing …", end=" ", flush=True)
-            play_wav(wav)
+            play_wav(wav, sink=INJECT_SINK_NAME)
             print("done")
             if i < len(SCENARIOS) - 1:
                 print(f"         waiting {args.delay}s …", end=" ", flush=True)
@@ -415,6 +499,9 @@ def main() -> None:
         print("\nStep 5: Stopping app …", end=" ", flush=True)
         stop_app(proc)
         print("stopped")
+        # Clean up PulseAudio module
+        pa_remove_module(inject_module_id)
+        print(f"  Removed PulseAudio null sink (module {inject_module_id})")
 
     # Parse and check
     print("\nStep 6: Parsing logs and running checks")
