@@ -56,6 +56,13 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
         # Audio buffering for VAD (requires 512 samples at 16kHz)
         self.audio_buffer = np.array([], dtype=np.int16)
         self.vad_chunk_size = 512  # VAD expects exactly 512 samples at 16kHz
+        self.min_send_chunks = 4   # Minimum VAD chunks to accumulate before sending (4×32ms = 128ms)
+
+        # Playback buffering to handle network jitter
+        self.playback_buffer = np.array([], dtype=np.int16)
+        self.min_playback_buffer_ms = 300  # Buffer 300ms before starting playback
+        self.playback_chunk_ms = 100  # Send 100ms chunks for smoother playback
+        self.is_buffering = True  # Start in buffering mode
 
     def copy(self) -> "SpeechToSpeechHandler":
         """Create a copy of the handler."""
@@ -105,6 +112,15 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
                 else:
                     raise RuntimeError(f"Could not connect to speech-to-speech server after {max_attempts} attempts")
 
+    async def _flush_playback_buffer(self) -> None:
+        """Flush any remaining audio in the playback buffer."""
+        if len(self.playback_buffer) > 0:
+            logger.info(f"Flushing remaining {len(self.playback_buffer)} samples ({len(self.playback_buffer)*1000/FASTRTC_SAMPLE_RATE:.0f}ms) from playback buffer")
+            chunk_2d = self.playback_buffer.reshape(1, -1)
+            await self.output_queue.put((FASTRTC_SAMPLE_RATE, chunk_2d))
+            self.playback_buffer = np.array([], dtype=np.int16)
+            self.is_buffering = True
+
     async def _receive_loop(self) -> None:
         """Background task to receive audio and text messages from server."""
         logger.info("Starting receive loop")
@@ -119,20 +135,38 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
                     num_samples_24k = int(len(audio_16k) * FASTRTC_SAMPLE_RATE / SPEECH_TO_SPEECH_SAMPLE_RATE)
                     audio_24k = resample(audio_16k, num_samples_24k).astype(np.int16)
 
-                    # Feed audio to head wobbler (expects base64-encoded string at 24kHz)
-                    if self.deps.head_wobbler is not None:
-                        import base64
-                        audio_24k_flat = audio_24k.flatten()
-                        audio_b64 = base64.b64encode(audio_24k_flat.tobytes()).decode('utf-8')
-                        self.deps.head_wobbler.feed(audio_b64)
+                    # Add to playback buffer for smoother playback
+                    self.playback_buffer = np.concatenate([self.playback_buffer, audio_24k])
 
-                    # Add channel dimension for FastRTC (mono -> 1xN)
-                    audio_24k = audio_24k.reshape(1, -1)
+                    # Calculate buffer thresholds
+                    min_samples = int(self.min_playback_buffer_ms * FASTRTC_SAMPLE_RATE / 1000)
+                    chunk_samples = int(self.playback_chunk_ms * FASTRTC_SAMPLE_RATE / 1000)
 
-                    # Queue audio for playback
-                    logger.debug(f"Queueing audio: {len(audio_24k[0])} samples")
-                    await self.output_queue.put((FASTRTC_SAMPLE_RATE, audio_24k))
-                    logger.debug(f"Audio queued successfully")
+                    # Initial buffering: wait until we have enough audio
+                    if self.is_buffering:
+                        if len(self.playback_buffer) >= min_samples:
+                            logger.info(f"Playback buffer filled ({len(self.playback_buffer)} samples, {len(self.playback_buffer)*1000/FASTRTC_SAMPLE_RATE:.0f}ms), starting playback")
+                            self.is_buffering = False
+                        else:
+                            logger.debug(f"Buffering audio: {len(self.playback_buffer)}/{min_samples} samples ({len(self.playback_buffer)*1000/FASTRTC_SAMPLE_RATE:.0f}ms/{self.min_playback_buffer_ms}ms)")
+
+                    # Send chunks for playback once buffering is complete
+                    # Feed head wobbler here so movements stay in sync with actual playback
+                    while not self.is_buffering and len(self.playback_buffer) >= chunk_samples:
+                        chunk = self.playback_buffer[:chunk_samples]
+                        self.playback_buffer = self.playback_buffer[chunk_samples:]
+
+                        # Feed head wobbler in sync with playback (not on raw arrival)
+                        if self.deps.head_wobbler is not None:
+                            import base64
+                            audio_b64 = base64.b64encode(chunk.tobytes()).decode('utf-8')
+                            self.deps.head_wobbler.feed(audio_b64)
+
+                        # Add channel dimension for FastRTC (mono -> 1xN)
+                        chunk_2d = chunk.reshape(1, -1)
+
+                        logger.debug(f"Queueing audio chunk: {len(chunk)} samples ({len(chunk)*1000/FASTRTC_SAMPLE_RATE:.0f}ms)")
+                        await self.output_queue.put((FASTRTC_SAMPLE_RATE, chunk_2d))
 
                 elif isinstance(message, str):
                     # Text message: JSON with transcripts and tool calls
@@ -147,7 +181,10 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
                             if self.deps.head_wobbler is not None:
                                 self.deps.head_wobbler.reset()
                             self.deps.movement_manager.set_listening(True)
-                            logger.info("⚫ Antennas stopped (listening=True)")
+                            # Reset buffering for next response
+                            self.is_buffering = True
+                            self.playback_buffer = np.array([], dtype=np.int16)
+                            logger.info("⚫ Antennas stopped (listening=True), playback buffer reset")
 
                         elif data.get("type") == "speech_stopped":
                             # User stopped speaking - resume antenna movements
@@ -260,10 +297,10 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
         # Buffer audio and send in multiples of 512 samples (VAD requirement)
         self.audio_buffer = np.concatenate([self.audio_buffer, audio_16k])
 
-        # Send multiple complete 512-sample chunks together to reduce WebSocket overhead
+        # Send once we've accumulated enough chunks to reduce WebSocket message frequency
         num_complete_chunks = len(self.audio_buffer) // self.vad_chunk_size
 
-        if num_complete_chunks > 0:
+        if num_complete_chunks >= self.min_send_chunks:
             samples_to_send = num_complete_chunks * self.vad_chunk_size
             audio_to_send = self.audio_buffer[:samples_to_send]
             self.audio_buffer = self.audio_buffer[samples_to_send:]
@@ -279,7 +316,8 @@ class SpeechToSpeechHandler(AsyncStreamHandler):
                 else:
                     logger.debug(f"WebSocket closed normally during send: {e}")
         else:
-            logger.debug(f"Buffering audio: {len(self.audio_buffer)} samples (need {self.vad_chunk_size} to send)")
+            min_samples = self.min_send_chunks * self.vad_chunk_size
+            logger.debug(f"Buffering audio: {len(self.audio_buffer)} samples (need {min_samples} = {self.min_send_chunks}×{self.vad_chunk_size} to send)")
 
     async def emit(self) -> Tuple[int, NDArray[np.int16]] | AdditionalOutputs:
         """Emit audio or additional outputs to FastRTC."""
