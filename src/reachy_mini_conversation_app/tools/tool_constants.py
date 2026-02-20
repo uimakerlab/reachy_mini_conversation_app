@@ -11,7 +11,9 @@ class ToolState(Enum):
 
 
 class SystemTool(Enum):
-    """System tools are tools that are used to manage the background tool manager."""
+    """System tools are always loaded regardless of profile."""
 
     TASK_STATUS = "task_status"
     TASK_CANCEL = "task_cancel"
+    SAVE_MEMORY = "save_memory"
+    RECALL_MEMORY = "recall_memory"

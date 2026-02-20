@@ -66,6 +66,9 @@ class ToolNotification(BaseModel):
     """the status of the tool"""
     status: ToolState
 
+    """the original JSON arguments string (added by memory system for conversation logging)"""
+    args_json_str: Optional[str] = None
+
     """the result of the tool"""
     result: Optional[Dict[str, Any]] = None
 
@@ -100,6 +103,7 @@ class BackgroundTool(ToolNotification):
             tool_name=self.tool_name,
             is_idle_tool_call=self.is_idle_tool_call,
             status=self.status,
+            args_json_str=self.args_json_str,
             result=self.result,
             error=self.error,
         )
@@ -178,6 +182,7 @@ class BackgroundToolManager(BaseModel):
             id=id,
             tool_name=tool_name,
             is_idle_tool_call=is_idle_tool_call,
+            args_json_str=tool_call_routine.args_json_str,
             progress=ToolProgress(progress=0.0) if with_progress else None,
             status=ToolState.RUNNING,
         )
