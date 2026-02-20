@@ -158,7 +158,7 @@ class BackgroundToolManager(BaseModel):
                 self._loop = asyncio.get_running_loop()
             except RuntimeError:
                 self._loop = asyncio.new_event_loop()
-        logger.warning("BackgroundToolManager: event loop set")
+        logger.debug("BackgroundToolManager: event loop set")
 
 
     async def start_tool(

@@ -25,6 +25,7 @@ def parse_args() -> Tuple[argparse.Namespace, list]:  # type: ignore
     )
     parser.add_argument("--gradio", default=False, action="store_true", help="Open gradio interface")
     parser.add_argument("--debug", default=False, action="store_true", help="Enable debug logging")
+    parser.add_argument("--log-file", type=str, default=None, help="Write all logs to this file instead of stderr")
     parser.add_argument(
         "--robot-name",
         type=str,
@@ -77,13 +78,16 @@ def handle_vision_stuff(args: argparse.Namespace, current_robot: ReachyMini) -> 
     return camera_worker, head_tracker, vision_manager
 
 
-def setup_logger(debug: bool) -> logging.Logger:
+def setup_logger(debug: bool, log_file: str | None = None) -> logging.Logger:
     """Setups the logger."""
     log_level = "DEBUG" if debug else "INFO"
-    logging.basicConfig(
-        level=getattr(logging, log_level, logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s:%(lineno)d | %(message)s",
-    )
+    kwargs: dict = {
+        "level": getattr(logging, log_level, logging.INFO),
+        "format": "%(asctime)s %(levelname)s %(name)s:%(lineno)d | %(message)s",
+    }
+    if log_file:
+        kwargs["handlers"] = [logging.FileHandler(log_file, mode="w")]
+    logging.basicConfig(**kwargs)
     logger = logging.getLogger(__name__)
 
     # Suppress WebRTC warnings
