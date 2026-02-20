@@ -39,6 +39,7 @@ INJECT_SINK_NAME = "e2e_inject"
 # ---------------------------------------------------------------------------
 
 SCENARIOS = [
+    # --- Memory: save & recall ---
     {
         "name": "introduce_name",
         "utterance": "Hi, my name is Rémi",
@@ -55,6 +56,13 @@ SCENARIOS = [
         ],
     },
     {
+        "name": "share_hobby",
+        "utterance": "I also like playing basketball on weekends",
+        "checks": [
+            {"type": "tool_called", "tool": "save_memory", "contains_any": ["basketball", "weekends"]},
+        ],
+    },
+    {
         "name": "recall_name",
         "utterance": "Hey, what's my name?",
         "checks": [
@@ -63,9 +71,42 @@ SCENARIOS = [
     },
     {
         "name": "recall_preference",
-        "utterance": "Do you remember what I like?",
+        "utterance": "Do you remember what kind of music I like?",
         "checks": [
             {"type": "assistant_response_contains", "contains_any": ["jazz", "music"]},
+        ],
+    },
+    # --- Tool interaction: dance ---
+    {
+        "name": "ask_dance",
+        "utterance": "Can you dance for me?",
+        "checks": [
+            {"type": "tool_called", "tool": "dance"},
+        ],
+    },
+    # --- Tool interaction: move head ---
+    {
+        "name": "move_head",
+        "utterance": "Look to the left",
+        "checks": [
+            {"type": "tool_called", "tool": "move_head", "contains": "left"},
+        ],
+    },
+    # --- General conversation (no tool expected) ---
+    {
+        "name": "general_question",
+        "utterance": "What do you think about the weather today?",
+        "checks": [
+            {"type": "assistant_response_contains", "contains_any": ["weather", "day", "today", "sun", "rain", "outside"]},
+        ],
+    },
+    # --- Compound recall: remembers multiple facts ---
+    {
+        "name": "recall_all",
+        "utterance": "Can you tell me everything you remember about me?",
+        "checks": [
+            {"type": "assistant_response_contains", "contains_any": ["Rémi", "Remi", "Remy"]},
+            {"type": "assistant_response_contains", "contains_any": ["jazz", "music", "basketball"]},
         ],
     },
 ]
@@ -367,6 +408,14 @@ def run_checks(
     else:
         results.append({"scenario": "(global)", "check": "active_memory_not_empty", "passed": False, "detail": "active memory is empty"})
 
+    # Conversation log completeness
+    user_turns = sum(1 for r in records if r.get("role") == "user")
+    assistant_turns = sum(1 for r in records if r.get("role") == "assistant")
+    if user_turns > 0 and assistant_turns > 0:
+        results.append({"scenario": "(global)", "check": "conversation_logged", "passed": True, "detail": f"{user_turns} user + {assistant_turns} assistant turns"})
+    else:
+        results.append({"scenario": "(global)", "check": "conversation_logged", "passed": False, "detail": f"user={user_turns}, assistant={assistant_turns} (expected both > 0)"})
+
     # Split on "Traceback" and check each block; ignore KeyboardInterrupt (expected from SIGINT)
     tb_blocks = log_text.split("Traceback")[1:]  # skip preamble before first Traceback
     real_tracebacks = sum(1 for block in tb_blocks if "KeyboardInterrupt" not in block)
@@ -403,10 +452,19 @@ def print_report(results: list[dict], data_dir: Path) -> int:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    all_names = [sc["name"] for sc in SCENARIOS]
     parser = argparse.ArgumentParser(description="E2E test runner for conversation app")
     parser.add_argument("--skip-tts", action="store_true", help="Reuse cached audio files")
     parser.add_argument("--delay", type=int, default=DEFAULT_DELAY, help=f"Seconds between utterances (default: {DEFAULT_DELAY})")
+    parser.add_argument("--scenario", nargs="+", choices=all_names, metavar="NAME",
+                        help=f"Run only these scenarios (choices: {', '.join(all_names)})")
     args = parser.parse_args()
+
+    # Filter scenarios if --scenario is specified
+    if args.scenario:
+        selected = [sc for sc in SCENARIOS if sc["name"] in args.scenario]
+    else:
+        selected = list(SCENARIOS)
 
     # Pre-flight
     print("Pre-flight checklist:")
@@ -422,11 +480,14 @@ def main() -> None:
         print("  [ok] OPENAI_API_KEY set")
         print("  [ok] app importable")
 
-    # TTS
+    if args.scenario:
+        print(f"\nRunning {len(selected)}/{len(SCENARIOS)} scenarios: {[s['name'] for s in selected]}")
+
+    # TTS — always generate for all scenarios (so cache stays complete)
     print("\nStep 1: TTS audio generation")
     if args.skip_tts:
         wav_map: dict[str, Path] = {}
-        for sc in SCENARIOS:
+        for sc in selected:
             wav_path = AUDIO_CACHE_DIR / f"{sc['name']}.wav"
             if not wav_path.exists():
                 print(f"  [!] Missing cached audio: {wav_path}")
@@ -435,7 +496,7 @@ def main() -> None:
             wav_map[sc["name"]] = wav_path
             print(f"  [cached] {sc['name']}: {wav_path}")
     else:
-        wav_map = generate_tts(SCENARIOS, AUDIO_CACHE_DIR)
+        wav_map = generate_tts(selected, AUDIO_CACHE_DIR)
 
     # Temp dir for isolated data
     tmp = tempfile.mkdtemp(prefix="e2e_reachy_")
@@ -478,14 +539,14 @@ def main() -> None:
                 print(f"FAILED (could not move source-output #{so_id})")
 
         # Play scenarios — audio goes to the null sink, app reads from its monitor
-        print(f"\nStep 3: Playing {len(SCENARIOS)} scenarios (delay={args.delay}s)")
-        for i, sc in enumerate(SCENARIOS):
+        print(f"\nStep 3: Playing {len(selected)} scenarios (delay={args.delay}s)")
+        for i, sc in enumerate(selected):
             name = sc["name"]
             wav = wav_map[name]
             print(f"  [{i + 1}/{len(SCENARIOS)}] {name}: playing …", end=" ", flush=True)
             play_wav(wav, sink=INJECT_SINK_NAME)
             print("done")
-            if i < len(SCENARIOS) - 1:
+            if i < len(selected) - 1:
                 print(f"         waiting {args.delay}s …", end=" ", flush=True)
                 time.sleep(args.delay)
                 print("ok")
@@ -514,7 +575,7 @@ def main() -> None:
     print(f"  Active memory: {len(active_memory)} chars")
     print(f"  App log: {len(log_text)} chars")
 
-    results = run_checks(SCENARIOS, records, active_memory, log_text)
+    results = run_checks(selected, records, active_memory, log_text)
     exit_code = print_report(results, data_dir)
     sys.exit(exit_code)
 
