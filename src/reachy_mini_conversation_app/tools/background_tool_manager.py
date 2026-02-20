@@ -253,11 +253,12 @@ class BackgroundToolManager(BaseModel):
         logger.debug(f"Tool {tool_id} progress: {progress:.1%} - {message or ''}")
         return True
 
-    async def cancel_tool(self, tool_id: str) -> bool:
+    async def cancel_tool(self, tool_id: str, log: bool = True) -> bool:
         """Cancel a running tool by ID.
 
         Args:
             tool_id: The tool ID to cancel
+            log: Whether to log the cancellation
 
         Returns:
             True if cancelled, False if tool not found or not running
@@ -265,16 +266,19 @@ class BackgroundToolManager(BaseModel):
         """
         tool = self._tools.get(tool_id)
         if tool is None:
-            logger.warning(f"Cannot cancel tool {tool_id}: not found")
+            if log:
+                logger.warning(f"Cannot cancel tool {tool_id}: not found")
             return False
 
         if tool.status != ToolState.RUNNING:
-            logger.warning(f"Cannot cancel tool {tool_id}: status is {tool.status.value}")
+            if log:
+                logger.warning(f"Cannot cancel tool {tool_id}: status is {tool.status.value}")
             return True
 
         if tool._task:
             tool._task.cancel()
-            logger.info(f"Cancelled tool: {tool.tool_name} (id={tool_id})")
+            if log:
+                logger.info(f"Cancelled tool: {tool.tool_name} (id={tool_id})")
             return True
 
         return False
@@ -328,7 +332,7 @@ class BackgroundToolManager(BaseModel):
         self._lifecycle_tasks.clear()
 
         for tool_id in list(self._tools):
-            await self.cancel_tool(tool_id)
+            await self.cancel_tool(tool_id, log=False)
 
         logger.info("BackgroundToolManager shut down")
 

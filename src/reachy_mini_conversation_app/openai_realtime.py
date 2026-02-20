@@ -578,6 +578,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         )
 
             # Connection closed
+            # Stop background tool manager tasks (listener + cleanup)
+            await self.tool_manager.shutdown()
 
     # Microphone receive
     async def receive(self, frame: Tuple[int, NDArray[np.int16]]) -> None:
