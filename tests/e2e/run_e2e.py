@@ -109,6 +109,22 @@ SCENARIOS = [
             {"type": "assistant_response_contains", "contains_any": ["jazz", "music", "basketball"]},
         ],
     },
+    # --- Correction: update a stored fact ---
+    {
+        "name": "correct_fact",
+        "utterance": "Actually, I prefer rock music over jazz now",
+        "checks": [
+            {"type": "tool_called", "tool": "save_memory", "contains_any": ["rock", "prefer"]},
+        ],
+    },
+    # --- Emotion trigger ---
+    {
+        "name": "ask_emotion",
+        "utterance": "Show me a happy face!",
+        "checks": [
+            {"type": "tool_called", "tool": "play_emotion"},
+        ],
+    },
 ]
 
 
@@ -543,7 +559,7 @@ def main() -> None:
         for i, sc in enumerate(selected):
             name = sc["name"]
             wav = wav_map[name]
-            print(f"  [{i + 1}/{len(SCENARIOS)}] {name}: playing …", end=" ", flush=True)
+            print(f"  [{i + 1}/{len(selected)}] {name}: playing …", end=" ", flush=True)
             play_wav(wav, sink=INJECT_SINK_NAME)
             print("done")
             if i < len(selected) - 1:
