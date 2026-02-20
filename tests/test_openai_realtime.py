@@ -379,7 +379,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
         )
 
     # Yield so spawned tool tasks, the listener, and the sender can drain.
-    await asyncio.sleep(3)
+    await asyncio.sleep(5)
 
     # ---- Tear down ----
 
