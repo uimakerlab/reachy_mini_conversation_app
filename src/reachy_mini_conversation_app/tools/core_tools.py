@@ -131,7 +131,7 @@ def _format_error(error: Exception) -> str:
 
 
 # Registry & specs (dynamic)
-def _load_profile_tools() -> None:
+def _load_profile_tools() -> list[str]:
     """Load tools based on profile's tools.txt file."""
     # Determine which profile to use
     profile = config.REACHY_MINI_CUSTOM_PROFILE or "default"
@@ -253,6 +253,7 @@ def _load_profile_tools() -> None:
                 logger.error(f"❌ Failed to load shared tool '{tool_name}': {_format_error(e)}")
                 logger.error(f"  Module path: {shared_module_path}")
 
+    return tool_names
 
 
 def _initialize_tools() -> None:
@@ -263,9 +264,12 @@ def _initialize_tools() -> None:
         logger.debug("Tools already initialized; skipping reinitialization.")
         return
 
-    _load_profile_tools()
-
-    ALL_TOOLS = {cls.name: cls() for cls in get_concrete_subclasses(Tool)}  # type: ignore[type-abstract]
+    selected_tool_names = set(_load_profile_tools())
+    ALL_TOOLS = {
+        cls.name: cls()  # type: ignore[type-abstract]
+        for cls in get_concrete_subclasses(Tool)
+        if cls.name in selected_tool_names
+    }
     ALL_TOOL_SPECS = [tool.spec() for tool in ALL_TOOLS.values()]
 
     for tool_name, tool in ALL_TOOLS.items():
@@ -275,6 +279,15 @@ def _initialize_tools() -> None:
 
 
 _initialize_tools()
+
+
+def reload_tools_registry() -> None:
+    """Reload tool registry from the currently selected profile."""
+    global ALL_TOOLS, ALL_TOOL_SPECS, _TOOLS_INITIALIZED
+    ALL_TOOLS = {}
+    ALL_TOOL_SPECS = []
+    _TOOLS_INITIALIZED = False
+    _initialize_tools()
 
 
 def get_tool_specs(exclusion_list: list[str] = []) -> list[Dict[str, Any]]:
