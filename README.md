@@ -227,12 +227,11 @@ Custom tools must subclass `reachy_mini_conversation_app.tools.core_tools.Tool` 
 
 **Edit personalities from the UI:**
 
-When running with `--gradio`, open the "Personality" accordion:
+When running with `--gradio`, open the **Settings** tab:
 - Select among available profiles (folders under `src/reachy_mini_conversation_app/profiles/`) or the built‑in default.
 - Click "Apply" to update the current session instructions live.
-- Create a new personality by entering a name and instructions text. It stores files under `profiles/<name>/` and copies `tools.txt` from the `default` profile.
-
-Note: The "Personality" panel updates the conversation instructions. Tool sets are loaded at startup from `tools.txt` and are not hot‑reloaded.
+- Click "Use on startup" to persist the selected profile to the app `.env`.
+- Configure enabled tools from the "Tools" section; the selection is persisted to that profile's `tools.txt`.
 
 </details>
 
