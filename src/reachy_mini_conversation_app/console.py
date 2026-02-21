@@ -14,7 +14,8 @@ import sys
 import time
 import asyncio
 import logging
-from typing import List, Optional
+import threading
+from typing import Any, List, Callable, Optional
 from pathlib import Path
 
 from fastrtc import AdditionalOutputs, audio_to_float32
@@ -54,6 +55,7 @@ class LocalStream:
         *,
         settings_app: Optional[FastAPI] = None,
         instance_path: Optional[str] = None,
+        on_transcript_message: Optional[Callable[[dict[str, Any]], None]] = None,
     ):
         """Initialize the stream with an OpenAI realtime handler and pipelines.
 
@@ -70,6 +72,12 @@ class LocalStream:
         self._instance_path: Optional[str] = instance_path
         self._settings_initialized = False
         self._asyncio_loop = None
+        self._on_transcript_message = on_transcript_message
+        self._close_lock = threading.Lock()
+        self._close_requested = False
+        self._launch_thread_id: Optional[int] = None
+        self._stopped_event = threading.Event()
+        self._stopped_event.set()
 
     # ---- Settings UI (only when API key is missing) ----
     def _read_env_lines(self, env_path: Path) -> list[str]:
@@ -311,6 +319,9 @@ class LocalStream:
         If the OpenAI key is missing, expose a tiny settings UI via the
         Reachy Mini settings server to collect it before starting streams.
         """
+        self._launch_thread_id = threading.get_ident()
+        self._stopped_event.clear()
+        self._close_requested = False
         self._stop_event.clear()
 
         # Try to load an existing instance .env first (covers subsequent runs)
@@ -402,8 +413,24 @@ class LocalStream:
             finally:
                 # Ensure handler connection is closed
                 await self.handler.shutdown()
+                self._asyncio_loop = None
+                self._stopped_event.set()
 
         asyncio.run(runner())
+
+    def _request_async_shutdown(self) -> None:
+        """Signal loops to stop and cancel tasks (must run on stream loop thread)."""
+        try:
+            self._stop_event.set()
+        except Exception as e:
+            logger.debug("Error setting stop event: %s", e)
+
+        for task in list(self._tasks):
+            try:
+                if not task.done():
+                    task.cancel()
+            except Exception as e:
+                logger.debug("Error cancelling task %s: %s", task.get_name(), e)
 
     def close(self) -> None:
         """Stop the stream and underlying media pipelines.
@@ -413,6 +440,11 @@ class LocalStream:
         - Sets the stop event to signal async loops to terminate
         - Cancels all pending async tasks (openai-handler, record-loop, play-loop)
         """
+        with self._close_lock:
+            if self._close_requested:
+                return
+            self._close_requested = True
+
         logger.info("Stopping LocalStream...")
 
         # Stop media pipelines FIRST before cancelling async tasks
@@ -427,13 +459,21 @@ class LocalStream:
         except Exception as e:
             logger.debug(f"Error stopping playback (may already be stopped): {e}")
 
-        # Now signal async loops to stop
-        self._stop_event.set()
+        # Signal async loops to stop from the stream loop thread.
+        loop = self._asyncio_loop
+        if loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(self._request_async_shutdown)
+            except Exception as e:
+                logger.debug("Error scheduling async shutdown on loop thread: %s", e)
+                self._request_async_shutdown()
+        else:
+            self._request_async_shutdown()
 
-        # Cancel all running tasks
-        for task in self._tasks:
-            if not task.done():
-                task.cancel()
+        # If close is called from another thread, wait for async runner to stop.
+        if self._launch_thread_id is not None and threading.get_ident() != self._launch_thread_id:
+            if not self._stopped_event.wait(timeout=5):
+                logger.warning("Timed out waiting for LocalStream shutdown")
 
     def clear_audio_queue(self) -> None:
         """Flush the player's appsrc to drop any queued audio immediately."""
@@ -463,13 +503,29 @@ class LocalStream:
 
             if isinstance(handler_output, AdditionalOutputs):
                 for msg in handler_output.args:
+                    if not isinstance(msg, dict):
+                        continue
+                    role = msg.get("role")
                     content = msg.get("content", "")
+                    metadata = msg.get("metadata")
                     if isinstance(content, str):
                         logger.info(
                             "role=%s content=%s",
-                            msg.get("role"),
+                            role,
                             content if len(content) < 500 else content[:500] + "…",
                         )
+                    if self._on_transcript_message is not None:
+                        try:
+                            transcript_role = role if isinstance(role, str) else "assistant"
+                            transcript_msg: dict[str, Any] = {
+                                "role": transcript_role,
+                                "content": content,
+                            }
+                            if isinstance(metadata, dict):
+                                transcript_msg["metadata"] = metadata
+                            self._on_transcript_message(transcript_msg)
+                        except Exception as e:
+                            logger.debug("Transcript callback failed: %s", e)
 
             elif isinstance(handler_output, tuple):
                 input_sample_rate, audio_data = handler_output

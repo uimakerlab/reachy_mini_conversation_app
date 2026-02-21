@@ -6,12 +6,9 @@ import time
 import asyncio
 import argparse
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Optional, Literal
 
-import gradio as gr
 from fastapi import FastAPI
-from fastrtc import Stream
-from gradio.utils import get_space
 
 from reachy_mini import ReachyMini, ReachyMiniApp
 from reachy_mini_conversation_app.utils import (
@@ -20,12 +17,6 @@ from reachy_mini_conversation_app.utils import (
     handle_vision_stuff,
     log_connection_troubleshooting,
 )
-
-
-def update_chatbot(chatbot: List[Dict[str, Any]], response: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Update the chatbot with AdditionalOutputs."""
-    chatbot.append(response)
-    return chatbot
 
 
 def main() -> None:
@@ -44,7 +35,6 @@ def run(
     """Run the Reachy Mini conversation app."""
     # Putting these dependencies here makes the dashboard faster to load when the conversation app is installed
     from reachy_mini_conversation_app.moves import MovementManager
-    from reachy_mini_conversation_app.console import LocalStream
     from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler
     from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
     from reachy_mini_conversation_app.audio.head_wobbler import HeadWobbler
@@ -114,58 +104,36 @@ def run(
         vision_manager=vision_manager,
         head_wobbler=head_wobbler,
     )
-    current_file_path = os.path.dirname(os.path.abspath(__file__))
-    logger.debug(f"Current file absolute path: {current_file_path}")
-    chatbot = gr.Chatbot(
-        type="messages",
-        resizable=True,
-        avatar_images=(
-            os.path.join(current_file_path, "images", "user_avatar.png"),
-            os.path.join(current_file_path, "images", "reachymini_avatar.png"),
-        ),
+
+    audio_source: Literal["browser", "robot_device"] = (
+        "robot_device" if settings_app is not None else ("browser" if is_simulation else "robot_device")
     )
-    logger.debug(f"Chatbot avatar images: {chatbot.avatar_images}")
+    logger.info("Selected audio source: %s", audio_source)
 
-    handler = OpenaiRealtimeHandler(deps, gradio_mode=args.gradio, instance_path=instance_path)
+    handler = OpenaiRealtimeHandler(
+        deps,
+        gradio_mode=(audio_source == "browser"),
+        instance_path=instance_path,
+    )
 
-    stream_manager: gr.Blocks | LocalStream | None = None
+    should_launch_ui = bool(args.gradio or settings_app is not None)
+    if audio_source == "browser" and not should_launch_ui:
+        logger.warning("audio_source=browser requires UI; enabling Gradio launch.")
+        should_launch_ui = True
 
-    if args.gradio:
-        api_key_textbox = gr.Textbox(
-            label="OPENAI API Key",
-            type="password",
-            value=os.getenv("OPENAI_API_KEY") if not get_space() else "",
-        )
+    if should_launch_ui:
+        from reachy_mini_conversation_app.gradio_ui import build_gradio_ui
 
-        from reachy_mini_conversation_app.gradio_personality import PersonalityUI
-
-        personality_ui = PersonalityUI()
-        personality_ui.create_components()
-
-        stream = Stream(
+        stream_manager = build_gradio_ui(
             handler=handler,
-            mode="send-receive",
-            modality="audio",
-            additional_inputs=[
-                chatbot,
-                api_key_textbox,
-                *personality_ui.additional_inputs_ordered(),
-            ],
-            additional_outputs=[chatbot],
-            additional_outputs_handler=update_chatbot,
-            ui_args={"title": "Talk with Reachy Mini"},
+            robot=robot,
+            settings_app=settings_app,
+            instance_path=instance_path,
+            audio_source=audio_source,
         )
-        stream_manager = stream.ui
-        if not settings_app:
-            app = FastAPI()
-        else:
-            app = settings_app
-
-        personality_ui.wire_events(handler, stream_manager)
-
-        app = gr.mount_gradio_app(app, stream.ui, path="/")
     else:
-        # In headless mode, wire settings_app + instance_path to console LocalStream
+        from reachy_mini_conversation_app.console import LocalStream
+
         stream_manager = LocalStream(
             handler,
             robot,
@@ -195,10 +163,16 @@ def run(
     if app_stop_event:
         threading.Thread(target=poll_stop_event, daemon=True).start()
 
+    interrupted = False
     try:
         stream_manager.launch()
     except KeyboardInterrupt:
+        interrupted = True
         logger.info("Keyboard interruption in main thread... closing server.")
+        try:
+            stream_manager.close()
+        except Exception as e:
+            logger.error(f"Error while closing stream manager after KeyboardInterrupt: {e}")
     finally:
         movement_manager.stop()
         head_wobbler.stop()
@@ -217,6 +191,7 @@ def run(
         robot.client.disconnect()
         time.sleep(1)
         logger.info("Shutdown complete.")
+        os._exit(0)
 
 
 class ReachyMiniConversationApp(ReachyMiniApp):  # type: ignore[misc]
@@ -224,6 +199,7 @@ class ReachyMiniConversationApp(ReachyMiniApp):  # type: ignore[misc]
 
     custom_app_url = "http://0.0.0.0:7860/"
     dont_start_webserver = False
+    auto_mount_static_ui = False
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
         """Run the Reachy Mini conversation app."""
