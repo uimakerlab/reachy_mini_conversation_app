@@ -14,11 +14,18 @@ from fastapi import FastAPI
 from fastrtc import Stream
 
 from reachy_mini import ReachyMini
-from .config import LOCKED_PROFILE, config, set_custom_profile
-from .console import LocalStream
-from .openai_realtime import OpenaiRealtimeHandler
-from .tools.core_tools import reload_tools_registry
-from .headless_personality import (
+from reachy_mini_conversation_app.utils import ensure_openai_api_key
+from reachy_mini_conversation_app.config import (
+    LOCKED_PROFILE,
+    API_KEY_SOURCE_ENV,
+    config,
+    persist_api_key,
+    persist_personality,
+)
+from reachy_mini_conversation_app.local_stream import LocalStream
+from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler
+from reachy_mini_conversation_app.tools.core_tools import reload_tools_registry
+from reachy_mini_conversation_app.headless_personality import (
     DEFAULT_OPTION,
     list_personalities,
     available_tools_for,
@@ -34,7 +41,6 @@ _AUTO_WITH: Dict[str, List[str]] = {
 }
 
 _SUPPORTED_REALTIME_VOICES = ["cedar", "marin", "alloy", "echo", "shimmer"]
-_API_KEY_SOURCE_ENV = "REACHY_MINI_API_KEY_SOURCE"
 _BASE_DIR = Path(__file__).resolve().parent
 _AVATAR_IMAGES = (
     str(_BASE_DIR / "images" / "user_avatar.png"),
@@ -47,161 +53,31 @@ def _update_chatbot(chatbot: List[Dict[str, Any]], response: Dict[str, Any]) -> 
     return chatbot
 
 
-def _read_env_lines(env_path: Path) -> list[str]:
-    """Load env file contents or a template as a list of lines."""
-    inst = env_path.parent
-    try:
-        if env_path.exists():
-            try:
-                return env_path.read_text(encoding="utf-8").splitlines()
-            except Exception:
-                return []
-        template_text = None
-        for candidate in (
-            inst / ".env.example",
-            Path.cwd() / ".env.example",
-            Path(__file__).parent / ".env.example",
-        ):
-            try:
-                if candidate.exists():
-                    template_text = candidate.read_text(encoding="utf-8")
-                    break
-            except Exception:
-                continue
-        return template_text.splitlines() if template_text else []
-    except Exception:
-        return []
-
-
-def _persist_api_key(key: str, instance_path: Optional[str], *, source: str = "settings_ui") -> None:
-    """Persist an OpenAI API key to process env, config, and instance .env."""
-    k = (key or "").strip()
-    if not k:
-        return
-    source_value = (source or "").strip()
-    try:
-        os.environ["OPENAI_API_KEY"] = k
-    except Exception:
-        pass
-    if source_value:
+def _current_api_key() -> str:
+    """Return the current OpenAI key from config or process env."""
+    key = str(getattr(config, "OPENAI_API_KEY", "") or "").strip()
+    if key:
+        return key
+    env_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if env_key:
         try:
-            os.environ[_API_KEY_SOURCE_ENV] = source_value
+            config.OPENAI_API_KEY = env_key
         except Exception:
             pass
-    try:
-        config.OPENAI_API_KEY = k
-    except Exception:
-        pass
-
-    if not instance_path:
-        return
-    try:
-        env_path = Path(instance_path) / ".env"
-        lines = _read_env_lines(env_path)
-        replaced = False
-        for i, ln in enumerate(lines):
-            if ln.strip().startswith("OPENAI_API_KEY="):
-                lines[i] = f"OPENAI_API_KEY={k}"
-                replaced = True
-                break
-        if not replaced:
-            lines.append(f"OPENAI_API_KEY={k}")
-        if source_value:
-            source_replaced = False
-            for i, ln in enumerate(lines):
-                if ln.strip().startswith(f"{_API_KEY_SOURCE_ENV}="):
-                    lines[i] = f"{_API_KEY_SOURCE_ENV}={source_value}"
-                    source_replaced = True
-                    break
-            if not source_replaced:
-                lines.append(f"{_API_KEY_SOURCE_ENV}={source_value}")
-        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        logger.info("Persisted OPENAI_API_KEY to %s", env_path)
-        try:
-            from dotenv import load_dotenv
-
-            load_dotenv(dotenv_path=str(env_path), override=True)
-        except Exception:
-            pass
-    except Exception as e:
-        logger.warning("Failed to persist OPENAI_API_KEY: %s", e)
-
-
-def _persist_personality(profile: Optional[str], instance_path: Optional[str]) -> None:
-    """Persist startup personality to config and instance .env."""
-    if LOCKED_PROFILE is not None:
-        return
-    selection = (profile or "").strip() or None
-    try:
-        set_custom_profile(selection)
-    except Exception:
-        pass
-
-    if not instance_path:
-        return
-    try:
-        env_path = Path(instance_path) / ".env"
-        lines = _read_env_lines(env_path)
-        replaced = False
-        for i, ln in enumerate(list(lines)):
-            if ln.strip().startswith("REACHY_MINI_CUSTOM_PROFILE="):
-                if selection:
-                    lines[i] = f"REACHY_MINI_CUSTOM_PROFILE={selection}"
-                else:
-                    lines.pop(i)
-                replaced = True
-                break
-        if selection and not replaced:
-            lines.append(f"REACHY_MINI_CUSTOM_PROFILE={selection}")
-        if selection is None and not env_path.exists():
-            return
-        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        logger.info("Persisted startup personality to %s", env_path)
-        try:
-            from dotenv import load_dotenv
-
-            load_dotenv(dotenv_path=str(env_path), override=True)
-        except Exception:
-            pass
-    except Exception as e:
-        logger.warning("Failed to persist REACHY_MINI_CUSTOM_PROFILE: %s", e)
-
-
-def _read_persisted_personality(instance_path: Optional[str]) -> Optional[str]:
-    if not instance_path:
-        return None
-    env_path = Path(instance_path) / ".env"
-    try:
-        if env_path.exists():
-            for ln in env_path.read_text(encoding="utf-8").splitlines():
-                if ln.strip().startswith("REACHY_MINI_CUSTOM_PROFILE="):
-                    _, _, val = ln.partition("=")
-                    v = val.strip()
-                    return v or None
-    except Exception:
-        pass
-    return None
-
-
-def _startup_profile(instance_path: Optional[str]) -> str:
-    stored = _read_persisted_personality(instance_path)
-    if stored:
-        return stored
-    env_value = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
-    return env_value or DEFAULT_OPTION
+    return env_key
 
 
 def _has_api_key() -> bool:
-    return bool(config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip())
+    return bool(_current_api_key())
 
 
 def _api_key_status_components() -> tuple[str, str]:
     if not _has_api_key():
         return "⚠️ **No API key set**", "ℹ️ No API key loaded."
 
-    source = (os.getenv(_API_KEY_SOURCE_ENV) or "").strip().lower()
+    source = (os.getenv(API_KEY_SOURCE_ENV) or "").strip().lower()
     source_message = "Using API key loaded at startup."
-    if source == "huggingface_dataset":
+    if source in {"huggingface_setup", "huggingface_dataset"}:
         source_message = "Using API key loaded from Hugging Face setup."
     elif source == "settings_ui":
         source_message = "Using API key assigned in Settings."
@@ -603,7 +479,7 @@ def _build_tabbed_ui(
                             gr.update(),
                         )
 
-                    _persist_api_key(k, instance_path, source="settings_ui")
+                    persist_api_key(k, instance_path, source="settings_ui", custom_logger=logger)
                     status, source = _api_key_status_components()
 
                     return (
@@ -632,6 +508,10 @@ def _build_tabbed_ui(
                 )
 
                 is_locked = LOCKED_PROFILE is not None
+                if is_locked:
+                    gr.Markdown(
+                        f"ℹ️ Profile switching is locked to `{LOCKED_PROFILE}`.",
+                    )
 
                 choices: list[str] = (
                     [LOCKED_PROFILE]  # type: ignore[list-item]
@@ -710,7 +590,7 @@ def _build_tabbed_ui(
 
                         _persist_profile_voice(selected_profile, final_voice)
                         _persist_tools_for_profile(selected_profile, final_tools)
-                        set_custom_profile(profile_name)
+                        persist_personality(profile_name, instance_path, custom_logger=logger)
                         reload_tools_registry()
 
                         status_messages: list[str] = []
@@ -814,6 +694,18 @@ def build_gradio_ui(
     audio_source: Literal["browser", "robot_device"],
 ) -> gr.Blocks | LocalStream | RobotDeviceGradioManager:
     """Build the Gradio UI and launch manager."""
+    ensure_openai_api_key(
+        instance_path,
+        persist_key=lambda key: persist_api_key(
+            key,
+            instance_path,
+            source="huggingface_setup",
+            custom_logger=logger,
+        ),
+        load_profile=True,
+        logger=logger,
+    )
+
     if audio_source == "browser":
         browser_stream = _build_browser_conversation_components(handler)
         tabbed_browser_ui = _build_tabbed_ui(
