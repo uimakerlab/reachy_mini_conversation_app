@@ -1,7 +1,7 @@
 import logging
 import argparse
 import warnings
-from typing import Any, Tuple, Optional
+from typing import Any, Tuple, Callable, Optional
 
 from reachy_mini import ReachyMini
 from reachy_mini_conversation_app.camera_worker import CameraWorker
@@ -102,6 +102,55 @@ def setup_logger(debug: bool) -> logging.Logger:
         logging.getLogger("fastrtc").setLevel(logging.ERROR)
         logging.getLogger("aioice").setLevel(logging.WARNING)
     return logger
+
+
+def claim_openai_api_key_from_hf() -> Optional[str]:
+    """Best-effort key claim from Hugging Face setup space."""
+    try:
+        from gradio_client import Client
+
+        client = Client("HuggingFaceM4/gradium_setup", verbose=False)
+        key, _status = client.predict(api_name="/claim_b_key")
+        cleaned = (key or "").strip()
+        return cleaned or None
+    except Exception:
+        return None
+
+
+def ensure_openai_api_key(
+    instance_path: Optional[str],
+    *,
+    persist_key: Optional[Callable[[str], None]] = None,
+    load_profile: bool = True,
+    logger: Optional[logging.Logger] = None,
+) -> bool:
+    """Ensure OPENAI_API_KEY is available from env/.env or HF claim."""
+    from reachy_mini_conversation_app.config import config, persist_api_key, load_instance_env
+
+    load_instance_env(instance_path, load_profile=load_profile)
+
+    current = str(getattr(config, "OPENAI_API_KEY", "") or "").strip()
+    if current:
+        return True
+
+    if logger is not None:
+        logger.info("OPENAI_API_KEY not set, attempting to download from HuggingFace...")
+
+    key = claim_openai_api_key_from_hf()
+    if not key:
+        if logger is not None:
+            logger.warning("Failed to download API key from HuggingFace.")
+        return False
+
+    if logger is not None:
+        logger.info("Successfully downloaded API key from HuggingFace")
+
+    if persist_key is not None:
+        persist_key(key)
+    else:
+        persist_api_key(key, instance_path=None, source="huggingface_setup", custom_logger=logger)
+    return True
+
 
 def log_connection_troubleshooting(logger: logging.Logger, robot_name: Optional[str]) -> None:
     """Log troubleshooting steps for connection issues."""

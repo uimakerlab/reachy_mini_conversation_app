@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+from typing import Optional
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
@@ -12,6 +13,7 @@ LOCKED_PROFILE: str | None = None
 DEFAULT_PROFILES_DIRECTORY = Path(__file__).parent / "profiles"
 
 logger = logging.getLogger(__name__)
+API_KEY_SOURCE_ENV = "REACHY_MINI_API_KEY_SOURCE"
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -105,7 +107,7 @@ class Config:
     """Configuration class for the conversation app."""
 
     # Required
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # The key is downloaded in console.py if needed
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # The key is bootstrapped in local_stream/gradio startup if needed
 
     # Optional
     MODEL_NAME = os.getenv("MODEL_NAME", "gpt-realtime")
@@ -206,12 +208,165 @@ def set_custom_profile(profile: str | None) -> None:
     except Exception:
         pass
     try:
-        import os as _os
-
         if profile:
-            _os.environ["REACHY_MINI_CUSTOM_PROFILE"] = profile
+            os.environ["REACHY_MINI_CUSTOM_PROFILE"] = profile
         else:
-            # Remove to reflect default
-            _os.environ.pop("REACHY_MINI_CUSTOM_PROFILE", None)
+            os.environ.pop("REACHY_MINI_CUSTOM_PROFILE", None)
     except Exception:
         pass
+
+
+def read_env_lines(env_path: Path) -> list[str]:
+    """Load env file contents or a template as a list of lines."""
+    inst = env_path.parent
+    try:
+        if env_path.exists():
+            try:
+                return env_path.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                return []
+        template_text = None
+        for candidate in (
+            inst / ".env.example",
+            Path.cwd() / ".env.example",
+            Path(__file__).parent / ".env.example",
+        ):
+            try:
+                if candidate.exists():
+                    template_text = candidate.read_text(encoding="utf-8")
+                    break
+            except Exception:
+                continue
+        return template_text.splitlines() if template_text else []
+    except Exception:
+        return []
+
+
+def load_instance_env(instance_path: Optional[str], *, load_profile: bool = True) -> None:
+    """Load `<instance_path>/.env` into the process and sync in-memory config."""
+    if not instance_path:
+        return
+    env_path = Path(instance_path) / ".env"
+    if not env_path.exists():
+        return
+    try:
+        load_dotenv(dotenv_path=str(env_path), override=True)
+    except Exception:
+        return
+
+    key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if key:
+        try:
+            config.OPENAI_API_KEY = key
+        except Exception:
+            pass
+
+    if not load_profile or LOCKED_PROFILE is not None:
+        return
+
+    profile = os.getenv("REACHY_MINI_CUSTOM_PROFILE")
+    if profile is not None:
+        set_custom_profile(profile.strip() or None)
+
+
+def persist_api_key(
+    key: str,
+    instance_path: Optional[str],
+    *,
+    source: str = "settings_ui",
+    custom_logger: Optional[logging.Logger] = None,
+) -> None:
+    """Persist an OpenAI API key to process env, config, and instance .env."""
+    log = custom_logger or logger
+    k = (key or "").strip()
+    if not k:
+        return
+    source_value = (source or "").strip()
+
+    try:
+        os.environ["OPENAI_API_KEY"] = k
+    except Exception:
+        pass
+    if source_value:
+        try:
+            os.environ[API_KEY_SOURCE_ENV] = source_value
+        except Exception:
+            pass
+    try:
+        config.OPENAI_API_KEY = k
+    except Exception:
+        pass
+
+    if not instance_path:
+        return
+
+    try:
+        env_path = Path(instance_path) / ".env"
+        lines = read_env_lines(env_path)
+        replaced = False
+        for i, ln in enumerate(lines):
+            if ln.strip().startswith("OPENAI_API_KEY="):
+                lines[i] = f"OPENAI_API_KEY={k}"
+                replaced = True
+                break
+        if not replaced:
+            lines.append(f"OPENAI_API_KEY={k}")
+        if source_value:
+            source_replaced = False
+            for i, ln in enumerate(lines):
+                if ln.strip().startswith(f"{API_KEY_SOURCE_ENV}="):
+                    lines[i] = f"{API_KEY_SOURCE_ENV}={source_value}"
+                    source_replaced = True
+                    break
+            if not source_replaced:
+                lines.append(f"{API_KEY_SOURCE_ENV}={source_value}")
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        log.info("Persisted OPENAI_API_KEY to %s", env_path)
+        try:
+            load_dotenv(dotenv_path=str(env_path), override=True)
+        except Exception:
+            pass
+    except Exception as e:
+        log.warning("Failed to persist OPENAI_API_KEY: %s", e)
+
+
+def persist_personality(
+    profile: Optional[str],
+    instance_path: Optional[str],
+    *,
+    custom_logger: Optional[logging.Logger] = None,
+) -> None:
+    """Persist startup personality to config and instance .env."""
+    if LOCKED_PROFILE is not None:
+        return
+    log = custom_logger or logger
+    selection = (profile or "").strip() or None
+    set_custom_profile(selection)
+
+    if not instance_path:
+        return
+
+    try:
+        env_path = Path(instance_path) / ".env"
+        lines = read_env_lines(env_path)
+        replaced = False
+        for i, ln in enumerate(list(lines)):
+            if ln.strip().startswith("REACHY_MINI_CUSTOM_PROFILE="):
+                if selection:
+                    lines[i] = f"REACHY_MINI_CUSTOM_PROFILE={selection}"
+                else:
+                    lines.pop(i)
+                replaced = True
+                break
+        if selection and not replaced:
+            lines.append(f"REACHY_MINI_CUSTOM_PROFILE={selection}")
+        if selection is None and not env_path.exists():
+            return
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        log.info("Persisted startup personality to %s", env_path)
+        try:
+            load_dotenv(dotenv_path=str(env_path), override=True)
+        except Exception:
+            pass
+    except Exception as e:
+        log.warning("Failed to persist REACHY_MINI_CUSTOM_PROFILE: %s", e)
