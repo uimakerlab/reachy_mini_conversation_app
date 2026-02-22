@@ -20,7 +20,6 @@ from reachy_mini_conversation_app.config import (
     API_KEY_SOURCE_ENV,
     config,
     persist_api_key,
-    load_instance_env,
     persist_personality,
 )
 from reachy_mini_conversation_app.local_stream import LocalStream
@@ -267,6 +266,7 @@ def _build_browser_conversation_components(
 ) -> Stream:
     chatbot = gr.Chatbot(
         type="messages",
+        allow_tags=True,
         resizable=False,
         height=500,
         avatar_images=_AVATAR_IMAGES,
@@ -318,7 +318,8 @@ def _build_tabbed_ui(
             future = asyncio.run_coroutine_threadsafe(call_factory(), handler_loop)
             return await asyncio.wrap_future(future)
 
-    with gr.Blocks(title="Reachy Mini Conversation", css=_UI_CSS) as blocks:
+    with gr.Blocks(title="Reachy Mini Conversation") as blocks:
+        gr.HTML(f"<style>{_UI_CSS}</style>", padding=False)
 
         with gr.Tabs():
 
@@ -330,6 +331,7 @@ def _build_tabbed_ui(
                 else:
                     transcript_chatbot = gr.Chatbot(
                         type="messages",
+                        allow_tags=True,
                         avatar_images=_AVATAR_IMAGES,
                         height=500,
                     )
@@ -704,20 +706,17 @@ def build_gradio_ui(
     audio_source: Literal["browser", "robot_device"],
 ) -> gr.Blocks | LocalStream | RobotDeviceGradioManager:
     """Build the Gradio UI and launch manager."""
-    if settings_app is not None and audio_source == "robot_device":
-        load_instance_env(instance_path, load_profile=True)
-    else:
-        ensure_openai_api_key(
+    ensure_openai_api_key(
+        instance_path,
+        persist_key=lambda key: persist_api_key(
+            key,
             instance_path,
-            persist_key=lambda key: persist_api_key(
-                key,
-                instance_path,
-                source="huggingface_setup",
-                custom_logger=logger,
-            ),
-            load_profile=True,
-            logger=logger,
-        )
+            source="huggingface_setup",
+            custom_logger=logger,
+        ),
+        load_profile=True,
+        logger=logger,
+    )
 
     if audio_source == "browser":
         browser_stream = _build_browser_conversation_components(handler)
