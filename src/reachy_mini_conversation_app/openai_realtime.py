@@ -94,7 +94,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         self._shutdown_requested: bool = False
         self._connected_event: asyncio.Event = asyncio.Event()
         self._voice_override: str | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None  # type: ignore[assignment]
         self._input_paused: bool = False
 
         # Cost tracking

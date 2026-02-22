@@ -266,8 +266,8 @@ def _initialize_tools() -> None:
 
     selected_tool_names = set(_load_profile_tools())
     ALL_TOOLS = {
-        cls.name: cls()  # type: ignore[type-abstract]
-        for cls in get_concrete_subclasses(Tool)
+        cls.name: cls()
+        for cls in get_concrete_subclasses(Tool)  # type: ignore[type-abstract]
         if cls.name in selected_tool_names
     }
     ALL_TOOL_SPECS = [tool.spec() for tool in ALL_TOOLS.values()]

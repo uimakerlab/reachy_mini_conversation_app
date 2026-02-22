@@ -441,7 +441,7 @@ def _build_tabbed_ui(
             with gr.Tab("Conversation"):
 
                 if browser_stream is not None:
-                    browser_stream.ui.render()
+                    browser_stream.ui.render()  # type: ignore[no-untyped-call]
 
                 else:
                     transcript_chatbot = gr.Chatbot(
@@ -501,7 +501,7 @@ def _build_tabbed_ui(
                         queue=False,
                     )
 
-                    async def _on_toggle_pause(current_paused: bool):
+                    async def _on_toggle_pause(current_paused: bool) -> tuple[bool, Any, str]:
                         next_paused = not bool(current_paused)
                         paused = bool(
                             await _run_handler_call(
@@ -515,7 +515,7 @@ def _build_tabbed_ui(
                             gr.Info("Microphone resumed.", duration=3)
                         return paused, gr.update(value=("Resume Mic" if paused else "Pause Mic")), ""
 
-                    async def _on_reload_session():
+                    async def _on_reload_session() -> str:
                         await _run_handler_call(handler, handler.reload_session)
                         gr.Info("Realtime session reloaded.", duration=4)
                         return ""
@@ -549,7 +549,7 @@ def _build_tabbed_ui(
 
                 key_feedback_md = gr.Markdown()
 
-                async def _validate_and_save_key(key: str):
+                async def _validate_and_save_key(key: str) -> tuple[str, str, str, Any]:
                     """Validate API key against OpenAI and persist if valid."""
                     k = (key or "").strip()
 
@@ -633,14 +633,14 @@ def _build_tabbed_ui(
 
                 is_locked = LOCKED_PROFILE is not None
 
-                choices = (
-                    [LOCKED_PROFILE]
+                choices: list[str] = (
+                    [LOCKED_PROFILE]  # type: ignore[list-item]
                     if is_locked
                     else [DEFAULT_OPTION, *list_personalities()]
                 )
 
-                current_profile = (
-                    LOCKED_PROFILE
+                current_profile: str = (
+                    LOCKED_PROFILE  # type: ignore[assignment]
                     if is_locked
                     else (config.REACHY_MINI_CUSTOM_PROFILE or DEFAULT_OPTION)
                 )
@@ -679,7 +679,7 @@ def _build_tabbed_ui(
 
                 profile_status_md = gr.Markdown()
 
-                def _on_profile_change(selected: str):
+                def _on_profile_change(selected: str) -> tuple[Any, Any, str]:
                     """Update voice and tools when profile changes."""
                     return (
                         gr.update(value=_read_voice_for_profile(selected)),
@@ -751,7 +751,7 @@ def _build_tabbed_ui(
                     outputs=[profile_status_md],
                 )
 
-    return blocks
+        return blocks  # type: ignore[no-any-return]
 
 
 class RobotDeviceGradioManager:
