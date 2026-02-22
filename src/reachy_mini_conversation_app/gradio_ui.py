@@ -701,18 +701,18 @@ def build_gradio_ui(
     if settings_app is not None and audio_source == "robot_device":
         # In SDK dashboard mode, mount UI first. Key bootstrap continues in LocalStream.launch().
         load_instance_env(instance_path, load_profile=True)
-    else:
-        ensure_openai_api_key(
+    
+    ensure_openai_api_key(
+        instance_path,
+        persist_key=lambda key: persist_api_key(
+            key,
             instance_path,
-            persist_key=lambda key: persist_api_key(
-                key,
-                instance_path,
-                source="huggingface_setup",
-                custom_logger=logger,
-            ),
-            load_profile=True,
-            logger=logger,
-        )
+            source="huggingface_setup",
+            custom_logger=logger,
+        ),
+        load_profile=True,
+        logger=logger,
+    )
 
     if audio_source == "browser":
         browser_stream = _build_browser_conversation_components(handler)
