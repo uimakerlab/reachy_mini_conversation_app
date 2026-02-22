@@ -6,9 +6,14 @@ import argparse
 import warnings
 from typing import Any, Tuple, Callable, Optional
 
+
+import httpx
+
 from reachy_mini import ReachyMini
 from reachy_mini_conversation_app.camera_worker import CameraWorker
+from reachy_mini_conversation_app.config import config, persist_api_key, load_instance_env
 
+logger = logging.getLogger(__name__)
 
 _INVALID_OPENAI_KEY_SENTINELS = {
     "none",
@@ -144,35 +149,38 @@ def setup_logger(logger, debug: bool):
         lib_logger.propagate = False
 
 
-def claim_openai_api_key_from_hf(logger: Optional[logging.Logger] = None) -> Optional[str]:
+def claim_openai_api_key_from_hf() -> Optional[str]:
     """Best-effort key claim from Hugging Face setup space."""
     try:
-        from gradio_client import Client
+        base = "https://huggingfacem4-gradium-setup.hf.space/gradio_api/call/claim_b_key"
 
-        client = Client("HuggingFaceM4/gradium_setup", verbose=False)
-        key, _status = client.predict(api_name="/claim_b_key")
-        cleaned = (key or "").strip()
-        return cleaned or None
+        with httpx.Client(timeout=15) as client:
+            event_id = client.post(base, json={"data": []}).json()["event_id"]
+            resp = client.get(f"{base}/{event_id}")
+            for line in resp.text.splitlines():
+                if line.startswith("data:"):
+                    data = json.loads(line[5:].strip())
+                    if isinstance(data, list) and data:
+                        cleaned = (data[0] or "").strip()
+                        return cleaned or None
+        return None
     except Exception as exc:
-        if logger is not None:
-            logger.warning("Hugging Face key claim failed: %s: %s", type(exc).__name__, exc)
+        print(f"HF key claim failed: {type(exc).__name__}: {exc}")
         return None
 
 
 def ensure_openai_api_key(
     instance_path: Optional[str],
-    *,
-    persist_key: Optional[Callable[[str], None]] = None,
     load_profile: bool = True,
-    logger: Optional[logging.Logger] = None,
 ) -> bool:
     """Ensure OPENAI_API_KEY is available from env/.env or HF claim."""
-    from reachy_mini_conversation_app.config import config, persist_api_key, load_instance_env
 
+    print("WTF")
     load_instance_env(instance_path, load_profile=load_profile)
-
+    print("WTF2")
     current = normalize_openai_api_key(str(getattr(config, "OPENAI_API_KEY", "") or ""))
     if not current:
+        logger.info("OPENAI_API_KEY not set, trying from runtime...")
         runtime_env_key = normalize_openai_api_key(os.getenv("OPENAI_API_KEY"))
         if runtime_env_key:
             try:
@@ -184,22 +192,18 @@ def ensure_openai_api_key(
     if current:
         return True
 
-    if logger is not None:
-        logger.info("OPENAI_API_KEY not set, attempting to download from HuggingFace...")
+    print("WTF3")
+    logger.info("OPENAI_API_KEY not set, attempting to download from HuggingFace...")
 
-    key = claim_openai_api_key_from_hf(logger=logger)
+    key = claim_openai_api_key_from_hf()
     if not key:
-        if logger is not None:
-            logger.warning("Failed to download API key from HuggingFace.")
+        logger.warning("Failed to download API key from HuggingFace.")
         return False
 
-    if logger is not None:
-        logger.info("Successfully downloaded API key from HuggingFace")
-
-    if persist_key is not None:
-        persist_key(key)
-    else:
-        persist_api_key(key, instance_path=None, source="huggingface_setup", custom_logger=logger)
+    logger.info("Successfully downloaded API key from HuggingFace")
+    print("WTF4")
+    persist_api_key(key, instance_path=None, source="huggingface_setup")
+    print("WTF5")
     return True
 
 

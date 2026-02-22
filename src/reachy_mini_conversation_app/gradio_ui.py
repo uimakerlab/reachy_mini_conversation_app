@@ -651,6 +651,7 @@ class RobotDeviceGradioManager:
 
     def launch(self) -> None:
         """Start LocalStream in background, then block on Gradio UI."""
+        logger.info("Starting Gradio UI for Stream")
         if self._stream_thread is None or not self._stream_thread.is_alive():
             self._stream_thread = threading.Thread(
                 target=self._stream.launch,
@@ -660,12 +661,13 @@ class RobotDeviceGradioManager:
             self._stream_thread.start()
 
         try:
-            self._ui.launch(server_name="127.0.0.1", server_port=7860)
+            self._ui.launch(server_name="0.0.0.0", server_port=7860)
         finally:
             self.close()
 
     def close(self) -> None:
         """Close both UI and local stream."""
+        logger.info("Closing Gradio UI and stream")
         with self._close_lock:
             if self._closed:
                 return
@@ -696,22 +698,16 @@ def build_gradio_ui(
     settings_app: Optional[FastAPI],
     instance_path: Optional[str],
     audio_source: Literal["browser", "robot_device"],
+    logger=logger
 ) -> gr.Blocks | LocalStream | RobotDeviceGradioManager:
     """Build the Gradio UI and launch manager."""
     if settings_app is not None and audio_source == "robot_device":
         # In SDK dashboard mode, mount UI first. Key bootstrap continues in LocalStream.launch().
         load_instance_env(instance_path, load_profile=True)
-    
+
     ensure_openai_api_key(
         instance_path,
-        persist_key=lambda key: persist_api_key(
-            key,
-            instance_path,
-            source="huggingface_setup",
-            custom_logger=logger,
-        ),
         load_profile=True,
-        logger=logger,
     )
 
     if audio_source == "browser":

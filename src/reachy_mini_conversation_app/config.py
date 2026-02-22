@@ -272,12 +272,9 @@ def load_instance_env(instance_path: Optional[str], *, load_profile: bool = True
 def persist_api_key(
     key: str,
     instance_path: Optional[str],
-    *,
     source: str = "settings_ui",
-    custom_logger: Optional[logging.Logger] = None,
 ) -> None:
     """Persist an OpenAI API key to process env, config, and instance .env."""
-    log = custom_logger or logger
     k = (key or "").strip()
     if not k:
         return
@@ -321,13 +318,13 @@ def persist_api_key(
             if not source_replaced:
                 lines.append(f"{API_KEY_SOURCE_ENV}={source_value}")
         env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        log.info("Persisted OPENAI_API_KEY to %s", env_path)
+        logger.info("Persisted OPENAI_API_KEY to %s", env_path)
         try:
             load_dotenv(dotenv_path=str(env_path), override=True)
         except Exception:
             pass
     except Exception as e:
-        log.warning("Failed to persist OPENAI_API_KEY: %s", e)
+        logger.warning("Failed to persist OPENAI_API_KEY: %s", e)
 
 
 def persist_personality(
