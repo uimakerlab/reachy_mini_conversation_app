@@ -34,6 +34,7 @@ from reachy_mini_conversation_app.headless_personality import (
 
 
 logger = logging.getLogger(__name__)
+SETTINGS_GRADIO_MOUNT_PATH = "/gradio"
 
 _AUTO_WITH: Dict[str, List[str]] = {
     "dance": ["stop_dance"],
@@ -724,7 +725,7 @@ def build_gradio_ui(
             browser_stream=browser_stream,
         )
         if settings_app is not None:
-            gr.mount_gradio_app(settings_app, tabbed_browser_ui, path="/")
+            gr.mount_gradio_app(settings_app, tabbed_browser_ui, path=SETTINGS_GRADIO_MOUNT_PATH)
         return tabbed_browser_ui
 
     transcript_queue: queue.Queue[Dict[str, Any]] = queue.Queue()
@@ -746,7 +747,7 @@ def build_gradio_ui(
             instance_path=instance_path,
             on_transcript_message=_on_transcript_message,
         )
-        gr.mount_gradio_app(settings_app, robot_ui, path="/")
+        gr.mount_gradio_app(settings_app, robot_ui, path=SETTINGS_GRADIO_MOUNT_PATH)
         return local_stream
 
     local_stream = LocalStream(
