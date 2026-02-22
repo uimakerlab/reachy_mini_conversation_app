@@ -105,11 +105,21 @@ class LocalStream:
                 return
 
             logger.warning("OPENAI_API_KEY not found. Waiting for key from Gradio Settings.")
+            next_claim_retry_at = time.monotonic() + 15.0
             while not self._has_api_key():
                 if self._stop_event.is_set() or self._close_requested:
                     logger.info("Stop requested while waiting for OPENAI_API_KEY.")
                     self._stopped_event.set()
                     return
+                now = time.monotonic()
+                if now >= next_claim_retry_at:
+                    ensure_openai_api_key(
+                        self._instance_path,
+                        persist_key=self._persist_api_key,
+                        load_profile=True,
+                        logger=logger,
+                    )
+                    next_claim_retry_at = now + 15.0
                 time.sleep(0.2)
 
         # Start media after key is set/available

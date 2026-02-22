@@ -105,7 +105,7 @@ def setup_logger(debug: bool) -> logging.Logger:
     return logger
 
 
-def claim_openai_api_key_from_hf() -> Optional[str]:
+def claim_openai_api_key_from_hf(logger: Optional[logging.Logger] = None) -> Optional[str]:
     """Best-effort key claim from Hugging Face setup space."""
     try:
         from gradio_client import Client
@@ -114,7 +114,9 @@ def claim_openai_api_key_from_hf() -> Optional[str]:
         key, _status = client.predict(api_name="/claim_b_key")
         cleaned = (key or "").strip()
         return cleaned or None
-    except Exception:
+    except Exception as exc:
+        if logger is not None:
+            logger.warning("Hugging Face key claim failed: %s: %s", type(exc).__name__, exc)
         return None
 
 
@@ -146,7 +148,7 @@ def ensure_openai_api_key(
     if logger is not None:
         logger.info("OPENAI_API_KEY not set, attempting to download from HuggingFace...")
 
-    key = claim_openai_api_key_from_hf()
+    key = claim_openai_api_key_from_hf(logger=logger)
     if not key:
         if logger is not None:
             logger.warning("Failed to download API key from HuggingFace.")
