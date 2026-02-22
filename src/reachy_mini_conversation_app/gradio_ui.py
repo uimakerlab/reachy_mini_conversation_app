@@ -46,13 +46,6 @@ _AVATAR_IMAGES = (
     str(_BASE_DIR / "images" / "user_avatar.png"),
     str(_BASE_DIR / "images" / "reachymini_avatar.png"),
 )
-_LOCKED_PROFILE_CONTROLS_CLASS = "rmca-locked-profile-controls"
-_UI_CSS = f"""
-.{_LOCKED_PROFILE_CONTROLS_CLASS} {{
-    opacity: 0.55;
-    filter: grayscale(0.35);
-}}
-"""
 
 
 def _update_chatbot(chatbot: List[Dict[str, Any]], response: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -319,7 +312,6 @@ def _build_tabbed_ui(
             return await asyncio.wrap_future(future)
 
     with gr.Blocks(title="Reachy Mini Conversation") as blocks:
-        gr.HTML(f"<style>{_UI_CSS}</style>", padding=False)
 
         with gr.Tabs():
 
@@ -538,8 +530,7 @@ def _build_tabbed_ui(
                 if current_profile not in choices:
                     current_profile = choices[0]
 
-                profile_controls_classes = [_LOCKED_PROFILE_CONTROLS_CLASS] if is_locked else []
-                with gr.Group(elem_classes=profile_controls_classes):
+                with gr.Group():
                     with gr.Row():
                         profile_dropdown = gr.Dropdown(
                             label="Profile",
