@@ -222,7 +222,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 openai_api_key = config.OPENAI_API_KEY
         else:
             if not openai_api_key or not openai_api_key.strip():
-                # In headless console mode, LocalStream now blocks startup until the key is provided.
+                # In headless local-stream mode, LocalStream blocks startup until the key is provided.
                 # However, unit tests may invoke this handler directly with a stubbed client.
                 # To keep tests hermetic without requiring a real key, fall back to a placeholder.
                 logger.warning("OPENAI_API_KEY missing. Proceeding with a placeholder (tests/offline).")

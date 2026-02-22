@@ -17,6 +17,7 @@ from reachy_mini_conversation_app.utils import (
     handle_vision_stuff,
     log_connection_troubleshooting,
 )
+from reachy_mini_conversation_app.config import LOCKED_PROFILE
 
 
 def main() -> None:
@@ -41,6 +42,11 @@ def run(
 
     logger = setup_logger(args.debug)
     logger.info("Starting Reachy Mini Conversation App")
+    if LOCKED_PROFILE is not None:
+        logger.info(
+            "Profile switching is locked. Using LOCKED_PROFILE='%s'.",
+            LOCKED_PROFILE,
+        )
 
     if args.no_camera and args.head_tracker is not None:
         logger.warning(
@@ -132,7 +138,7 @@ def run(
             audio_source=audio_source,
         )
     else:
-        from reachy_mini_conversation_app.console import LocalStream
+        from reachy_mini_conversation_app.local_stream import LocalStream
 
         stream_manager = LocalStream(
             handler,
