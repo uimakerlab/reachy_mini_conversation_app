@@ -6,7 +6,7 @@ import time
 import asyncio
 import argparse
 import threading
-from typing import Optional, Literal
+from typing import Literal, Optional
 
 from fastapi import FastAPI
 
@@ -163,11 +163,9 @@ def run(
     if app_stop_event:
         threading.Thread(target=poll_stop_event, daemon=True).start()
 
-    interrupted = False
     try:
         stream_manager.launch()
     except KeyboardInterrupt:
-        interrupted = True
         logger.info("Keyboard interruption in main thread... closing server.")
         try:
             stream_manager.close()
