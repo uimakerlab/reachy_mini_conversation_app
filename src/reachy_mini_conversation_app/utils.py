@@ -1,3 +1,4 @@
+import os
 import logging
 import argparse
 import warnings
@@ -130,6 +131,15 @@ def ensure_openai_api_key(
     load_instance_env(instance_path, load_profile=load_profile)
 
     current = str(getattr(config, "OPENAI_API_KEY", "") or "").strip()
+    if not current:
+        runtime_env_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        if runtime_env_key:
+            try:
+                config.OPENAI_API_KEY = runtime_env_key
+            except Exception:
+                pass
+            current = runtime_env_key
+
     if current:
         return True
 
