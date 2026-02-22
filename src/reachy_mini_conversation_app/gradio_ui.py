@@ -46,6 +46,13 @@ _AVATAR_IMAGES = (
     str(_BASE_DIR / "images" / "user_avatar.png"),
     str(_BASE_DIR / "images" / "reachymini_avatar.png"),
 )
+_LOCKED_PROFILE_CONTROLS_CLASS = "rmca-locked-profile-controls"
+_UI_CSS = f"""
+.{_LOCKED_PROFILE_CONTROLS_CLASS} {{
+    opacity: 0.55;
+    filter: grayscale(0.35);
+}}
+"""
 
 
 def _update_chatbot(chatbot: List[Dict[str, Any]], response: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -310,7 +317,7 @@ def _build_tabbed_ui(
             future = asyncio.run_coroutine_threadsafe(call_factory(), handler_loop)
             return await asyncio.wrap_future(future)
 
-    with gr.Blocks(title="Reachy Mini Conversation") as blocks:
+    with gr.Blocks(title="Reachy Mini Conversation", css=_UI_CSS) as blocks:
 
         with gr.Tabs():
 
@@ -528,36 +535,38 @@ def _build_tabbed_ui(
                 if current_profile not in choices:
                     current_profile = choices[0]
 
-                with gr.Row():
-                    profile_dropdown = gr.Dropdown(
-                        label="Profile",
-                        choices=choices,
-                        value=current_profile,
+                profile_controls_classes = [_LOCKED_PROFILE_CONTROLS_CLASS] if is_locked else []
+                with gr.Group(elem_classes=profile_controls_classes):
+                    with gr.Row():
+                        profile_dropdown = gr.Dropdown(
+                            label="Profile",
+                            choices=choices,
+                            value=current_profile,
+                            interactive=not is_locked,
+                            scale=3,
+                        )
+
+                        voice_dropdown = gr.Dropdown(
+                            label="Voice",
+                            choices=_SUPPORTED_REALTIME_VOICES,
+                            value=_read_voice_for_profile(current_profile),
+                            interactive=not is_locked,
+                            scale=2,
+                        )
+
+                    tools_checkbox = gr.CheckboxGroup(
+                        label="Active tools",
+                        choices=available_tools_for(current_profile),
+                        value=_read_tools_for_profile(current_profile),
                         interactive=not is_locked,
-                        scale=3,
                     )
 
-                    voice_dropdown = gr.Dropdown(
-                        label="Voice",
-                        choices=_SUPPORTED_REALTIME_VOICES,
-                        value=_read_voice_for_profile(current_profile),
+                    apply_btn = gr.Button(
+                        "Apply Changes",
                         interactive=not is_locked,
-                        scale=2,
                     )
 
-                tools_checkbox = gr.CheckboxGroup(
-                    label="Active tools",
-                    choices=available_tools_for(current_profile),
-                    value=_read_tools_for_profile(current_profile),
-                    interactive=not is_locked,
-                )
-
-                apply_btn = gr.Button(
-                    "Apply Changes",
-                    interactive=not is_locked,
-                )
-
-                profile_status_md = gr.Markdown()
+                    profile_status_md = gr.Markdown()
 
                 def _on_profile_change(selected: str) -> tuple[Any, Any, str]:
                     """Update voice and tools when profile changes."""
