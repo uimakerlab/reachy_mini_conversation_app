@@ -8,6 +8,29 @@ from reachy_mini import ReachyMini
 from reachy_mini_conversation_app.camera_worker import CameraWorker
 
 
+_INVALID_OPENAI_KEY_SENTINELS = {
+    "none",
+    "null",
+    "undefined",
+    "dummy",
+    "changeme",
+    "your_openai_api_key",
+    "your_api_key",
+}
+
+
+def normalize_openai_api_key(value: Optional[str]) -> str:
+    """Return a usable API key or empty string for placeholder/sentinel values."""
+    key = (value or "").strip()
+    if not key:
+        return ""
+    if key.lower() in _INVALID_OPENAI_KEY_SENTINELS:
+        return ""
+    if key.startswith("${") and key.endswith("}"):
+        return ""
+    return key
+
+
 def parse_args() -> Tuple[argparse.Namespace, list]:  # type: ignore
     """Parse command line arguments."""
     parser = argparse.ArgumentParser("Reachy Mini Conversation App")
@@ -132,9 +155,9 @@ def ensure_openai_api_key(
 
     load_instance_env(instance_path, load_profile=load_profile)
 
-    current = str(getattr(config, "OPENAI_API_KEY", "") or "").strip()
+    current = normalize_openai_api_key(str(getattr(config, "OPENAI_API_KEY", "") or ""))
     if not current:
-        runtime_env_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        runtime_env_key = normalize_openai_api_key(os.getenv("OPENAI_API_KEY"))
         if runtime_env_key:
             try:
                 config.OPENAI_API_KEY = runtime_env_key

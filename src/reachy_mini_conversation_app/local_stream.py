@@ -12,7 +12,7 @@ from scipy.signal import resample
 
 from reachy_mini import ReachyMini
 from reachy_mini.media.media_manager import MediaBackend
-from reachy_mini_conversation_app.utils import ensure_openai_api_key
+from reachy_mini_conversation_app.utils import ensure_openai_api_key, normalize_openai_api_key
 from reachy_mini_conversation_app.config import config, persist_api_key
 from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler
 
@@ -58,11 +58,11 @@ class LocalStream:
     @staticmethod
     def _has_api_key() -> bool:
         """Return True when an API key is available in config or environment."""
-        key = str(getattr(config, "OPENAI_API_KEY", "") or "").strip()
+        key = normalize_openai_api_key(str(getattr(config, "OPENAI_API_KEY", "") or ""))
         if key:
             return True
 
-        runtime_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        runtime_key = normalize_openai_api_key(os.getenv("OPENAI_API_KEY"))
         if not runtime_key:
             return False
 

@@ -755,6 +755,7 @@ def build_gradio_ui(
         settings_app=None,
         instance_path=instance_path,
         on_transcript_message=_on_transcript_message,
+        wait_for_api_key=True,
     )
 
     return RobotDeviceGradioManager(ui=robot_ui, stream=local_stream)
