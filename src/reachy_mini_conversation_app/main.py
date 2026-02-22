@@ -86,7 +86,7 @@ def run(
             logger.error("Please check your configuration and try again.")
             sys.exit(1)
 
-    # Auto-enable Gradio in simulation mode (both MuJoCo for deamon and mockup-sim for desktop app)
+    # SDK daemon status exposes both MuJoCo (`simulation_enabled`) and mockup (`mockup_sim_enabled`) modes.
     status = robot.client.get_status()
     is_simulation = status.get("simulation_enabled", False) or status.get("mockup_sim_enabled", False)
 
@@ -111,9 +111,7 @@ def run(
         head_wobbler=head_wobbler,
     )
 
-    audio_source: Literal["browser", "robot_device"] = (
-        "robot_device" if settings_app is not None else ("browser" if is_simulation else "robot_device")
-    )
+    audio_source: Literal["browser", "robot_device"] = "browser" if is_simulation else "robot_device"
     logger.info("Selected audio source: %s", audio_source)
 
     handler = OpenaiRealtimeHandler(
@@ -170,7 +168,12 @@ def run(
         threading.Thread(target=poll_stop_event, daemon=True).start()
 
     try:
-        stream_manager.launch()
+        # In SDK settings-app mode with browser audio, Gradio is already mounted on the settings FastAPI server.
+        if settings_app is not None and audio_source == "browser" and app_stop_event is not None:
+            logger.info("Gradio UI mounted on settings app, waiting for stop event.")
+            app_stop_event.wait()
+        else:
+            stream_manager.launch()
     except KeyboardInterrupt:
         logger.info("Keyboard interruption in main thread... closing server.")
         try:
