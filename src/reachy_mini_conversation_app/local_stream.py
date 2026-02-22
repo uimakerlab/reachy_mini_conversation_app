@@ -1,5 +1,6 @@
 """Bidirectional local audio stream for robot-device audio I/O."""
 
+import os
 import time
 import asyncio
 import logging
@@ -30,6 +31,7 @@ class LocalStream:
         settings_app: Optional[Any] = None,
         instance_path: Optional[str] = None,
         on_transcript_message: Optional[Callable[[dict[str, Any]], None]] = None,
+        wait_for_api_key: bool = False,
     ):
         """Initialize the stream with an OpenAI realtime handler and pipelines.
 
@@ -51,6 +53,24 @@ class LocalStream:
         self._launch_thread_id: Optional[int] = None
         self._stopped_event = threading.Event()
         self._stopped_event.set()
+        self._wait_for_api_key = wait_for_api_key
+
+    @staticmethod
+    def _has_api_key() -> bool:
+        """Return True when an API key is available in config or environment."""
+        key = str(getattr(config, "OPENAI_API_KEY", "") or "").strip()
+        if key:
+            return True
+
+        runtime_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        if not runtime_key:
+            return False
+
+        try:
+            config.OPENAI_API_KEY = runtime_key
+        except Exception:
+            pass
+        return True
 
     def _persist_api_key(self, key: str) -> None:
         """Persist API key in the same way as the Gradio settings flow."""
@@ -75,12 +95,22 @@ class LocalStream:
             logger=logger,
         )
 
-        # LocalStream has no settings UI; fail fast instead of waiting forever.
-        if not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
-            logger.error(
-                "OPENAI_API_KEY not found. Set it via environment/.env or run with --gradio and save it in Settings."
-            )
-            return
+        if not self._has_api_key():
+            if not self._wait_for_api_key:
+                # LocalStream has no settings UI, fail fast instead of waiting forever.
+                logger.error(
+                    "OPENAI_API_KEY not found. Set it via environment/.env or run with --gradio and save it in Settings."
+                )
+                self._stopped_event.set()
+                return
+
+            logger.warning("OPENAI_API_KEY not found. Waiting for key from Gradio Settings.")
+            while not self._has_api_key():
+                if self._stop_event.is_set() or self._close_requested:
+                    logger.info("Stop requested while waiting for OPENAI_API_KEY.")
+                    self._stopped_event.set()
+                    return
+                time.sleep(0.2)
 
         # Start media after key is set/available
         self._robot.media.start_recording()

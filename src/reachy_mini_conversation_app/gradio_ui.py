@@ -20,6 +20,7 @@ from reachy_mini_conversation_app.config import (
     API_KEY_SOURCE_ENV,
     config,
     persist_api_key,
+    load_instance_env,
     persist_personality,
 )
 from reachy_mini_conversation_app.local_stream import LocalStream
@@ -34,7 +35,6 @@ from reachy_mini_conversation_app.headless_personality import (
 
 
 logger = logging.getLogger(__name__)
-SETTINGS_GRADIO_MOUNT_PATH = "/gradio"
 
 _AUTO_WITH: Dict[str, List[str]] = {
     "dance": ["stop_dance"],
@@ -704,17 +704,20 @@ def build_gradio_ui(
     audio_source: Literal["browser", "robot_device"],
 ) -> gr.Blocks | LocalStream | RobotDeviceGradioManager:
     """Build the Gradio UI and launch manager."""
-    ensure_openai_api_key(
-        instance_path,
-        persist_key=lambda key: persist_api_key(
-            key,
+    if settings_app is not None and audio_source == "robot_device":
+        load_instance_env(instance_path, load_profile=True)
+    else:
+        ensure_openai_api_key(
             instance_path,
-            source="huggingface_setup",
-            custom_logger=logger,
-        ),
-        load_profile=True,
-        logger=logger,
-    )
+            persist_key=lambda key: persist_api_key(
+                key,
+                instance_path,
+                source="huggingface_setup",
+                custom_logger=logger,
+            ),
+            load_profile=True,
+            logger=logger,
+        )
 
     if audio_source == "browser":
         browser_stream = _build_browser_conversation_components(handler)
@@ -725,7 +728,7 @@ def build_gradio_ui(
             browser_stream=browser_stream,
         )
         if settings_app is not None:
-            gr.mount_gradio_app(settings_app, tabbed_browser_ui, path=SETTINGS_GRADIO_MOUNT_PATH)
+            gr.mount_gradio_app(settings_app, tabbed_browser_ui, path="/")
         return tabbed_browser_ui
 
     transcript_queue: queue.Queue[Dict[str, Any]] = queue.Queue()
@@ -746,8 +749,9 @@ def build_gradio_ui(
             settings_app=None,
             instance_path=instance_path,
             on_transcript_message=_on_transcript_message,
+            wait_for_api_key=True,
         )
-        gr.mount_gradio_app(settings_app, robot_ui, path=SETTINGS_GRADIO_MOUNT_PATH)
+        gr.mount_gradio_app(settings_app, robot_ui, path="/")
         return local_stream
 
     local_stream = LocalStream(
