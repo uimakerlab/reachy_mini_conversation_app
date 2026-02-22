@@ -142,7 +142,7 @@ reachy-mini-conversation-app
 > [!TIP]
 > Make sure the Reachy Mini daemon is running before launching the app. If you see a `TimeoutError`, it means the daemon isn't started. See [Reachy Mini's SDK](https://github.com/pollen-robotics/reachy_mini/) for setup instructions.
 
-The app runs in console mode by default. Add `--gradio` to launch a web UI at http://127.0.0.1:7860/ (required for simulation mode). Vision and head-tracking options are described in the CLI table below.
+The app runs in console mode by default. Add `--gradio` to launch a web UI at http://127.0.0.1:7860/. In simulation mode, Gradio is enabled automatically. Vision and head-tracking options are described in the CLI table below.
 
 ### CLI options
 
@@ -151,7 +151,7 @@ The app runs in console mode by default. Add `--gradio` to launch a web UI at ht
 | `--head-tracker {yolo,mediapipe}` | `None` | Select a head-tracking backend when a camera is available. YOLO is implemented locally, MediaPipe comes from the `reachy_mini_toolbox` package. Requires the matching optional extra. |
 | `--no-camera` | `False` | Run without camera capture or head tracking. |
 | `--local-vision` | `False` | Use local vision model (SmolVLM2) for periodic image processing instead of gpt-realtime vision. Requires `local_vision` extra to be installed. |
-| `--gradio` | `False` | Launch the Gradio web UI. Without this flag, runs in console mode. Required when running in simulation mode. |
+| `--gradio` | `False` | Launch the Gradio web UI. Without this flag, runs in console mode (except in simulation mode, where Gradio is auto-enabled). |
 | `--robot-name` | `None` | Optional. Connect to a specific robot by name when running multiple daemons on the same subnet. See [Multiple robots on the same subnet](#advanced-features). |
 | `--debug` | `False` | Enable verbose logging for troubleshooting. |
 
@@ -230,7 +230,7 @@ Custom tools must subclass `reachy_mini_conversation_app.tools.core_tools.Tool` 
 When running with `--gradio`, open the **Settings** tab:
 - Select among available profiles (folders under `src/reachy_mini_conversation_app/profiles/`) or the built‑in default.
 - Click "Apply" to update the current session instructions live.
-- Click "Use on startup" to persist the selected profile to the app `.env`.
+- Click "Apply Changes" to persist the selected startup profile to the app `.env`.
 - Configure enabled tools from the "Tools" section; the selection is persisted to that profile's `tools.txt`.
 
 </details>
@@ -242,7 +242,7 @@ To create a locked variant of the app that cannot switch profiles, edit `src/rea
 ```python
 LOCKED_PROFILE: str | None = "mars_rover"  # Lock to this profile
 ```
-When `LOCKED_PROFILE` is set, the app always uses that profile, ignoring `REACHY_MINI_CUSTOM_PROFILE` env var & the Gradio UI shows "(locked)" and disables all profile editing controls.
+When `LOCKED_PROFILE` is set, the app always uses that profile, ignoring `REACHY_MINI_CUSTOM_PROFILE` env var. The Gradio Settings tab shows a lock notice, greys out profile controls, and disables profile editing controls.
 This is useful for creating dedicated clones of the app with a fixed personality. Clone scripts can simply edit this constant to lock the variant.
 
 </details>
