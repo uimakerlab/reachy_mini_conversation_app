@@ -1,4 +1,6 @@
 import os
+import sys
+import json
 import logging
 import argparse
 import warnings
@@ -101,20 +103,28 @@ def handle_vision_stuff(args: argparse.Namespace, current_robot: ReachyMini) -> 
     return camera_worker, head_tracker, vision_manager
 
 
-def setup_logger(debug: bool) -> logging.Logger:
+def setup_logger(logger, debug: bool):
     """Setups the logger."""
     log_level = "DEBUG" if debug else "INFO"
-    logging.basicConfig(
-        level=getattr(logging, log_level, logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s:%(lineno)d | %(message)s",
-    )
-    logger = logging.getLogger(__name__)
+    handler = logging.StreamHandler(sys.stderr)
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s:%(lineno)d | %(message)s")
+    handler.setFormatter(formatter)
+
+    # Configure ROOT logger so all modules inherit this setup
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG if debug else logging.INFO)
+
+    # Also set the passed-in logger's level explicitly if needed
+    logger.handlers.clear()
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
 
     # Suppress WebRTC warnings
     warnings.filterwarnings("ignore", message=".*AVCaptureDeviceTypeExternal.*")
     warnings.filterwarnings("ignore", category=UserWarning, module="aiortc")
 
-    # Tame third-party noise (looser in DEBUG)
+    # Tame third-party noise
     if log_level == "DEBUG":
         logging.getLogger("aiortc").setLevel(logging.INFO)
         logging.getLogger("fastrtc").setLevel(logging.INFO)
@@ -125,7 +135,13 @@ def setup_logger(debug: bool) -> logging.Logger:
         logging.getLogger("aiortc").setLevel(logging.ERROR)
         logging.getLogger("fastrtc").setLevel(logging.ERROR)
         logging.getLogger("aioice").setLevel(logging.WARNING)
-    return logger
+
+    # Force uvicorn/gradio through our handler
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "gradio"):
+        lib_logger = logging.getLogger(name)
+        lib_logger.handlers.clear()
+        lib_logger.addHandler(handler)
+        lib_logger.propagate = False
 
 
 def claim_openai_api_key_from_hf(logger: Optional[logging.Logger] = None) -> Optional[str]:

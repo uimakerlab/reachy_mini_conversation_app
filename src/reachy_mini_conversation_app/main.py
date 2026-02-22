@@ -3,9 +3,11 @@
 import os
 import sys
 import time
+import logging
 import asyncio
 import argparse
 import threading
+
 from typing import Literal, Optional
 
 from fastapi import FastAPI
@@ -19,6 +21,7 @@ from reachy_mini_conversation_app.utils import (
 )
 from reachy_mini_conversation_app.config import LOCKED_PROFILE
 
+logger = logging.getLogger(__name__)
 
 def main() -> None:
     """Entrypoint for the Reachy Mini conversation app."""
@@ -34,13 +37,16 @@ def run(
     instance_path: Optional[str] = None,
 ) -> None:
     """Run the Reachy Mini conversation app."""
+    setup_logger(logger, args.debug) 
     # Putting these dependencies here makes the dashboard faster to load when the conversation app is installed
     from reachy_mini_conversation_app.moves import MovementManager
     from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler
     from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
     from reachy_mini_conversation_app.audio.head_wobbler import HeadWobbler
 
-    logger = setup_logger(args.debug)
+    
+    
+
     logger.info("Starting Reachy Mini Conversation App")
     if LOCKED_PROFILE is not None:
         logger.info(
