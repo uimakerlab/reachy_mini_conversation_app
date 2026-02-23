@@ -35,6 +35,7 @@ def run(
     app_stop_event: Optional[threading.Event] = None,
     settings_app: Optional[FastAPI] = None,
     instance_path: Optional[str] = None,
+    started_from_dashboard: Optional[bool] = None
 ) -> None:
     """Run the Reachy Mini conversation app."""
     setup_logger(logger, args.debug) 
@@ -126,7 +127,7 @@ def run(
         instance_path=instance_path,
     )
 
-    should_launch_ui = bool(args.gradio or settings_app is not None)
+    should_launch_ui = bool(args.gradio or settings_app is not None or started_from_dashboard)
     if audio_source == "browser" and not should_launch_ui:
         logger.warning("audio_source=browser requires UI; enabling Gradio launch.")
         should_launch_ui = True
@@ -209,7 +210,7 @@ class ReachyMiniConversationApp(ReachyMiniApp):  # type: ignore[misc]
 
     # TODO change back otherwise it won't work on macos
     custom_app_url = "http://0.0.0.0:7860/"
-    dont_start_webserver = False
+    dont_start_webserver = True
     auto_mount_static_ui = False
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
@@ -227,8 +228,9 @@ class ReachyMiniConversationApp(ReachyMiniApp):  # type: ignore[misc]
             args,
             robot=reachy_mini,
             app_stop_event=stop_event,
-            settings_app=self.settings_app,
+            settings_app=None,
             instance_path=instance_path,
+            started_from_dashboard=True
         )
 
 
