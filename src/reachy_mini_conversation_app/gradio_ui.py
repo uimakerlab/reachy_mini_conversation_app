@@ -14,7 +14,6 @@ from fastapi import FastAPI
 from fastrtc import Stream
 
 from reachy_mini import ReachyMini
-from reachy_mini_conversation_app.utils import ensure_openai_api_key
 from reachy_mini_conversation_app.config import (
     LOCKED_PROFILE,
     API_KEY_SOURCE_ENV,
@@ -482,7 +481,7 @@ def _build_tabbed_ui(
                             gr.update(),
                         )
 
-                    persist_api_key(k, instance_path, source="settings_ui", custom_logger=logger)
+                    persist_api_key(k, instance_path, source="settings_ui")
                     status, source = _api_key_status_components()
 
                     return (
@@ -501,13 +500,6 @@ def _build_tabbed_ui(
                         key_feedback_md,
                         api_key_input,
                     ],
-                )
-
-                gr.Timer(value=1.5).tick(
-                    fn=_api_key_status_components,
-                    inputs=[],
-                    outputs=[key_status_md, key_source_md],
-                    queue=False,
                 )
 
                 is_locked = LOCKED_PROFILE is not None
@@ -611,9 +603,12 @@ def _build_tabbed_ui(
                         if status_messages:
                             status = _pick_apply_status(status_messages, status_messages[0])
                         else:
-                            status = await handler.apply_personality(
-                                profile_name,
-                                final_voice,
+                            status = await _run_handler_call(
+                                handler,
+                                lambda: handler.apply_personality(
+                                    profile_name,
+                                    final_voice,
+                                ),
                             )
 
                         status_lower = status.lower() if isinstance(status, str) else ""
@@ -692,23 +687,14 @@ class RobotDeviceGradioManager:
 
 
 def build_gradio_ui(
-    *,
     handler: OpenaiRealtimeHandler,
     robot: ReachyMini,
     settings_app: Optional[FastAPI],
     instance_path: Optional[str],
     audio_source: Literal["browser", "robot_device"],
-    logger=logger
 ) -> gr.Blocks | LocalStream | RobotDeviceGradioManager:
     """Build the Gradio UI and launch manager."""
-    if settings_app is not None and audio_source == "robot_device":
-        # In SDK dashboard mode, mount UI first. Key bootstrap continues in LocalStream.launch().
-        load_instance_env(instance_path, load_profile=True)
-
-    ensure_openai_api_key(
-        instance_path,
-        load_profile=True,
-    )
+    load_instance_env(instance_path, load_profile=True)
 
     if audio_source == "browser":
         browser_stream = _build_browser_conversation_components(handler)
@@ -720,6 +706,8 @@ def build_gradio_ui(
         )
         if settings_app is not None:
             gr.mount_gradio_app(settings_app, tabbed_browser_ui, path="/")
+            if not tabbed_browser_ui.is_running:
+                tabbed_browser_ui.run_startup_events()
         return tabbed_browser_ui
 
     transcript_queue: queue.Queue[Dict[str, Any]] = queue.Queue()

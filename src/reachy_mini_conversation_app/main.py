@@ -132,6 +132,7 @@ def run(
         should_launch_ui = True
 
     if should_launch_ui:
+        logger.info("Building gradio UI for the stream")
         from reachy_mini_conversation_app.gradio_ui import build_gradio_ui
 
         stream_manager = build_gradio_ui(
@@ -172,21 +173,17 @@ def run(
 
     if app_stop_event:
         threading.Thread(target=poll_stop_event, daemon=True).start()
-
     try:
-        # In SDK settings-app mode with browser audio, Gradio is already mounted on the settings FastAPI server.
-        if settings_app is not None and audio_source == "browser" and app_stop_event is not None:
-            logger.info("Gradio UI mounted on settings app, waiting for stop event.")
-            app_stop_event.wait()
-        else:
-            stream_manager.launch()
+        logger.info("Starting stream manager")
+        stream_manager.launch()
+        logger.info("Stream manager exited")
     except KeyboardInterrupt:
         logger.info("Keyboard interruption in main thread... closing server.")
-        try:
-            stream_manager.close()
-        except Exception as e:
-            logger.error(f"Error while closing stream manager after KeyboardInterrupt: {e}")
+    except Exception as e:
+        logger.exception(f"Error running stream")
+        raise
     finally:
+        logger.info("Finishing all conversation services")
         movement_manager.stop()
         head_wobbler.stop()
         if camera_worker:
@@ -210,14 +207,15 @@ def run(
 class ReachyMiniConversationApp(ReachyMiniApp):  # type: ignore[misc]
     """Reachy Mini Apps entry point for the conversation app."""
 
+    # TODO change back otherwise it won't work on macos
     custom_app_url = "http://0.0.0.0:7860/"
     dont_start_webserver = False
     auto_mount_static_ui = False
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
         """Run the Reachy Mini conversation app."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # loop = asyncio.new_event_loop()
+        # asyncio.set_event_loop(loop)
 
         args, _ = parse_args()
 
@@ -236,7 +234,4 @@ class ReachyMiniConversationApp(ReachyMiniApp):  # type: ignore[misc]
 
 if __name__ == "__main__":
     app = ReachyMiniConversationApp()
-    try:
-        app.wrapped_run()
-    except KeyboardInterrupt:
-        app.stop()
+    app.wrapped_run()
