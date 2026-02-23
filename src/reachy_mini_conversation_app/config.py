@@ -107,7 +107,7 @@ class Config:
     """Configuration class for the conversation app."""
 
     # Required
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # The key is bootstrapped in local_stream/gradio startup if needed
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # The key is bootstrapped in console/gradio startup if needed
 
     # Optional
     MODEL_NAME = os.getenv("MODEL_NAME", "gpt-realtime")

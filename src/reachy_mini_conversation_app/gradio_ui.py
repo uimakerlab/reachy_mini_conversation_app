@@ -23,7 +23,7 @@ from reachy_mini_conversation_app.config import (
     load_instance_env,
     persist_personality,
 )
-from reachy_mini_conversation_app.local_stream import LocalStream
+from reachy_mini_conversation_app.console import LocalStream
 from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler
 from reachy_mini_conversation_app.tools.core_tools import reload_tools_registry
 from reachy_mini_conversation_app.headless_personality import (
@@ -733,25 +733,20 @@ def build_gradio_ui(
         transcript_queue=transcript_queue,
     )
 
-    if settings_app is not None:
-        local_stream = LocalStream(
-            handler,
-            robot,
-            settings_app=None,
-            instance_path=instance_path,
-            on_transcript_message=_on_transcript_message,
-            wait_for_api_key=True,
-        )
-        gr.mount_gradio_app(settings_app, robot_ui, path="/")
-        return local_stream
-
     local_stream = LocalStream(
         handler,
         robot,
-        settings_app=None,
         instance_path=instance_path,
-        on_transcript_message=_on_transcript_message,
-        wait_for_api_key=True,
+        transcript_callback=_on_transcript_message,
     )
+
+    if settings_app is not None:
+        logger.info("Mounting gradio ui on settings app")
+        gr.mount_gradio_app(settings_app, robot_ui, path="/")
+        # Manually start the Gradio queue since the settings_app server is
+        # already running and the lifespan startup event won't fire again.
+        if not robot_ui.is_running:
+            robot_ui.run_startup_events()
+        return local_stream
 
     return RobotDeviceGradioManager(ui=robot_ui, stream=local_stream)

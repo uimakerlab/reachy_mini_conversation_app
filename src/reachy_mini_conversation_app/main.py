@@ -142,12 +142,12 @@ def run(
             audio_source=audio_source,
         )
     else:
-        from reachy_mini_conversation_app.local_stream import LocalStream
+        logger.info("Using pure console stream")
+        from reachy_mini_conversation_app.console import LocalStream
 
         stream_manager = LocalStream(
             handler,
             robot,
-            settings_app=settings_app,
             instance_path=instance_path,
         )
 
