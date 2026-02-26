@@ -153,7 +153,7 @@ The app runs in console mode by default. Add `--gradio` to launch a web UI at ht
 | `--local-vision` | `False` | Use local vision model (SmolVLM2) for periodic image processing instead of gpt-realtime vision. Requires `local_vision` extra to be installed. |
 | `--gradio` | `False` | Launch the Gradio web UI. Without this flag, runs in console mode. Required when running in simulation mode. |
 | `--robot-name` | `None` | Optional. Connect to a specific robot by name when running multiple daemons on the same subnet. See [Multiple robots on the same subnet](#advanced-features). |
-| `--sync-tool-space-deps <owner/repo>` | `None` | Sync an external tool from a Hugging Face Space (tool file + optional dependencies), then exit. Uses `HF_TOKEN` for private Spaces. See **External profiles and tools**. |
+| `--download-hf-tool <owner/repo>` | `None` | Sync an external tool from a Hugging Face Space (tool file + optional dependencies), then exit. Uses `HF_TOKEN` for private Spaces. See **External profiles and tools**. |
 | `--debug` | `False` | Enable verbose logging for troubleshooting. |
 
 ### Examples
@@ -172,7 +172,7 @@ reachy-mini-conversation-app --no-camera
 reachy-mini-conversation-app --gradio
 
 # Sync external tool + dependencies from a Hugging Face Space, then exit
-reachy-mini-conversation-app --sync-tool-space-deps owner/repo
+reachy-mini-conversation-app --download-hf-tool owner/repo
 ```
 
 ## LLM tools exposed to the assistant
@@ -288,7 +288,7 @@ REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY=./external_content/external_tools
 **Sync from a Hugging Face Space:**
 
 ```bash
-reachy-mini-conversation-app --sync-tool-space-deps owner/repo
+reachy-mini-conversation-app --download-hf-tool owner/repo
 ```
 
 This downloads one external tool `.py` into `REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY` (or `./external_content/external_tools`), and syncs dependencies from `requirements.txt` when present. When dependencies are synced, `pyproject.toml` is updated and `uv.lock` is regenerated.
