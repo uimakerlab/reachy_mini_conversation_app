@@ -1,5 +1,4 @@
 from __future__ import annotations
-import subprocess
 from typing import Any
 from pathlib import Path
 
@@ -83,6 +82,20 @@ class SearchTool(Tool):
         return {"ok": True}
 """
 
+MISSING_RUNTIME_DEP_TOOL_MODULE = """
+from reachy_mini_conversation_app.tools.core_tools import Tool
+import definitely_missing_runtime_dependency_abc123
+
+
+class SearchTool(Tool):
+    name = "search_tool"
+    description = "Search things"
+    parameters_schema = {"type": "object", "properties": {}}
+
+    async def __call__(self, deps, **kwargs):
+        return {"ok": True}
+"""
+
 
 def test_normalize_space_id_variants() -> None:
     """Space IDs and URLs normalize to owner/repo form."""
@@ -122,8 +135,8 @@ def test_sync_tool_space_dependencies_success(
 
     monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
 
-    def fake_run(command: list[str], text: bool, capture_output: bool, check: bool) -> Any:
-        del text, capture_output, check
+    def fake_run_command(command: list[str], logger: Any) -> tuple[int, str, str]:
+        del logger
         assert command[:4] == ["uv", "add", "--group", sync_mod.EXTERNAL_TOOLS_GROUP]
         # Simulate uv having updated files
         (tmp_path / "pyproject.toml").write_text(
@@ -131,9 +144,9 @@ def test_sync_tool_space_dependencies_success(
             encoding="utf-8",
         )
         (tmp_path / "uv.lock").write_text("lock-after\n", encoding="utf-8")
-        return subprocess.CompletedProcess(args=command, returncode=0, stdout="ok", stderr="")
+        return 0, "ok", ""
 
-    monkeypatch.setattr(sync_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(sync_mod, "_run_command", fake_run_command)
 
     out = sync_mod.sync_tool_space_dependencies(
         space="owner/repo",
@@ -163,17 +176,17 @@ def test_sync_tool_space_dependencies_rolls_back_on_failure(
 
     monkeypatch.setattr(sync_mod, "hf_hub_download", lambda **_: str(requirements_path))
 
-    def fake_run(command: list[str], text: bool, capture_output: bool, check: bool) -> Any:
-        del text, capture_output, check
+    def fake_run_command(command: list[str], logger: Any) -> tuple[int, str, str]:
+        del logger
         # Simulate partial writes before command failure
         (tmp_path / "pyproject.toml").write_text(
             "[project]\nname='x'\nversion='0.0.1'\ndependencies=['badpkg']\n",
             encoding="utf-8",
         )
         (tmp_path / "uv.lock").write_text("lock-mutated\n", encoding="utf-8")
-        return subprocess.CompletedProcess(args=command, returncode=2, stdout="", stderr="resolver conflict")
+        return 2, "", "resolver conflict"
 
-    monkeypatch.setattr(sync_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(sync_mod, "_run_command", fake_run_command)
 
     with pytest.raises(RuntimeError, match="rolled back"):
         sync_mod.sync_tool_space_dependencies(
@@ -218,7 +231,7 @@ def test_sync_tool_space_dependencies_allows_empty_requirements(
         del args, kwargs
         raise AssertionError("uv add should not run for empty requirements")
 
-    monkeypatch.setattr(sync_mod.subprocess, "run", fail_if_called)
+    monkeypatch.setattr(sync_mod, "_run_command", fail_if_called)
 
     result = sync_mod.sync_tool_space_dependencies(
         space="owner/repo",
@@ -271,16 +284,16 @@ def test_sync_tool_space_dependencies_rolls_back_on_tool_download_failure(
     monkeypatch.setattr(sync_mod, "hf_hub_download", lambda **_: str(requirements_path))
     monkeypatch.setattr(sync_mod, "_select_tool_python_file", lambda *_: (_ for _ in ()).throw(ValueError("ambiguous")))
 
-    def fake_run(command: list[str], text: bool, capture_output: bool, check: bool) -> Any:
-        del command, text, capture_output, check
+    def fake_run_command(command: list[str], logger: Any) -> tuple[int, str, str]:
+        del command, logger
         (tmp_path / "pyproject.toml").write_text(
             "[project]\nname='x'\nversion='0.0.1'\ndependencies=['ddgs']\n",
             encoding="utf-8",
         )
         (tmp_path / "uv.lock").write_text("lock-mutated\n", encoding="utf-8")
-        return subprocess.CompletedProcess(args=["uv"], returncode=0, stdout="", stderr="")
+        return 0, "", ""
 
-    monkeypatch.setattr(sync_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(sync_mod, "_run_command", fake_run_command)
 
     with pytest.raises(RuntimeError, match="rolled back"):
         sync_mod.sync_tool_space_dependencies(
@@ -339,6 +352,37 @@ def test_sync_tool_space_dependencies_fails_when_tool_has_invalid_format(
     monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
 
     with pytest.raises(RuntimeError, match="No Tool subclass found in downloaded module"):
+        sync_mod.sync_tool_space_dependencies(
+            space="owner/repo",
+            logger=sync_mod.logging.getLogger("test"),
+        )
+
+    assert not (tmp_path / "external_content" / "external_tools" / "search_tool.py").exists()
+
+
+def test_sync_tool_space_dependencies_fails_preflight_import_on_missing_runtime_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preflight import should fail fast when runtime deps are missing."""
+    monkeypatch.chdir(tmp_path)
+
+    source_tool = tmp_path / "search_tool.py"
+    source_tool.write_text(MISSING_RUNTIME_DEP_TOOL_MODULE, encoding="utf-8")
+    monkeypatch.setattr(sync_mod, "_select_tool_python_file", lambda *_: "search_tool.py")
+
+    def fake_download(**kwargs: Any) -> str:
+        if kwargs["filename"] == "requirements.txt":
+            raise EntryNotFoundError("requirements missing")
+        if kwargs["filename"] == "search_tool.py":
+            return str(source_tool)
+        raise AssertionError(f"Unexpected download filename: {kwargs['filename']}")
+
+    monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Preflight import check failed|definitely_missing_runtime_dependency_abc123",
+    ):
         sync_mod.sync_tool_space_dependencies(
             space="owner/repo",
             logger=sync_mod.logging.getLogger("test"),
