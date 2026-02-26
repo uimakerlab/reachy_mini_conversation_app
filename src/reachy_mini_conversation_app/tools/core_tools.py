@@ -130,6 +130,40 @@ def _format_error(error: Exception) -> str:
     return f"{type(error).__name__}: {error}"
 
 
+def _build_tool_registry(tool_classes: List[type[Tool]]) -> Dict[str, Tool]:
+    """Instantiate tools and fail if duplicate Tool.name values are detected."""
+    unique_classes: List[type[Tool]] = []
+    seen_class_ids: set[int] = set()
+    for cls in tool_classes:
+        cls_id = id(cls)
+        if cls_id in seen_class_ids:
+            continue
+        seen_class_ids.add(cls_id)
+        unique_classes.append(cls)
+
+    name_to_sources: Dict[str, List[str]] = {}
+    for cls in unique_classes:
+        source = f"{cls.__module__}.{cls.__name__}"
+        name_to_sources.setdefault(cls.name, []).append(source)
+
+    collisions = {
+        tool_name: sources
+        for tool_name, sources in name_to_sources.items()
+        if len(sources) > 1
+    }
+    if collisions:
+        details = "; ".join(
+            f"{tool_name}: {sources}"
+            for tool_name, sources in sorted(collisions.items())
+        )
+        raise RuntimeError(
+            "Duplicate Tool.name values detected while loading tools. "
+            f"Tool.name must be unique. Conflicts: {details}"
+        )
+
+    return {cls.name: cls() for cls in unique_classes}
+
+
 # Registry & specs (dynamic)
 def _load_profile_tools() -> None:
     """Load tools based on profile's tools.txt file."""
@@ -265,7 +299,7 @@ def _initialize_tools() -> None:
 
     _load_profile_tools()
 
-    ALL_TOOLS = {cls.name: cls() for cls in get_concrete_subclasses(Tool)}  # type: ignore[type-abstract]
+    ALL_TOOLS = _build_tool_registry(get_concrete_subclasses(Tool))  # type: ignore[type-abstract]
     ALL_TOOL_SPECS = [tool.spec() for tool in ALL_TOOLS.values()]
 
     for tool_name, tool in ALL_TOOLS.items():
