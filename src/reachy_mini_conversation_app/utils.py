@@ -107,10 +107,12 @@ def setup_logger(debug: bool) -> logging.Logger:
         logging.getLogger("aioice").setLevel(logging.INFO)
         logging.getLogger("openai").setLevel(logging.INFO)
         logging.getLogger("websockets").setLevel(logging.INFO)
+        logging.getLogger("httpx").setLevel(logging.INFO)
     else:
         logging.getLogger("aiortc").setLevel(logging.ERROR)
         logging.getLogger("fastrtc").setLevel(logging.ERROR)
         logging.getLogger("aioice").setLevel(logging.WARNING)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
     return logger
 
 def log_connection_troubleshooting(logger: logging.Logger, robot_name: Optional[str]) -> None:

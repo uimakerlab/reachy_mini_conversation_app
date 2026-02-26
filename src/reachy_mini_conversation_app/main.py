@@ -43,25 +43,37 @@ def run(
 ) -> None:
     """Run the Reachy Mini conversation app."""
     logger = setup_logger(args.debug)
-    logger.info("Starting Reachy Mini Conversation App")
 
     if args.download_hf_tool:
         from reachy_mini_conversation_app.tool_dependency_sync import sync_tool_space_dependencies
 
         try:
+            logger.info(
+                "Starting external tool download from Hugging Face Space: %s",
+                args.download_hf_tool,
+            )
             sync_result = sync_tool_space_dependencies(
                 space=args.download_hf_tool,
                 logger=logger,
             )
-            logger.info("Dependencies synced from %s", sync_result.requirements_path)
+            if sync_result.requirements_path is not None:
+                logger.info("Dependencies synced from %s", sync_result.requirements_path)
+            else:
+                logger.info("Dependency sync skipped (no requirements.txt or empty requirements.txt).")
             logger.info("Tool module synced to %s", sync_result.downloaded_tool_path)
             logger.info("Re-run without --download-hf-tool to start the app.")
+            logger.info(
+                "You can now load downloaded tool '%s'.",
+                sync_result.downloaded_tool_path.stem,
+            )
             return
         except Exception as e:
             logger.error("Failed to sync external tool dependencies: %s", e)
             if args.debug:
                 logger.exception("Dependency sync traceback")
             sys.exit(1)
+
+    logger.info("Starting Reachy Mini Conversation App")
 
     # Putting these dependencies here makes the dashboard faster to load when the conversation app is installed
     from reachy_mini_conversation_app.moves import MovementManager
