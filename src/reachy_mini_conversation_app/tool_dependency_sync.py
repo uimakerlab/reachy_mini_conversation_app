@@ -4,11 +4,14 @@ from __future__ import annotations
 import os
 import re
 import ast
+import json
 import shutil
+import hashlib
 import logging
 import tempfile
 import subprocess
 from pathlib import Path
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -54,6 +57,10 @@ class ToolSpaceSyncResult:
     downloaded_tool_path: Path
     downloaded_tool_source: str
     dependency_group: str
+    resolved_revision: str
+    synced_at_utc: str
+    requirements_sha256: str | None
+    metadata_path: Path
 
 
 def normalize_space_id(space: str) -> str:
@@ -149,7 +156,17 @@ def _resolve_external_tools_directory(directory: str | None = None) -> Path:
     return resolved
 
 
-def _select_tool_python_file(space_id: str, token: str | None) -> str:
+def _resolve_space_revision(space_id: str, token: str | None) -> str:
+    """Resolve Space to immutable commit SHA to avoid branch drift between downloads."""
+    api = HfApi(token=token)
+    info = api.space_info(repo_id=space_id, token=token)
+    resolved_revision = (getattr(info, "sha", None) or "").strip()
+    if not resolved_revision:
+        raise RuntimeError(f"Unable to resolve revision for Hugging Face Space '{space_id}'.")
+    return resolved_revision
+
+
+def _select_tool_python_file(space_id: str, token: str | None, revision: str | None = None) -> str:
     """Pick exactly one tool Python file from a space snapshot listing.
 
     Selection heuristic:
@@ -158,7 +175,12 @@ def _select_tool_python_file(space_id: str, token: str | None) -> str:
     3) Require exactly one candidate.
     """
     api = HfApi(token=token)
-    repo_files = api.list_repo_files(repo_id=space_id, repo_type="space", token=token)
+    repo_files = api.list_repo_files(
+        repo_id=space_id,
+        repo_type="space",
+        revision=revision,
+        token=token,
+    )
 
     candidates: list[str] = []
     for repo_file in repo_files:
@@ -194,12 +216,14 @@ def _download_tool_module(
     space_id: str,
     token: str | None,
     target_directory: Path,
+    revision: str | None = None,
 ) -> tuple[Path, str]:
-    repo_file = _select_tool_python_file(space_id, token)
+    repo_file = _select_tool_python_file(space_id, token, revision)
     downloaded = Path(
         hf_hub_download(
             repo_id=space_id,
             repo_type="space",
+            revision=revision,
             filename=repo_file,
             token=token,
         )
@@ -346,6 +370,7 @@ def _try_download_requirements(
     space_id: str,
     token: str | None,
     logger: logging.Logger,
+    revision: str | None = None,
 ) -> Path | None:
     """Download requirements.txt if present; return None when absent or empty."""
     try:
@@ -353,6 +378,7 @@ def _try_download_requirements(
             hf_hub_download(
                 repo_id=space_id,
                 repo_type="space",
+                revision=revision,
                 filename="requirements.txt",
                 token=token,
             )
@@ -385,6 +411,55 @@ def _is_hf_token_permission_issue(error: Exception) -> bool:
     )
 
 
+def _sha256_file(file_path: Path) -> str:
+    """Return SHA-256 digest for file contents."""
+    return hashlib.sha256(file_path.read_bytes()).hexdigest()
+
+
+def _build_metadata_path(tool_path: Path) -> Path:
+    """Build metadata sidecar path next to downloaded tool."""
+    return tool_path.with_name(f"{tool_path.name}.metadata.json")
+
+
+def _write_tool_metadata(
+    *,
+    metadata_path: Path,
+    space_id: str,
+    revision: str,
+    synced_at_utc: str,
+    requirements_sha256: str | None,
+    source_tool_file: str,
+) -> None:
+    """Write tool metadata atomically."""
+    payload = {
+        "schema_version": 1,
+        "space_id": space_id,
+        "revision": revision,
+        "synced_at_utc": synced_at_utc,
+        "requirements_sha256": requirements_sha256,
+        "source_tool_file": source_tool_file,
+    }
+
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        delete=False,
+        dir=metadata_path.parent,
+        prefix=f".{metadata_path.stem}.",
+        suffix=".tmp.json",
+        encoding="utf-8",
+    ) as tmp_file:
+        tmp_path = Path(tmp_file.name)
+        json.dump(payload, tmp_file, indent=2, sort_keys=True)
+        tmp_file.write("\n")
+
+    try:
+        os.replace(tmp_path, metadata_path)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
+
+
 def sync_tool_space_dependencies(
     *,
     space: str,
@@ -402,10 +477,12 @@ def sync_tool_space_dependencies(
     token = (hf_token or os.getenv("HF_TOKEN") or "").strip() or None
 
     try:
+        resolved_revision = _resolve_space_revision(space_id, token)
         requirements_path = _try_download_requirements(
             space_id=space_id,
             token=token,
             logger=logger,
+            revision=resolved_revision,
         )
     except Exception as e:
         if _is_hf_token_permission_issue(e):
@@ -436,6 +513,9 @@ def sync_tool_space_dependencies(
 
     copied_tool_path: Path | None = None
     source_tool_file: str | None = None
+    metadata_path: Path | None = None
+    synced_at_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    requirements_sha256 = _sha256_file(requirements_path) if requirements_path is not None else None
     try:
         if requirements_path is not None:
             _validate_requirements_for_safe_install(requirements_path)
@@ -457,6 +537,16 @@ def sync_tool_space_dependencies(
             space_id=space_id,
             token=token,
             target_directory=target_tools_directory,
+            revision=resolved_revision,
+        )
+        metadata_path = _build_metadata_path(copied_tool_path)
+        _write_tool_metadata(
+            metadata_path=metadata_path,
+            space_id=space_id,
+            revision=resolved_revision,
+            synced_at_utc=synced_at_utc,
+            requirements_sha256=requirements_sha256,
+            source_tool_file=source_tool_file,
         )
     except Exception as e:
         permission_hint = ""
@@ -472,6 +562,8 @@ def sync_tool_space_dependencies(
                 uv_lock_path.unlink()
         if copied_tool_path is not None and copied_tool_path.exists():
             copied_tool_path.unlink()
+        if metadata_path is not None and metadata_path.exists():
+            metadata_path.unlink()
         if dependency_sync_attempted:
             raise RuntimeError(
                 "Dependency/tool synchronization failed and changes were rolled back. "
@@ -491,11 +583,18 @@ def sync_tool_space_dependencies(
         source_tool_file,
         copied_tool_path,
     )
+    logger.info("Tool metadata saved to %s", metadata_path)
     if copied_tool_path is None or source_tool_file is None:
         raise RuntimeError("Tool synchronization failed. No tool file was copied.")
+    if metadata_path is None:
+        raise RuntimeError("Tool synchronization failed. Metadata was not written.")
     return ToolSpaceSyncResult(
         requirements_path=requirements_path,
         downloaded_tool_path=copied_tool_path,
         downloaded_tool_source=source_tool_file,
         dependency_group=dependency_group,
+        resolved_revision=resolved_revision,
+        synced_at_utc=synced_at_utc,
+        requirements_sha256=requirements_sha256,
+        metadata_path=metadata_path,
     )

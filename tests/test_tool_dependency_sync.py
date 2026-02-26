@@ -1,4 +1,6 @@
 from __future__ import annotations
+import json
+import hashlib
 from typing import Any
 from pathlib import Path
 
@@ -7,6 +9,15 @@ import pytest
 from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 
 import reachy_mini_conversation_app.tool_dependency_sync as sync_mod
+
+
+TEST_RESOLVED_REVISION = "0123456789abcdef0123456789abcdef01234567"
+
+
+@pytest.fixture(autouse=True)
+def stub_resolved_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Avoid network calls for revision lookup across sync tests."""
+    monkeypatch.setattr(sync_mod, "_resolve_space_revision", lambda *_: TEST_RESOLVED_REVISION)
 
 
 VALID_TOOL_MODULE = """
@@ -127,6 +138,7 @@ def test_sync_tool_space_dependencies_success(
 
     def fake_download(**kwargs: Any) -> str:
         filename = kwargs["filename"]
+        assert kwargs["revision"] == TEST_RESOLVED_REVISION
         if filename == "requirements.txt":
             return str(requirements_path)
         if filename == "search_tool.py":
@@ -156,6 +168,16 @@ def test_sync_tool_space_dependencies_success(
     assert out.downloaded_tool_source == "search_tool.py"
     assert out.downloaded_tool_path == tmp_path / "external_content" / "external_tools" / "search_tool.py"
     assert out.downloaded_tool_path.read_text(encoding="utf-8") == VALID_TOOL_MODULE
+    assert out.resolved_revision == TEST_RESOLVED_REVISION
+    assert out.requirements_sha256 == hashlib.sha256(requirements_path.read_bytes()).hexdigest()
+    assert out.synced_at_utc.endswith("Z")
+    assert out.metadata_path == out.downloaded_tool_path.with_name("search_tool.py.metadata.json")
+    metadata = json.loads(out.metadata_path.read_text(encoding="utf-8"))
+    assert metadata["space_id"] == "owner/repo"
+    assert metadata["revision"] == TEST_RESOLVED_REVISION
+    assert metadata["requirements_sha256"] == out.requirements_sha256
+    assert metadata["source_tool_file"] == "search_tool.py"
+    assert metadata["synced_at_utc"].endswith("Z")
     assert "external-tools" in (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
     assert (tmp_path / "uv.lock").read_text(encoding="utf-8") == "lock-after\n"
 
@@ -284,6 +306,9 @@ def test_sync_tool_space_dependencies_allows_empty_requirements(
     )
     assert result.requirements_path is None
     assert result.downloaded_tool_path.exists()
+    assert result.requirements_sha256 is None
+    metadata = json.loads(result.metadata_path.read_text(encoding="utf-8"))
+    assert metadata["requirements_sha256"] is None
     assert (tmp_path / "uv.lock").read_text(encoding="utf-8") == "lock-before\n"
 
 
@@ -311,6 +336,9 @@ def test_sync_tool_space_dependencies_allows_missing_requirements(
     )
     assert result.requirements_path is None
     assert result.downloaded_tool_path.exists()
+    assert result.requirements_sha256 is None
+    metadata = json.loads(result.metadata_path.read_text(encoding="utf-8"))
+    assert metadata["requirements_sha256"] is None
 
 
 def test_sync_tool_space_dependencies_rolls_back_on_tool_download_failure(
@@ -554,8 +582,8 @@ def test_sync_tool_space_dependencies_fails_when_space_not_found(
     response = httpx.Response(404, request=request)
     repo_not_found_error = RepositoryNotFoundError("Repository Not Found", response=response)
 
-    def fail_requirements(*, space_id: str, token: str | None, logger: Any) -> None:
-        del space_id, token, logger
+    def fail_requirements(*, space_id: str, token: str | None, logger: Any, revision: str | None = None) -> None:
+        del space_id, token, logger, revision
         raise repo_not_found_error
 
     monkeypatch.setattr(sync_mod, "_try_download_requirements", fail_requirements)
