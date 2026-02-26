@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import os
+import re
 import ast
 import shutil
 import logging
@@ -23,6 +24,7 @@ _TOOL_FILE_EXCLUSIONS = {
     "main.py",
     "setup.py",
 }
+_TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @dataclass(frozen=True)
@@ -190,6 +192,26 @@ def _collect_class_level_attributes(node: ast.ClassDef) -> set[str]:
     return attributes
 
 
+def _extract_class_level_string_value(node: ast.ClassDef, attribute_name: str) -> str | None:
+    """Extract a class-level string literal assigned to ``attribute_name``."""
+    for member in node.body:
+        value_node: ast.expr | None = None
+        if isinstance(member, ast.Assign):
+            for target in member.targets:
+                if isinstance(target, ast.Name) and target.id == attribute_name:
+                    value_node = member.value
+                    break
+        elif isinstance(member, ast.AnnAssign):
+            if isinstance(member.target, ast.Name) and member.target.id == attribute_name:
+                value_node = member.value
+
+        if value_node is not None:
+            if isinstance(value_node, ast.Constant) and isinstance(value_node.value, str):
+                return value_node.value
+            return None
+    return None
+
+
 def _is_tool_subclass(node: ast.ClassDef, aliases: set[str]) -> bool:
     """Return True when class bases include Tool or its known aliases."""
     for base in node.bases:
@@ -217,38 +239,57 @@ def _validate_tool_module_format(tool_path: Path) -> None:
                 if alias.name == "Tool":
                     tool_aliases.add(alias.asname or alias.name)
 
-    candidate_errors: list[str] = []
+    tool_subclasses: list[ast.ClassDef] = []
+    concrete_tool_subclasses: list[ast.ClassDef] = []
     for statement in tree.body:
         if not isinstance(statement, ast.ClassDef):
             continue
         if not _is_tool_subclass(statement, tool_aliases):
             continue
 
-        attributes = _collect_class_level_attributes(statement)
-        missing_fields = [name for name in ("name", "description", "parameters_schema") if name not in attributes]
+        tool_subclasses.append(statement)
         has_async_call = any(
             isinstance(member, ast.AsyncFunctionDef) and member.name == "__call__"
             for member in statement.body
         )
-        if has_async_call and not missing_fields:
-            return
+        if has_async_call:
+            concrete_tool_subclasses.append(statement)
 
-        missing = missing_fields.copy()
-        if not has_async_call:
-            missing.append("async __call__")
-        candidate_errors.append(f"{statement.name} missing: {', '.join(missing)}")
-
-    if candidate_errors:
+    if not tool_subclasses:
         raise ValueError(
-            "No valid Tool implementation found in downloaded module. "
-            f"{candidate_errors[0]}. "
+            "No Tool subclass found in downloaded module. "
             "Expected a class inheriting Tool with name, description, parameters_schema, and async __call__."
         )
 
-    raise ValueError(
-        "No Tool subclass found in downloaded module. "
-        "Expected a class inheriting Tool with name, description, parameters_schema, and async __call__."
-    )
+    if len(concrete_tool_subclasses) != 1:
+        if not concrete_tool_subclasses:
+            raise ValueError(
+                "Expected exactly one concrete Tool subclass with async __call__, but found none."
+            )
+        concrete_names = [node.name for node in concrete_tool_subclasses]
+        raise ValueError(
+            "Expected exactly one concrete Tool subclass with async __call__, "
+            f"but found {len(concrete_tool_subclasses)}: {concrete_names}."
+        )
+
+    tool_class = concrete_tool_subclasses[0]
+    attributes = _collect_class_level_attributes(tool_class)
+    missing_fields = [name for name in ("name", "description", "parameters_schema") if name not in attributes]
+    if missing_fields:
+        raise ValueError(
+            f"Invalid Tool implementation '{tool_class.name}': missing required class field(s): {missing_fields}."
+        )
+
+    tool_name = _extract_class_level_string_value(tool_class, "name")
+    if tool_name is None or not tool_name.strip():
+        raise ValueError(
+            f"Invalid Tool implementation '{tool_class.name}': Tool.name must be a non-empty string literal."
+        )
+    if _TOOL_NAME_PATTERN.fullmatch(tool_name) is None:
+        raise ValueError(
+            f"Invalid Tool implementation '{tool_class.name}': "
+            f"Tool.name '{tool_name}' must match pattern '[A-Za-z_][A-Za-z0-9_]*'."
+        )
 
 
 def _try_download_requirements(

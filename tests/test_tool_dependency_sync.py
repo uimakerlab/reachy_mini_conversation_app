@@ -23,6 +23,66 @@ class SearchTool(Tool):
         return {"ok": True}
 """
 
+MULTI_TOOL_MODULE = """
+from reachy_mini_conversation_app.tools.core_tools import Tool
+
+
+class SearchToolA(Tool):
+    name = "search_tool_a"
+    description = "Search things A"
+    parameters_schema = {"type": "object", "properties": {}}
+
+    async def __call__(self, deps, **kwargs):
+        return {"ok": "a"}
+
+
+class SearchToolB(Tool):
+    name = "search_tool_b"
+    description = "Search things B"
+    parameters_schema = {"type": "object", "properties": {}}
+
+    async def __call__(self, deps, **kwargs):
+        return {"ok": "b"}
+"""
+
+MISSING_FIELDS_TOOL_MODULE = """
+from reachy_mini_conversation_app.tools.core_tools import Tool
+
+
+class SearchTool(Tool):
+    name = "search_tool"
+    parameters_schema = {"type": "object", "properties": {}}
+
+    async def __call__(self, deps, **kwargs):
+        return {"ok": True}
+"""
+
+INVALID_NAME_TOOL_MODULE = """
+from reachy_mini_conversation_app.tools.core_tools import Tool
+
+
+class SearchTool(Tool):
+    name = "search tool"
+    description = "Search things"
+    parameters_schema = {"type": "object", "properties": {}}
+
+    async def __call__(self, deps, **kwargs):
+        return {"ok": True}
+"""
+
+EMPTY_NAME_TOOL_MODULE = """
+from reachy_mini_conversation_app.tools.core_tools import Tool
+
+
+class SearchTool(Tool):
+    name = ""
+    description = "Search things"
+    parameters_schema = {"type": "object", "properties": {}}
+
+    async def __call__(self, deps, **kwargs):
+        return {"ok": True}
+"""
+
 
 def test_normalize_space_id_variants() -> None:
     """Space IDs and URLs normalize to owner/repo form."""
@@ -285,6 +345,85 @@ def test_sync_tool_space_dependencies_fails_when_tool_has_invalid_format(
         )
 
     assert not (tmp_path / "external_content" / "external_tools" / "search_tool.py").exists()
+
+
+def test_sync_tool_space_dependencies_fails_when_tool_class_missing_required_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tool class must define required class fields."""
+    monkeypatch.chdir(tmp_path)
+
+    source_tool = tmp_path / "search_tool.py"
+    source_tool.write_text(MISSING_FIELDS_TOOL_MODULE, encoding="utf-8")
+    monkeypatch.setattr(sync_mod, "_select_tool_python_file", lambda *_: "search_tool.py")
+
+    def fake_download(**kwargs: Any) -> str:
+        if kwargs["filename"] == "requirements.txt":
+            raise EntryNotFoundError("requirements missing")
+        if kwargs["filename"] == "search_tool.py":
+            return str(source_tool)
+        raise AssertionError(f"Unexpected download filename: {kwargs['filename']}")
+
+    monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
+
+    with pytest.raises(RuntimeError, match="missing required class field\\(s\\)"):
+        sync_mod.sync_tool_space_dependencies(
+            space="owner/repo",
+            logger=sync_mod.logging.getLogger("test"),
+        )
+
+
+def test_sync_tool_space_dependencies_fails_when_multiple_concrete_tools_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Downloaded module must contain exactly one concrete Tool subclass."""
+    monkeypatch.chdir(tmp_path)
+
+    source_tool = tmp_path / "search_tool.py"
+    source_tool.write_text(MULTI_TOOL_MODULE, encoding="utf-8")
+    monkeypatch.setattr(sync_mod, "_select_tool_python_file", lambda *_: "search_tool.py")
+
+    def fake_download(**kwargs: Any) -> str:
+        if kwargs["filename"] == "requirements.txt":
+            raise EntryNotFoundError("requirements missing")
+        if kwargs["filename"] == "search_tool.py":
+            return str(source_tool)
+        raise AssertionError(f"Unexpected download filename: {kwargs['filename']}")
+
+    monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
+
+    with pytest.raises(RuntimeError, match="Expected exactly one concrete Tool subclass"):
+        sync_mod.sync_tool_space_dependencies(
+            space="owner/repo",
+            logger=sync_mod.logging.getLogger("test"),
+        )
+
+
+@pytest.mark.parametrize("tool_module", [INVALID_NAME_TOOL_MODULE, EMPTY_NAME_TOOL_MODULE])
+def test_sync_tool_space_dependencies_fails_when_tool_name_invalid_or_empty(
+    tool_module: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tool.name must be non-empty and match the expected identifier pattern."""
+    monkeypatch.chdir(tmp_path)
+
+    source_tool = tmp_path / "search_tool.py"
+    source_tool.write_text(tool_module, encoding="utf-8")
+    monkeypatch.setattr(sync_mod, "_select_tool_python_file", lambda *_: "search_tool.py")
+
+    def fake_download(**kwargs: Any) -> str:
+        if kwargs["filename"] == "requirements.txt":
+            raise EntryNotFoundError("requirements missing")
+        if kwargs["filename"] == "search_tool.py":
+            return str(source_tool)
+        raise AssertionError(f"Unexpected download filename: {kwargs['filename']}")
+
+    monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
+
+    with pytest.raises(RuntimeError, match="Tool.name"):
+        sync_mod.sync_tool_space_dependencies(
+            space="owner/repo",
+            logger=sync_mod.logging.getLogger("test"),
+        )
 
 
 def test_sync_tool_space_dependencies_keeps_existing_tool_when_new_download_is_invalid(
