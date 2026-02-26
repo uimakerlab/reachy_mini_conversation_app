@@ -83,7 +83,10 @@ def _run_command(command: list[str], logger: logging.Logger) -> tuple[int, str, 
     if completed.stdout.strip():
         logger.info(completed.stdout.strip())
     if completed.stderr.strip():
-        logger.warning(completed.stderr.strip())
+        if completed.returncode == 0:
+            logger.info(completed.stderr.strip())
+        else:
+            logger.warning(completed.stderr.strip())
     return completed.returncode, completed.stdout, completed.stderr
 
 
@@ -373,7 +376,7 @@ def sync_tool_space_dependencies(
 
     if dependencies_synced:
         logger.info(
-            "Successfully synchronized Space dependencies into dependency group '%s'.",
+            "Successfully synchronized external tool's dependencies into dependency group '%s'.",
             dependency_group,
         )
     else:
