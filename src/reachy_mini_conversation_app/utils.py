@@ -41,12 +41,6 @@ def parse_args() -> Tuple[argparse.Namespace, list]:  # type: ignore
             "REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY (or ./external_content/external_tools), then exit."
         ),
     )
-    parser.add_argument(
-        "--sync-tool-space-hf-token",
-        type=str,
-        default=None,
-        help="Optional Hugging Face token override for private spaces (falls back to HF_TOKEN).",
-    )
     return parser.parse_known_args()
 
 

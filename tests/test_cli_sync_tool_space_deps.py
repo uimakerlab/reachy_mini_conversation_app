@@ -23,11 +23,9 @@ def test_parse_args_sync_tool_space_deps_flags(restore_argv: None) -> None:
         "reachy-mini-conversation-app",
         "--sync-tool-space-deps",
         "owner/repo",
-        "--sync-tool-space-hf-token",
-        "hf_abc",
     ]
 
     args, unknown = parse_args()
     assert unknown == []
     assert args.sync_tool_space_deps == "owner/repo"
-    assert args.sync_tool_space_hf_token == "hf_abc"
+    assert not hasattr(args, "sync_tool_space_hf_token")

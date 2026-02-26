@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from huggingface_hub import HfApi, hf_hub_download
-from huggingface_hub.errors import EntryNotFoundError
+from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, EntryNotFoundError, RepositoryNotFoundError
 
 
 EXTERNAL_TOOLS_GROUP = "external-tools"
@@ -180,6 +180,23 @@ def _try_download_requirements(
     return requirements_path
 
 
+def _is_hf_token_permission_issue(error: Exception) -> bool:
+    """Return True when an HF Hub error likely means missing/insufficient token permissions."""
+    if isinstance(error, (GatedRepoError, RepositoryNotFoundError)):
+        return True
+    if isinstance(error, HfHubHTTPError):
+        status_code = getattr(error.response, "status_code", None)
+        return status_code in {401, 403}
+
+    message = str(error).lower()
+    return (
+        "401" in message
+        or "403" in message
+        or "gated" in message
+        or "access to this repo is restricted" in message
+    )
+
+
 def sync_tool_space_dependencies(
     *,
     space: str,
@@ -196,11 +213,19 @@ def sync_tool_space_dependencies(
     space_id = normalize_space_id(space)
     token = (hf_token or os.getenv("HF_TOKEN") or "").strip() or None
 
-    requirements_path = _try_download_requirements(
-        space_id=space_id,
-        token=token,
-        logger=logger,
-    )
+    try:
+        requirements_path = _try_download_requirements(
+            space_id=space_id,
+            token=token,
+            logger=logger,
+        )
+    except Exception as e:
+        if _is_hf_token_permission_issue(e):
+            raise RuntimeError(
+                f"Unable to access Hugging Face Space '{space_id}' (not found or access denied). "
+                "Check owner/repo and, for private Spaces, ensure HF_TOKEN is set and has access."
+            ) from e
+        raise
     target_tools_directory = _resolve_external_tools_directory(external_tools_directory)
 
     pyproject_path: Path | None = None
@@ -245,6 +270,11 @@ def sync_tool_space_dependencies(
             target_directory=target_tools_directory,
         )
     except Exception as e:
+        permission_hint = ""
+        if _is_hf_token_permission_issue(e):
+            permission_hint = (
+                f" If '{space_id}' is private, ensure HF_TOKEN is set and has access to this Space."
+            )
         if dependency_sync_attempted and pyproject_path is not None and uv_lock_path is not None:
             pyproject_path.write_bytes(pyproject_before)
             if uv_lock_exists_before:
@@ -256,9 +286,9 @@ def sync_tool_space_dependencies(
         if dependency_sync_attempted:
             raise RuntimeError(
                 "Dependency/tool synchronization failed and changes were rolled back. "
-                f"Reason: {e}",
+                f"Reason: {e}{permission_hint}",
             ) from e
-        raise RuntimeError(f"Tool synchronization failed. Reason: {e}") from e
+        raise RuntimeError(f"Tool synchronization failed. Reason: {e}{permission_hint}") from e
 
     if dependencies_synced:
         logger.info(

@@ -52,7 +52,6 @@ def run(
             sync_result = sync_tool_space_dependencies(
                 space=args.sync_tool_space_deps,
                 logger=logger,
-                hf_token=args.sync_tool_space_hf_token,
             )
             logger.info("Dependencies synced from %s", sync_result.requirements_path)
             logger.info("Tool module synced to %s", sync_result.downloaded_tool_path)

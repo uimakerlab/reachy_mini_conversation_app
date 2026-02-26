@@ -3,8 +3,9 @@ import subprocess
 from typing import Any
 from pathlib import Path
 
+import httpx
 import pytest
-from huggingface_hub.errors import EntryNotFoundError
+from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 
 import reachy_mini_conversation_app.tool_dependency_sync as sync_mod
 
@@ -238,6 +239,29 @@ def test_sync_tool_space_dependencies_fails_when_no_tool_file(
     )
 
     with pytest.raises(RuntimeError, match="No candidate tool \\.py file found"):
+        sync_mod.sync_tool_space_dependencies(
+            space="owner/repo",
+            logger=sync_mod.logging.getLogger("test"),
+        )
+
+
+def test_sync_tool_space_dependencies_fails_when_space_not_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing/private space should raise a clear access/not-found error."""
+    monkeypatch.chdir(tmp_path)
+
+    request = httpx.Request("GET", "https://huggingface.co/spaces/owner/repo")
+    response = httpx.Response(404, request=request)
+    repo_not_found_error = RepositoryNotFoundError("Repository Not Found", response=response)
+
+    def fail_requirements(*, space_id: str, token: str | None, logger: Any) -> None:
+        del space_id, token, logger
+        raise repo_not_found_error
+
+    monkeypatch.setattr(sync_mod, "_try_download_requirements", fail_requirements)
+
+    with pytest.raises(RuntimeError, match="not found or access denied"):
         sync_mod.sync_tool_space_dependencies(
             space="owner/repo",
             logger=sync_mod.logging.getLogger("test"),
