@@ -45,6 +45,7 @@ def run(
     logger = setup_logger(args.debug)
 
     if args.download_hf_tool:
+        from reachy_mini_conversation_app.config import config as app_config
         from reachy_mini_conversation_app.tool_dependency_sync import sync_tool_space_dependencies
 
         try:
@@ -55,6 +56,7 @@ def run(
             sync_result = sync_tool_space_dependencies(
                 space=args.download_hf_tool,
                 logger=logger,
+                hf_token=app_config.HF_TOKEN,
             )
             if sync_result.requirements_path is not None:
                 logger.info("Dependencies synced from %s", sync_result.requirements_path)
