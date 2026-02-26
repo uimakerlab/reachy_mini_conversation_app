@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import os
+import ast
 import shutil
 import logging
 import subprocess
@@ -150,7 +151,87 @@ def _download_tool_module(
     )
     destination = target_directory / Path(repo_file).name
     shutil.copy2(downloaded, destination)
+    try:
+        _validate_tool_module_format(destination)
+    except Exception:
+        if destination.exists():
+            destination.unlink()
+        raise
     return destination, repo_file
+
+
+def _collect_class_level_attributes(node: ast.ClassDef) -> set[str]:
+    """Collect class-level assigned attribute names."""
+    attributes: set[str] = set()
+    for member in node.body:
+        if isinstance(member, ast.Assign):
+            for target in member.targets:
+                if isinstance(target, ast.Name):
+                    attributes.add(target.id)
+        elif isinstance(member, ast.AnnAssign) and isinstance(member.target, ast.Name):
+            attributes.add(member.target.id)
+    return attributes
+
+
+def _is_tool_subclass(node: ast.ClassDef, aliases: set[str]) -> bool:
+    """Return True when class bases include Tool or its known aliases."""
+    for base in node.bases:
+        if isinstance(base, ast.Name) and base.id in aliases:
+            return True
+        if isinstance(base, ast.Attribute) and base.attr == "Tool":
+            return True
+    return False
+
+
+def _validate_tool_module_format(tool_path: Path) -> None:
+    """Validate downloaded module has one concrete Tool-shaped class."""
+    try:
+        tree = ast.parse(tool_path.read_text(encoding="utf-8"), filename=str(tool_path))
+    except SyntaxError as e:
+        line = f" line {e.lineno}" if e.lineno is not None else ""
+        raise ValueError(
+            f"Invalid Python syntax in downloaded tool '{tool_path.name}' ({e.msg}{line})."
+        ) from e
+
+    tool_aliases = {"Tool"}
+    for statement in tree.body:
+        if isinstance(statement, ast.ImportFrom):
+            for alias in statement.names:
+                if alias.name == "Tool":
+                    tool_aliases.add(alias.asname or alias.name)
+
+    candidate_errors: list[str] = []
+    for statement in tree.body:
+        if not isinstance(statement, ast.ClassDef):
+            continue
+        if not _is_tool_subclass(statement, tool_aliases):
+            continue
+
+        attributes = _collect_class_level_attributes(statement)
+        missing_fields = [name for name in ("name", "description", "parameters_schema") if name not in attributes]
+        has_async_call = any(
+            isinstance(member, ast.AsyncFunctionDef) and member.name == "__call__"
+            for member in statement.body
+        )
+        if has_async_call and not missing_fields:
+            return
+
+        missing = missing_fields.copy()
+        if not has_async_call:
+            missing.append("async __call__")
+        candidate_errors.append(f"{statement.name} missing: {', '.join(missing)}")
+
+    if candidate_errors:
+        raise ValueError(
+            "No valid Tool implementation found in downloaded module. "
+            f"{candidate_errors[0]}. "
+            "Expected a class inheriting Tool with name, description, parameters_schema, and async __call__."
+        )
+
+    raise ValueError(
+        "No Tool subclass found in downloaded module. "
+        "Expected a class inheriting Tool with name, description, parameters_schema, and async __call__."
+    )
 
 
 def _try_download_requirements(

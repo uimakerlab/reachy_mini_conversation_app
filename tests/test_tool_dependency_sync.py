@@ -10,6 +10,20 @@ from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 import reachy_mini_conversation_app.tool_dependency_sync as sync_mod
 
 
+VALID_TOOL_MODULE = """
+from reachy_mini_conversation_app.tools.core_tools import Tool
+
+
+class SearchTool(Tool):
+    name = "search_tool"
+    description = "Search things"
+    parameters_schema = {"type": "object", "properties": {}}
+
+    async def __call__(self, deps, **kwargs):
+        return {"ok": True}
+"""
+
+
 def test_normalize_space_id_variants() -> None:
     """Space IDs and URLs normalize to owner/repo form."""
     assert sync_mod.normalize_space_id("owner/repo") == "owner/repo"
@@ -34,7 +48,7 @@ def test_sync_tool_space_dependencies_success(
     requirements_path = tmp_path / "requirements.txt"
     requirements_path.write_text("duckduckgo-search>=7.0.0\n", encoding="utf-8")
     source_tool = tmp_path / "search_tool.py"
-    source_tool.write_text("# external tool\n", encoding="utf-8")
+    source_tool.write_text(VALID_TOOL_MODULE, encoding="utf-8")
 
     monkeypatch.setattr(sync_mod, "_select_tool_python_file", lambda *_: "search_tool.py")
 
@@ -68,7 +82,7 @@ def test_sync_tool_space_dependencies_success(
     assert out.requirements_path == requirements_path
     assert out.downloaded_tool_source == "search_tool.py"
     assert out.downloaded_tool_path == tmp_path / "external_content" / "external_tools" / "search_tool.py"
-    assert out.downloaded_tool_path.read_text(encoding="utf-8") == "# external tool\n"
+    assert out.downloaded_tool_path.read_text(encoding="utf-8") == VALID_TOOL_MODULE
     assert "external-tools" in (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
     assert (tmp_path / "uv.lock").read_text(encoding="utf-8") == "lock-after\n"
 
@@ -126,7 +140,7 @@ def test_sync_tool_space_dependencies_allows_empty_requirements(
     requirements_path = tmp_path / "requirements.txt"
     requirements_path.write_text("# no deps\n\n", encoding="utf-8")
     source_tool = tmp_path / "search_tool.py"
-    source_tool.write_text("# external tool\n", encoding="utf-8")
+    source_tool.write_text(VALID_TOOL_MODULE, encoding="utf-8")
 
     monkeypatch.setattr(sync_mod, "_select_tool_python_file", lambda *_: "search_tool.py")
 
@@ -161,7 +175,7 @@ def test_sync_tool_space_dependencies_allows_missing_requirements(
     """Missing requirements.txt should not fail if tool module exists."""
     monkeypatch.chdir(tmp_path)
     source_tool = tmp_path / "search_tool.py"
-    source_tool.write_text("# external tool\n", encoding="utf-8")
+    source_tool.write_text(VALID_TOOL_MODULE, encoding="utf-8")
 
     monkeypatch.setattr(sync_mod, "_select_tool_python_file", lambda *_: "search_tool.py")
 
@@ -243,6 +257,34 @@ def test_sync_tool_space_dependencies_fails_when_no_tool_file(
             space="owner/repo",
             logger=sync_mod.logging.getLogger("test"),
         )
+
+
+def test_sync_tool_space_dependencies_fails_when_tool_has_invalid_format(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tool module must follow Tool class contract to pass sync validation."""
+    monkeypatch.chdir(tmp_path)
+
+    source_tool = tmp_path / "search_tool.py"
+    source_tool.write_text("print('hello world')\n", encoding="utf-8")
+    monkeypatch.setattr(sync_mod, "_select_tool_python_file", lambda *_: "search_tool.py")
+
+    def fake_download(**kwargs: Any) -> str:
+        if kwargs["filename"] == "requirements.txt":
+            raise EntryNotFoundError("requirements missing")
+        if kwargs["filename"] == "search_tool.py":
+            return str(source_tool)
+        raise AssertionError(f"Unexpected download filename: {kwargs['filename']}")
+
+    monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
+
+    with pytest.raises(RuntimeError, match="No Tool subclass found in downloaded module"):
+        sync_mod.sync_tool_space_dependencies(
+            space="owner/repo",
+            logger=sync_mod.logging.getLogger("test"),
+        )
+
+    assert not (tmp_path / "external_content" / "external_tools" / "search_tool.py").exists()
 
 
 def test_sync_tool_space_dependencies_fails_when_space_not_found(
