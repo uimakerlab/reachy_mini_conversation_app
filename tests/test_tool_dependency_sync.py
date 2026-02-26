@@ -287,6 +287,40 @@ def test_sync_tool_space_dependencies_fails_when_tool_has_invalid_format(
     assert not (tmp_path / "external_content" / "external_tools" / "search_tool.py").exists()
 
 
+def test_sync_tool_space_dependencies_keeps_existing_tool_when_new_download_is_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Existing tool file should not be replaced by an invalid downloaded update."""
+    monkeypatch.chdir(tmp_path)
+
+    existing_tool = tmp_path / "external_content" / "external_tools" / "search_tool.py"
+    existing_tool.parent.mkdir(parents=True, exist_ok=True)
+    existing_tool_content = VALID_TOOL_MODULE + "\n# existing-tool-version\n"
+    existing_tool.write_text(existing_tool_content, encoding="utf-8")
+
+    invalid_downloaded_tool = tmp_path / "downloaded_invalid_search_tool.py"
+    invalid_downloaded_tool.write_text("print('hello world')\n", encoding="utf-8")
+
+    monkeypatch.setattr(sync_mod, "_select_tool_python_file", lambda *_: "search_tool.py")
+
+    def fake_download(**kwargs: Any) -> str:
+        if kwargs["filename"] == "requirements.txt":
+            raise EntryNotFoundError("requirements missing")
+        if kwargs["filename"] == "search_tool.py":
+            return str(invalid_downloaded_tool)
+        raise AssertionError(f"Unexpected download filename: {kwargs['filename']}")
+
+    monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
+
+    with pytest.raises(RuntimeError, match="No Tool subclass found in downloaded module"):
+        sync_mod.sync_tool_space_dependencies(
+            space="owner/repo",
+            logger=sync_mod.logging.getLogger("test"),
+        )
+
+    assert existing_tool.read_text(encoding="utf-8") == existing_tool_content
+
+
 def test_sync_tool_space_dependencies_fails_when_space_not_found(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

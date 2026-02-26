@@ -5,6 +5,7 @@ import os
 import ast
 import shutil
 import logging
+import tempfile
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass
@@ -153,13 +154,26 @@ def _download_tool_module(
         )
     )
     destination = target_directory / Path(repo_file).name
-    shutil.copy2(downloaded, destination)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        delete=False,
+        dir=target_directory,
+        prefix=f".{destination.stem}.",
+        suffix=".tmp",
+        encoding="utf-8",
+    ) as tmp_file:
+        tmp_path = Path(tmp_file.name)
+
     try:
-        _validate_tool_module_format(destination)
+        shutil.copy2(downloaded, tmp_path)
+        _validate_tool_module_format(tmp_path)
+        os.replace(tmp_path, destination)
     except Exception:
-        if destination.exists():
-            destination.unlink()
+        if tmp_path.exists():
+            tmp_path.unlink()
         raise
+    if tmp_path.exists():
+        tmp_path.unlink()
     return destination, repo_file
 
 
