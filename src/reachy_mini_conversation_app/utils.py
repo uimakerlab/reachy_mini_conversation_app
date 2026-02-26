@@ -32,13 +32,13 @@ def parse_args() -> Tuple[argparse.Namespace, list]:  # type: ignore
         help="[Optional] Robot name/prefix for Zenoh topics (must match daemon's --robot-name). Only needed for development with multiple robots.",
     )
     parser.add_argument(
-        "--sync-tool-space-deps",
+        "--download-hf-tool",
         type=str,
         default=None,
         help=(
-            "Download requirements.txt and the tool .py module from a Hugging Face Space, "
-            "add deps to dependency-groups.external-tools via uv, copy the tool into "
-            "REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY (or ./external_content/external_tools), then exit."
+            "Download a tool .py module and optional requirements.txt from a Hugging Face Space, "
+            "sync dependencies via uv, copy the tool into REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY "
+            "(or ./external_content/external_tools), then exit without starting the conversation app."
         ),
     )
     return parser.parse_known_args()

@@ -45,17 +45,17 @@ def run(
     logger = setup_logger(args.debug)
     logger.info("Starting Reachy Mini Conversation App")
 
-    if args.sync_tool_space_deps:
+    if args.download_hf_tool:
         from reachy_mini_conversation_app.tool_dependency_sync import sync_tool_space_dependencies
 
         try:
             sync_result = sync_tool_space_dependencies(
-                space=args.sync_tool_space_deps,
+                space=args.download_hf_tool,
                 logger=logger,
             )
             logger.info("Dependencies synced from %s", sync_result.requirements_path)
             logger.info("Tool module synced to %s", sync_result.downloaded_tool_path)
-            logger.info("Re-run without --sync-tool-space-deps to start the app.")
+            logger.info("Re-run without --download-hf-tool to start the app.")
             return
         except Exception as e:
             logger.error("Failed to sync external tool dependencies: %s", e)
