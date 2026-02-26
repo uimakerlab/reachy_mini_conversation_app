@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub.errors import EntryNotFoundError
 
 
 EXTERNAL_TOOLS_GROUP = "external-tools"
@@ -26,7 +27,7 @@ _TOOL_FILE_EXCLUSIONS = {
 class ToolSpaceSyncResult:
     """Result of syncing tool-space requirements and tool module."""
 
-    requirements_path: Path
+    requirements_path: Path | None
     downloaded_tool_path: Path
     downloaded_tool_source: str
     dependency_group: str
@@ -152,6 +153,33 @@ def _download_tool_module(
     return destination, repo_file
 
 
+def _try_download_requirements(
+    *,
+    space_id: str,
+    token: str | None,
+    logger: logging.Logger,
+) -> Path | None:
+    """Download requirements.txt if present; return None when absent or empty."""
+    try:
+        requirements_path = Path(
+            hf_hub_download(
+                repo_id=space_id,
+                repo_type="space",
+                filename="requirements.txt",
+                token=token,
+            )
+        )
+    except EntryNotFoundError:
+        logger.info("No requirements.txt found in %s. Skipping dependency sync.", space_id)
+        return None
+
+    logger.info("Downloaded requirements from %s to %s", space_id, requirements_path)
+    if _requirements_is_empty(requirements_path):
+        logger.info("requirements.txt is empty in %s. Skipping dependency sync.", space_id)
+        return None
+    return requirements_path
+
+
 def sync_tool_space_dependencies(
     *,
     space: str,
@@ -168,42 +196,48 @@ def sync_tool_space_dependencies(
     space_id = normalize_space_id(space)
     token = (hf_token or os.getenv("HF_TOKEN") or "").strip() or None
 
-    requirements_path = Path(
-        hf_hub_download(
-            repo_id=space_id,
-            repo_type="space",
-            filename="requirements.txt",
-            token=token,
-        )
+    requirements_path = _try_download_requirements(
+        space_id=space_id,
+        token=token,
+        logger=logger,
     )
-    logger.info("Downloaded requirements from %s to %s", space_id, requirements_path)
     target_tools_directory = _resolve_external_tools_directory(external_tools_directory)
 
-    if _requirements_is_empty(requirements_path):
-        raise ValueError(f"{space_id} requirements.txt is empty.")
+    pyproject_path: Path | None = None
+    uv_lock_path: Path | None = None
+    pyproject_before = b""
+    uv_lock_exists_before = False
+    uv_lock_before = b""
+    dependency_sync_attempted = False
+    dependencies_synced = False
 
-    pyproject_path = Path("pyproject.toml")
-    if not pyproject_path.exists():
-        raise RuntimeError("pyproject.toml not found in current working directory.")
+    if requirements_path is not None:
+        pyproject_path = Path("pyproject.toml")
+        if not pyproject_path.exists():
+            raise RuntimeError("pyproject.toml not found in current working directory.")
 
-    uv_lock_path = Path("uv.lock")
-    pyproject_before = pyproject_path.read_bytes()
-    uv_lock_exists_before = uv_lock_path.exists()
-    uv_lock_before = uv_lock_path.read_bytes() if uv_lock_exists_before else b""
+        uv_lock_path = Path("uv.lock")
+        pyproject_before = pyproject_path.read_bytes()
+        uv_lock_exists_before = uv_lock_path.exists()
+        uv_lock_before = uv_lock_path.read_bytes() if uv_lock_exists_before else b""
 
-    command = [
-        "uv",
-        "add",
-        "--group",
-        dependency_group,
-        "--requirements",
-        str(requirements_path),
-    ]
     copied_tool_path: Path | None = None
+    source_tool_file: str | None = None
     try:
-        code, _, stderr = _run_command(command, logger)
-        if code != 0:
-            raise RuntimeError(f"uv exited with code {code}. stderr: {stderr.strip()}")
+        if requirements_path is not None:
+            dependency_sync_attempted = True
+            command = [
+                "uv",
+                "add",
+                "--group",
+                dependency_group,
+                "--requirements",
+                str(requirements_path),
+            ]
+            code, _, stderr = _run_command(command, logger)
+            if code != 0:
+                raise RuntimeError(f"uv exited with code {code}. stderr: {stderr.strip()}")
+            dependencies_synced = True
 
         copied_tool_path, source_tool_file = _download_tool_module(
             space_id=space_id,
@@ -211,27 +245,35 @@ def sync_tool_space_dependencies(
             target_directory=target_tools_directory,
         )
     except Exception as e:
-        pyproject_path.write_bytes(pyproject_before)
-        if uv_lock_exists_before:
-            uv_lock_path.write_bytes(uv_lock_before)
-        elif uv_lock_path.exists():
-            uv_lock_path.unlink()
+        if dependency_sync_attempted and pyproject_path is not None and uv_lock_path is not None:
+            pyproject_path.write_bytes(pyproject_before)
+            if uv_lock_exists_before:
+                uv_lock_path.write_bytes(uv_lock_before)
+            elif uv_lock_path.exists():
+                uv_lock_path.unlink()
         if copied_tool_path is not None and copied_tool_path.exists():
             copied_tool_path.unlink()
-        raise RuntimeError(
-            "Dependency/tool synchronization failed and changes were rolled back. "
-            f"Reason: {e}",
-        ) from e
+        if dependency_sync_attempted:
+            raise RuntimeError(
+                "Dependency/tool synchronization failed and changes were rolled back. "
+                f"Reason: {e}",
+            ) from e
+        raise RuntimeError(f"Tool synchronization failed. Reason: {e}") from e
 
-    logger.info(
-        "Successfully synchronized Space dependencies into dependency group '%s'.",
-        dependency_group,
-    )
+    if dependencies_synced:
+        logger.info(
+            "Successfully synchronized Space dependencies into dependency group '%s'.",
+            dependency_group,
+        )
+    else:
+        logger.info("Dependency sync skipped (no requirements.txt or empty requirements.txt).")
     logger.info(
         "Downloaded tool module %s to %s",
         source_tool_file,
         copied_tool_path,
     )
+    if copied_tool_path is None or source_tool_file is None:
+        raise RuntimeError("Tool synchronization failed. No tool file was copied.")
     return ToolSpaceSyncResult(
         requirements_path=requirements_path,
         downloaded_tool_path=copied_tool_path,
