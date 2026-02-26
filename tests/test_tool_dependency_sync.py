@@ -360,10 +360,10 @@ def test_sync_tool_space_dependencies_fails_when_tool_has_invalid_format(
     assert not (tmp_path / "external_content" / "external_tools" / "search_tool.py").exists()
 
 
-def test_sync_tool_space_dependencies_fails_preflight_import_on_missing_runtime_dependency(
+def test_sync_tool_space_dependencies_does_not_execute_module_runtime_imports_during_sync(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Preflight import should fail fast when runtime deps are missing."""
+    """Sync should not execute downloaded module imports during validation."""
     monkeypatch.chdir(tmp_path)
 
     source_tool = tmp_path / "search_tool.py"
@@ -379,16 +379,11 @@ def test_sync_tool_space_dependencies_fails_preflight_import_on_missing_runtime_
 
     monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
 
-    with pytest.raises(
-        RuntimeError,
-        match="Preflight import check failed|definitely_missing_runtime_dependency_abc123",
-    ):
-        sync_mod.sync_tool_space_dependencies(
-            space="owner/repo",
-            logger=sync_mod.logging.getLogger("test"),
-        )
-
-    assert not (tmp_path / "external_content" / "external_tools" / "search_tool.py").exists()
+    result = sync_mod.sync_tool_space_dependencies(
+        space="owner/repo",
+        logger=sync_mod.logging.getLogger("test"),
+    )
+    assert result.downloaded_tool_path.exists()
 
 
 def test_sync_tool_space_dependencies_fails_when_tool_class_missing_required_fields(

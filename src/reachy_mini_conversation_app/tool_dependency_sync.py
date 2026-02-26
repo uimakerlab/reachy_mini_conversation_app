@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import re
 import ast
-import sys
 import shutil
 import logging
 import tempfile
@@ -170,7 +169,6 @@ def _download_tool_module(
     try:
         shutil.copy2(downloaded, tmp_path)
         _validate_tool_module_format(tmp_path)
-        _preflight_import_tool_module(tmp_path)
         os.replace(tmp_path, destination)
     except Exception:
         if tmp_path.exists():
@@ -212,30 +210,6 @@ def _extract_class_level_string_value(node: ast.ClassDef, attribute_name: str) -
                 return value_node.value
             return None
     return None
-
-
-def _preflight_import_tool_module(tool_path: Path) -> None:
-    """Import the tool module in an isolated Python process to catch runtime import errors."""
-    script = (
-        "import importlib.util, pathlib, sys\n"
-        "path = pathlib.Path(sys.argv[1])\n"
-        "spec = importlib.util.spec_from_file_location('_reachy_tool_preflight', path)\n"
-        "if spec is None or spec.loader is None:\n"
-        "    raise RuntimeError(f'Cannot create module spec for {path}')\n"
-        "module = importlib.util.module_from_spec(spec)\n"
-        "spec.loader.exec_module(module)\n"
-    )
-    completed = subprocess.run(
-        [sys.executable, "-c", script, str(tool_path)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        details = completed.stderr.strip() or completed.stdout.strip() or "unknown import error"
-        raise RuntimeError(
-            f"Preflight import check failed for downloaded tool '{tool_path.name}'. Reason: {details}"
-        )
 
 
 def _is_tool_subclass(node: ast.ClassDef, aliases: set[str]) -> bool:
