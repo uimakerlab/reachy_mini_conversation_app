@@ -16,16 +16,16 @@ def restore_argv() -> Generator[None, None, None]:
         sys.argv = original
 
 
-def test_parse_args_sync_tool_space_deps_flags(restore_argv: None) -> None:
-    """CLI parser exposes dependency sync flags."""
+def test_parse_args_download_hf_tool_flag(restore_argv: None) -> None:
+    """CLI parser exposes external HF tool download flag."""
     del restore_argv
     sys.argv = [
         "reachy-mini-conversation-app",
-        "--sync-tool-space-deps",
+        "--download-hf-tool",
         "owner/repo",
     ]
 
     args, unknown = parse_args()
     assert unknown == []
-    assert args.sync_tool_space_deps == "owner/repo"
+    assert args.download_hf_tool == "owner/repo"
     assert not hasattr(args, "sync_tool_space_hf_token")
