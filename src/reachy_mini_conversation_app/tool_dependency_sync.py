@@ -25,6 +25,25 @@ _TOOL_FILE_EXCLUSIONS = {
     "setup.py",
 }
 _TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_UNSAFE_REQUIREMENTS_PREFIXES = (
+    "-",
+    "--",
+)
+_UNSAFE_REQUIREMENTS_SUBSTRINGS = (
+    "://",
+    "git+",
+    "svn+",
+    "hg+",
+    "bzr+",
+    "file:",
+    " @ ",
+)
+_UNSAFE_REQUIREMENTS_PATH_PREFIXES = (
+    "./",
+    "../",
+    "/",
+    "~",
+)
 
 
 @dataclass(frozen=True)
@@ -78,6 +97,36 @@ def _requirements_is_empty(requirements_path: Path) -> bool:
         if stripped and not stripped.startswith("#"):
             return False
     return True
+
+
+def _validate_requirements_for_safe_install(requirements_path: Path) -> None:
+    """Validate requirements.txt blocks directives/URLs/paths before installation."""
+    for line_no, raw_line in enumerate(requirements_path.read_text(encoding="utf-8").splitlines(), start=1):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        # Drop inline comments for simple safety checks.
+        requirement = stripped.split(" #", 1)[0].strip()
+        lowered = requirement.lower()
+
+        if lowered.startswith(_UNSAFE_REQUIREMENTS_PREFIXES):
+            raise ValueError(
+                f"Unsafe requirements.txt entry at line {line_no}: '{requirement}'. "
+                "pip directives/options are not allowed for external tool dependency sync."
+            )
+
+        if lowered.startswith(_UNSAFE_REQUIREMENTS_PATH_PREFIXES) or re.match(r"^[a-z]:\\\\", lowered):
+            raise ValueError(
+                f"Unsafe requirements.txt entry at line {line_no}: '{requirement}'. "
+                "Local file paths are not allowed for external tool dependency sync."
+            )
+
+        if any(token in lowered for token in _UNSAFE_REQUIREMENTS_SUBSTRINGS):
+            raise ValueError(
+                f"Unsafe requirements.txt entry at line {line_no}: '{requirement}'. "
+                "Direct URL/VCS/file references are not allowed for external tool dependency sync."
+            )
 
 
 def _run_command(command: list[str], logger: logging.Logger) -> tuple[int, str, str]:
@@ -389,6 +438,7 @@ def sync_tool_space_dependencies(
     source_tool_file: str | None = None
     try:
         if requirements_path is not None:
+            _validate_requirements_for_safe_install(requirements_path)
             dependency_sync_attempted = True
             command = [
                 "uv",

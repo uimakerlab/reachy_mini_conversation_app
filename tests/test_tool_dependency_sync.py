@@ -200,6 +200,51 @@ def test_sync_tool_space_dependencies_rolls_back_on_failure(
     assert (tmp_path / "uv.lock").read_text(encoding="utf-8") == "lock-before\n"
 
 
+@pytest.mark.parametrize(
+    "unsafe_line",
+    [
+        "-r other-requirements.txt",
+        "--index-url https://pypi.org/simple",
+        "mypkg @ https://example.com/pkg.whl",
+        "git+https://github.com/org/repo.git",
+        "../local_package",
+        "file:///tmp/local.whl",
+    ],
+)
+def test_sync_tool_space_dependencies_rejects_unsafe_requirements_entries(
+    unsafe_line: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unsafe requirements entries should be rejected before running uv add."""
+    monkeypatch.chdir(tmp_path)
+    pyproject_initial = "[project]\nname='x'\nversion='0.0.1'\ndependencies=[]\n"
+    (tmp_path / "pyproject.toml").write_text(pyproject_initial, encoding="utf-8")
+    (tmp_path / "uv.lock").write_text("lock-before\n", encoding="utf-8")
+    requirements_path = tmp_path / "requirements.txt"
+    requirements_path.write_text(f"{unsafe_line}\n", encoding="utf-8")
+
+    def fake_download(**kwargs: Any) -> str:
+        if kwargs["filename"] == "requirements.txt":
+            return str(requirements_path)
+        raise AssertionError("Tool module download should not be reached for unsafe requirements")
+
+    monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
+
+    def fail_if_called(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        raise AssertionError("uv add should not run for unsafe requirements")
+
+    monkeypatch.setattr(sync_mod, "_run_command", fail_if_called)
+
+    with pytest.raises(RuntimeError, match="Unsafe requirements.txt entry"):
+        sync_mod.sync_tool_space_dependencies(
+            space="owner/repo",
+            logger=sync_mod.logging.getLogger("test"),
+        )
+
+    assert (tmp_path / "pyproject.toml").read_text(encoding="utf-8") == pyproject_initial
+    assert (tmp_path / "uv.lock").read_text(encoding="utf-8") == "lock-before\n"
+
+
 def test_sync_tool_space_dependencies_allows_empty_requirements(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
