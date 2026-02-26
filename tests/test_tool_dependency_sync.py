@@ -4,6 +4,7 @@ from typing import Any
 from pathlib import Path
 
 import pytest
+from huggingface_hub.errors import EntryNotFoundError
 
 import reachy_mini_conversation_app.tool_dependency_sync as sync_mod
 
@@ -111,21 +112,72 @@ def test_sync_tool_space_dependencies_rolls_back_on_failure(
     assert (tmp_path / "uv.lock").read_text(encoding="utf-8") == "lock-before\n"
 
 
-def test_sync_tool_space_dependencies_rejects_empty_requirements(
+def test_sync_tool_space_dependencies_allows_empty_requirements(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Empty requirements.txt should fail fast."""
+    """Empty requirements.txt should be treated as no external dependencies."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\nversion='0.0.1'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='x'\nversion='0.0.1'\ndependencies=[]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "uv.lock").write_text("lock-before\n", encoding="utf-8")
     requirements_path = tmp_path / "requirements.txt"
     requirements_path.write_text("# no deps\n\n", encoding="utf-8")
-    monkeypatch.setattr(sync_mod, "hf_hub_download", lambda **_: str(requirements_path))
+    source_tool = tmp_path / "search_tool.py"
+    source_tool.write_text("# external tool\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="empty"):
-        sync_mod.sync_tool_space_dependencies(
-            space="owner/repo",
-            logger=sync_mod.logging.getLogger("test"),
-        )
+    monkeypatch.setattr(sync_mod, "_select_tool_python_file", lambda *_: "search_tool.py")
+
+    def fake_download(**kwargs: Any) -> str:
+        filename = kwargs["filename"]
+        if filename == "requirements.txt":
+            return str(requirements_path)
+        if filename == "search_tool.py":
+            return str(source_tool)
+        raise AssertionError(f"Unexpected download filename: {filename}")
+
+    monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
+
+    def fail_if_called(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        raise AssertionError("uv add should not run for empty requirements")
+
+    monkeypatch.setattr(sync_mod.subprocess, "run", fail_if_called)
+
+    result = sync_mod.sync_tool_space_dependencies(
+        space="owner/repo",
+        logger=sync_mod.logging.getLogger("test"),
+    )
+    assert result.requirements_path is None
+    assert result.downloaded_tool_path.exists()
+    assert (tmp_path / "uv.lock").read_text(encoding="utf-8") == "lock-before\n"
+
+
+def test_sync_tool_space_dependencies_allows_missing_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing requirements.txt should not fail if tool module exists."""
+    monkeypatch.chdir(tmp_path)
+    source_tool = tmp_path / "search_tool.py"
+    source_tool.write_text("# external tool\n", encoding="utf-8")
+
+    monkeypatch.setattr(sync_mod, "_select_tool_python_file", lambda *_: "search_tool.py")
+
+    def fake_download(**kwargs: Any) -> str:
+        if kwargs["filename"] == "requirements.txt":
+            raise EntryNotFoundError("requirements missing")
+        if kwargs["filename"] == "search_tool.py":
+            return str(source_tool)
+        raise AssertionError(f"Unexpected download filename: {kwargs['filename']}")
+
+    monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
+    result = sync_mod.sync_tool_space_dependencies(
+        space="owner/repo",
+        logger=sync_mod.logging.getLogger("test"),
+    )
+    assert result.requirements_path is None
+    assert result.downloaded_tool_path.exists()
 
 
 def test_sync_tool_space_dependencies_rolls_back_on_tool_download_failure(
@@ -165,3 +217,28 @@ def test_sync_tool_space_dependencies_rolls_back_on_tool_download_failure(
         "[project]\nname='x'\nversion='0.0.1'\ndependencies=[]\n"
     )
     assert (tmp_path / "uv.lock").read_text(encoding="utf-8") == "lock-before\n"
+
+
+def test_sync_tool_space_dependencies_fails_when_no_tool_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing tool python module should raise a clear error."""
+    monkeypatch.chdir(tmp_path)
+
+    def fake_download(**kwargs: Any) -> str:
+        if kwargs["filename"] == "requirements.txt":
+            raise EntryNotFoundError("requirements missing")
+        raise AssertionError(f"Unexpected download filename: {kwargs['filename']}")
+
+    monkeypatch.setattr(sync_mod, "hf_hub_download", fake_download)
+    monkeypatch.setattr(
+        sync_mod,
+        "_select_tool_python_file",
+        lambda *_: (_ for _ in ()).throw(ValueError("No candidate tool .py file found")),
+    )
+
+    with pytest.raises(RuntimeError, match="No candidate tool \\.py file found"):
+        sync_mod.sync_tool_space_dependencies(
+            space="owner/repo",
+            logger=sync_mod.logging.getLogger("test"),
+        )
