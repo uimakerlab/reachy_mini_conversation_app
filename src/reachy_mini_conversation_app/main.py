@@ -42,15 +42,34 @@ def run(
     instance_path: Optional[str] = None,
 ) -> None:
     """Run the Reachy Mini conversation app."""
+    logger = setup_logger(args.debug)
+    logger.info("Starting Reachy Mini Conversation App")
+
+    if args.sync_tool_space_deps:
+        from reachy_mini_conversation_app.tool_dependency_sync import sync_tool_space_dependencies
+
+        try:
+            sync_result = sync_tool_space_dependencies(
+                space=args.sync_tool_space_deps,
+                logger=logger,
+                hf_token=args.sync_tool_space_hf_token,
+            )
+            logger.info("Dependencies synced from %s", sync_result.requirements_path)
+            logger.info("Tool module synced to %s", sync_result.downloaded_tool_path)
+            logger.info("Re-run without --sync-tool-space-deps to start the app.")
+            return
+        except Exception as e:
+            logger.error("Failed to sync external tool dependencies: %s", e)
+            if args.debug:
+                logger.exception("Dependency sync traceback")
+            sys.exit(1)
+
     # Putting these dependencies here makes the dashboard faster to load when the conversation app is installed
     from reachy_mini_conversation_app.moves import MovementManager
     from reachy_mini_conversation_app.console import LocalStream
     from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler
     from reachy_mini_conversation_app.tools.core_tools import ToolDependencies
     from reachy_mini_conversation_app.audio.head_wobbler import HeadWobbler
-
-    logger = setup_logger(args.debug)
-    logger.info("Starting Reachy Mini Conversation App")
 
     if args.no_camera and args.head_tracker is not None:
         logger.warning(
