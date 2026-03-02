@@ -1,8 +1,6 @@
-"""LLM provider implementations."""
+"""LLM provider exports (base classes only; providers are loaded dynamically)."""
 
 from .base import LLMChunk, LLMProvider
-from .gemini import GeminiLLM
-from .openai import OpenAILLM
 
 
-__all__ = ["LLMProvider", "LLMChunk", "OpenAILLM", "GeminiLLM"]
+__all__ = ["LLMProvider", "LLMChunk"]

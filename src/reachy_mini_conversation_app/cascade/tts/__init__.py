@@ -1,9 +1,6 @@
-"""TTS provider implementations."""
+"""TTS provider exports (base classes only; providers are loaded dynamically)."""
 
 from .base import TTSProvider
-from .kokoro import KokoroTTS
-from .openai import OpenAITTS
-from .elevenlabs import ElevenLabsTTS
 
 
-__all__ = ["TTSProvider", "OpenAITTS", "KokoroTTS", "ElevenLabsTTS"]
+__all__ = ["TTSProvider"]

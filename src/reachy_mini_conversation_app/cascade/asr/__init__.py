@@ -1,24 +1,7 @@
-"""ASR provider exports."""
+"""ASR provider exports (base classes only; providers are loaded dynamically)."""
 
 from .base import ASRProvider
-from .deepgram import DeepgramASR
-from .nemotron import NemotronASR
-from .parakeet_mlx import ParakeetMLXASR
 from .base_streaming import StreamingASRProvider
-from .whisper_openai import WhisperOpenAIASR
-from .openai_realtime_asr import OpenAIRealtimeASR
-from .parakeet_mlx_streaming import ParakeetMLXStreamingASR
-from .parakeet_mlx_progressive import ParakeetMLXProgressiveASR
 
 
-__all__ = [
-    "ASRProvider",
-    "StreamingASRProvider",
-    "DeepgramASR",
-    "NemotronASR",
-    "OpenAIRealtimeASR",
-    "ParakeetMLXASR",
-    "ParakeetMLXProgressiveASR",
-    "ParakeetMLXStreamingASR",
-    "WhisperOpenAIASR",
-]
+__all__ = ["ASRProvider", "StreamingASRProvider"]
