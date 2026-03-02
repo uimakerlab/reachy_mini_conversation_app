@@ -50,8 +50,12 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
     monkeypatch.setattr(rt_mod, "ConnectionClosedError", FakeCCE)
 
     # Make asyncio.sleep return immediately (for backoff)
-    async def _fast_sleep(*_a: Any, **_kw: Any) -> None: return None
-    monkeypatch.setattr(asyncio, "sleep", _fast_sleep, raising=False)
+    # but still yield to the event loop via sleep(0).
+    # A plain `return None` would never yield, starving concurrent tasks
+    # like _response_sender_loop and preventing them from making progress.
+    _real_sleep = asyncio.sleep
+    async def _mock_sleep(*_a: Any, **_kw: Any) -> None: await _real_sleep(0)
+    monkeypatch.setattr(asyncio, "sleep", _mock_sleep, raising=False)
 
     attempt_counter = {"n": 0}
 
@@ -423,7 +427,7 @@ async def test_response_sender_retries_on_active_response_rejection(monkeypatch:
     # The sender loop must have retried after each rejection.
     retry_logs = [
         r for r in caplog.records
-        if "retrying after active response finished" in getattr(r, "msg", "")
+        if "response.create was rejected; retrying" in getattr(r, "msg", "")
     ]
     assert len(retry_logs) == len(REJECT_CALL_NUMBERS), (
         f"Expected {len(REJECT_CALL_NUMBERS)} retry entries from sender loop, "

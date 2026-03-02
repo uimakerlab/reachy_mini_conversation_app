@@ -32,17 +32,26 @@ def _make_routine(
 
     If *delay* > 0, the routine will sleep for that many seconds before
     returning / raising so we can test cancellation and progress.
+
+    Mirrors the contract of ``_dispatch_tool_call`` in core_tools: exceptions
+    (including ``CancelledError``) are caught and returned as
+    ``{"error": "..."}`` dicts so that ``_run_tool`` never sees a raw raise.
     """
     routine = MagicMock(spec=ToolCallRoutine)
     routine.tool_name = tool_name
     routine.args_json_str = "{}"
 
     async def _call(manager: BackgroundToolManager) -> dict[str, Any]:
-        if delay:
-            await asyncio.sleep(delay)
-        if error is not None:
-            raise error
-        return result or {"ok": True}
+        try:
+            if delay:
+                await asyncio.sleep(delay)
+            if error is not None:
+                raise error
+            return result or {"ok": True}
+        except asyncio.CancelledError:
+            return {"error": "Tool cancelled"}
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}"}
 
     routine.__call__ = _call  # type: ignore[method-assign]
     routine.side_effect = _call
@@ -98,14 +107,14 @@ class TestBackgroundTool:
     """Validate BackgroundTool helpers."""
 
     def test_tool_id(self) -> None:
-        """Verify the composite tool_id property."""
+        """Verify the composite tool_id property includes started_at."""
         t = BackgroundTool(
             id="123",
             tool_name="weather",
             is_idle_tool_call=False,
             status=ToolState.RUNNING,
         )
-        assert t.tool_id == "weather-123"
+        assert t.tool_id == f"weather-123-{t.started_at}"
 
     def test_get_notification(self) -> None:
         """Convert a BackgroundTool to a ToolNotification."""
@@ -176,7 +185,7 @@ class TestStartTool:
         assert bg.tool_name == "greet"
         assert bg.id == "c1"
         assert bg.status == ToolState.RUNNING
-        assert manager.get_tool("greet-c1") is bg
+        assert manager.get_tool(bg.tool_id) is bg
 
         # Let the task finish
         await asyncio.sleep(0.05)
@@ -240,7 +249,7 @@ class TestRunToolLifecycle:
 
         # Give the task a moment to start, then cancel
         await asyncio.sleep(0.02)
-        cancelled = await manager.cancel_tool("long_tool-c1")
+        cancelled = await manager.cancel_tool(bg.tool_id)
         assert cancelled is True
 
         # Let cancellation propagate
@@ -260,14 +269,14 @@ class TestUpdateProgress:
         routine = _make_routine("prog", delay=0.5)
         bg = await manager.start_tool("c1", routine, is_idle_tool_call=False, with_progress=True)
 
-        ok = await manager.update_progress("prog-c1", 0.5, "half done")
+        ok = await manager.update_progress(bg.tool_id, 0.5, "half done")
         assert ok is True
         assert bg.progress is not None
         assert bg.progress.progress == 0.5
         assert bg.progress.message == "half done"
 
         # Cancel to clean up
-        await manager.cancel_tool("prog-c1")
+        await manager.cancel_tool(bg.tool_id)
         await asyncio.sleep(0.05)
 
     @pytest.mark.asyncio
@@ -276,14 +285,14 @@ class TestUpdateProgress:
         routine = _make_routine("prog", delay=0.5)
         bg = await manager.start_tool("c1", routine, is_idle_tool_call=False, with_progress=True)
 
-        await manager.update_progress("prog-c1", 1.5)
+        await manager.update_progress(bg.tool_id, 1.5)
         assert bg.progress is not None
         assert bg.progress.progress == 1.0
 
-        await manager.update_progress("prog-c1", -0.5)
+        await manager.update_progress(bg.tool_id, -0.5)
         assert bg.progress.progress == 0.0
 
-        await manager.cancel_tool("prog-c1")
+        await manager.cancel_tool(bg.tool_id)
         await asyncio.sleep(0.05)
 
     @pytest.mark.asyncio
@@ -296,12 +305,12 @@ class TestUpdateProgress:
     async def test_update_progress_no_tracking(self, manager: BackgroundToolManager) -> None:
         """Return False when progress tracking is disabled."""
         routine = _make_routine("fast", delay=0.5)
-        await manager.start_tool("c1", routine, is_idle_tool_call=False, with_progress=False)
+        bg = await manager.start_tool("c1", routine, is_idle_tool_call=False, with_progress=False)
 
-        ok = await manager.update_progress("fast-c1", 0.5)
+        ok = await manager.update_progress(bg.tool_id, 0.5)
         assert ok is False
 
-        await manager.cancel_tool("fast-c1")
+        await manager.cancel_tool(bg.tool_id)
         await asyncio.sleep(0.05)
 
 
@@ -323,7 +332,7 @@ class TestCancelTool:
         assert bg.status == ToolState.COMPLETED
 
         # Cancelling a completed tool should return True (not running, no-op)
-        result = await manager.cancel_tool("done-c1")
+        result = await manager.cancel_tool(bg.tool_id)
         assert result is True
 
 
@@ -353,12 +362,12 @@ class TestTimeoutTools:
         manager._max_tool_duration_seconds = 9999
 
         routine = _make_routine("fast", delay=10.0)
-        await manager.start_tool("c1", routine, is_idle_tool_call=False)
+        bg = await manager.start_tool("c1", routine, is_idle_tool_call=False)
 
         count = await manager.timeout_tools()
         assert count == 0
 
-        await manager.cancel_tool("fast-c1")
+        await manager.cancel_tool(bg.tool_id)
         await asyncio.sleep(0.05)
 
 
@@ -380,7 +389,7 @@ class TestCleanupTools:
 
         removed = await manager.cleanup_tools()
         assert removed == 1
-        assert manager.get_tool("old-c1") is None
+        assert manager.get_tool(bg.tool_id) is None
 
     @pytest.mark.asyncio
     async def test_cleanup_keeps_recent_completed(self, manager: BackgroundToolManager) -> None:
@@ -388,12 +397,12 @@ class TestCleanupTools:
         manager._max_tool_memory_seconds = 9999
 
         routine = _make_routine("recent")
-        await manager.start_tool("c1", routine, is_idle_tool_call=False)
+        bg = await manager.start_tool("c1", routine, is_idle_tool_call=False)
         await asyncio.sleep(0.05)
 
         removed = await manager.cleanup_tools()
         assert removed == 0
-        assert manager.get_tool("recent-c1") is not None
+        assert manager.get_tool(bg.tool_id) is not None
 
     @pytest.mark.asyncio
     async def test_cleanup_ignores_running(self, manager: BackgroundToolManager) -> None:
@@ -401,12 +410,12 @@ class TestCleanupTools:
         manager._max_tool_memory_seconds = 0.0  # immediate expiry
 
         routine = _make_routine("still_going", delay=10.0)
-        await manager.start_tool("c1", routine, is_idle_tool_call=False)
+        bg = await manager.start_tool("c1", routine, is_idle_tool_call=False)
 
         removed = await manager.cleanup_tools()
         assert removed == 0
 
-        await manager.cancel_tool("still_going-c1")
+        await manager.cancel_tool(bg.tool_id)
         await asyncio.sleep(0.05)
 
 
@@ -420,7 +429,7 @@ class TestGetters:
 
         routine = _make_routine("x")
         bg = await manager.start_tool("1", routine, is_idle_tool_call=False)
-        assert manager.get_tool("x-1") is bg
+        assert manager.get_tool(bg.tool_id) is bg
         await asyncio.sleep(0.05)
 
     @pytest.mark.asyncio
@@ -430,8 +439,8 @@ class TestGetters:
         r2 = _make_routine("b", delay=10.0)
         r3 = _make_routine("c")  # finishes immediately
 
-        await manager.start_tool("1", r1, is_idle_tool_call=False)
-        await manager.start_tool("2", r2, is_idle_tool_call=False)
+        bg1 = await manager.start_tool("1", r1, is_idle_tool_call=False)
+        bg2 = await manager.start_tool("2", r2, is_idle_tool_call=False)
         await manager.start_tool("3", r3, is_idle_tool_call=False)
         await asyncio.sleep(0.05)  # let r3 finish
 
@@ -441,8 +450,8 @@ class TestGetters:
         assert names == {"a", "b"}
 
         # Clean up
-        await manager.cancel_tool("a-1")
-        await manager.cancel_tool("b-2")
+        await manager.cancel_tool(bg1.tool_id)
+        await manager.cancel_tool(bg2.tool_id)
         await asyncio.sleep(0.05)
 
     @pytest.mark.asyncio

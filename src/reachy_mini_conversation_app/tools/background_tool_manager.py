@@ -97,7 +97,7 @@ class BackgroundTool(ToolNotification):
     @property
     def tool_id(self) -> str:
         """Get the name of the tool."""
-        return f"{self.tool_name}-{self.id}-{time.monotonic()}"
+        return f"{self.tool_name}-{self.id}-{self.started_at}"
 
     def get_notification(self) -> ToolNotification:
         """Get the notification for the tool."""
