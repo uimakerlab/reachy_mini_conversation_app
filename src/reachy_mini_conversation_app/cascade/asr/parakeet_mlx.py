@@ -1,15 +1,12 @@
 """Parakeet-MLX ASR provider (Apple Silicon optimized)."""
 
 from __future__ import annotations
-import wave
 import asyncio
 import logging
 from typing import Any, Optional
 
-import numpy as np
-import mlx.core as mx
-
 from .base import ASRProvider
+from ._parakeet_helpers import load_parakeet_model, warmup_parakeet_model
 
 
 logger = logging.getLogger(__name__)
@@ -37,71 +34,11 @@ class ParakeetMLXASR(ASRProvider):
 
         # Preload model immediately to avoid first-call delay
         logger.info(f"Loading Parakeet model: {model} (precision: {precision})...")
-        self._ensure_model()
+        self.model = load_parakeet_model(self.model_name, self.precision)
         logger.info("Parakeet model loaded successfully")
 
         # Warmup: Run a dummy inference to pre-compile kernels
-        self._warmup_model()
-
-    def _ensure_model(self) -> None:
-        """Load the Parakeet model."""
-        if self.model is None:
-            from parakeet_mlx import from_pretrained
-
-            # Convert string precision to MLX dtype
-            if self.precision == "fp32":
-                dtype = mx.float32
-            elif self.precision == "bf16":
-                dtype = mx.bfloat16
-            elif self.precision == "fp16":
-                dtype = mx.float16
-            else:
-                logger.warning(f"Unknown precision '{self.precision}', using fp32")
-                dtype = mx.float32
-
-            self.model = from_pretrained(
-                self.model_name,
-                dtype=dtype,
-            )
-
-    def _warmup_model(self) -> None:
-        """Warmup model with dummy inference to pre-compile MLX kernels."""
-        import time
-        import tempfile
-
-        logger.info("Warming up Parakeet model (pre-compiling MLX kernels)...")
-        warmup_start = time.perf_counter()
-
-        try:
-            # Create a short dummy audio file (1 second of silence)
-            sample_rate = 16000
-            duration = 1.0  # 1 second
-            num_samples = int(sample_rate * duration)
-            silence = np.zeros(num_samples, dtype=np.int16)
-
-            # Write to temp WAV file
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-            with wave.open(temp_file.name, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)  # 16-bit
-                wf.setframerate(sample_rate)
-                wf.writeframes(silence.tobytes())
-
-            # Run dummy inference (this compiles MLX kernels)
-            _ = self.model.transcribe(temp_file.name)
-
-            # Cleanup
-            from pathlib import Path
-
-            Path(temp_file.name).unlink(missing_ok=True)
-
-            warmup_duration = (time.perf_counter() - warmup_start) * 1000
-            logger.info(
-                f"Parakeet warmup complete! First inference took {warmup_duration:.0f}ms (subsequent calls will be ~4-5x faster)"
-            )
-
-        except Exception as e:
-            logger.warning(f"Parakeet warmup failed (non-critical): {e}")
+        warmup_parakeet_model(self.model)
 
     async def transcribe(self, audio_bytes: bytes, language: Optional[str] = None) -> str:
         """Transcribe audio using Parakeet-MLX (batch mode).

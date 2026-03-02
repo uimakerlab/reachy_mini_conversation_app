@@ -7,9 +7,7 @@ Adapted from Andi Marafioti's work on https://github.com/huggingface/speech-to-s
 """
 
 from __future__ import annotations
-import io
 import time
-import wave
 import logging
 from typing import Any, Optional
 
@@ -17,6 +15,7 @@ import numpy as np
 import mlx.core as mx
 import numpy.typing as npt
 
+from .audio_utils import wav_to_float32
 from .base_streaming import StreamingASRProvider
 
 
@@ -86,7 +85,7 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
 
     async def send_audio_chunk(self, audio_chunk: bytes) -> None:
         """Append audio and run incremental transcription if enough new audio."""
-        audio_np = _wav_bytes_to_numpy(audio_chunk, self.target_sample_rate)
+        audio_np = wav_to_float32(audio_chunk, self.target_sample_rate)
         if len(audio_np) == 0:
             return
 
@@ -136,7 +135,7 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
 
     async def transcribe(self, audio_bytes: bytes, language: Optional[str] = None) -> str:
         """Batch fallback: decode_chunk on entire audio (no temp files)."""
-        audio_np = _wav_bytes_to_numpy(audio_bytes, self.target_sample_rate)
+        audio_np = wav_to_float32(audio_bytes, self.target_sample_rate)
         if len(audio_np) == 0:
             return ""
         audio_mx = mx.array(audio_np, dtype=mx.float32)
@@ -192,34 +191,3 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
                 result = self._model.decode_chunk(audio_mx, verbose=False)
 
         return " ".join(self._fixed_sentences), result.text.strip()
-
-
-# -- Helpers --
-
-
-def _wav_bytes_to_numpy(audio_bytes: bytes, target_sr: int) -> npt.NDArray[np.float32]:
-    """Convert WAV file bytes to float32 numpy array at target sample rate."""
-    with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
-        sr = wf.getframerate()
-        channels = wf.getnchannels()
-        sw = wf.getsampwidth()
-        frames = wf.readframes(wf.getnframes())
-
-    if sw == 2:
-        audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
-    elif sw == 4:
-        audio = np.frombuffer(frames, dtype=np.int32).astype(np.float32) / 2147483648.0
-    else:
-        logger.error(f"Unsupported sample width: {sw}")
-        return np.array([], dtype=np.float32)
-
-    # Stereo → mono
-    if channels == 2:
-        audio = audio.reshape(-1, 2).mean(axis=1)
-
-    # Resample if needed
-    if sr != target_sr:
-        new_len = int(len(audio) * target_sr / sr)
-        audio = np.interp(np.linspace(0, len(audio) - 1, new_len), np.arange(len(audio)), audio).astype(np.float32)
-
-    return audio

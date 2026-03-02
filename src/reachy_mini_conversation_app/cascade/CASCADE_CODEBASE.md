@@ -43,6 +43,8 @@ cascade/
 │   ├── __init__.py                    # Provider exports
 │   ├── base.py                        # ASRProvider abstract base
 │   ├── base_streaming.py              # StreamingASRProvider abstract base
+│   ├── audio_utils.py                 # Shared WAV parsing & resampling (librosa)
+│   ├── _parakeet_helpers.py           # Shared Parakeet model loading & warmup
 │   ├── whisper_openai.py              # OpenAI Whisper implementation
 │   ├── parakeet_mlx.py                # Parakeet MLX batch implementation
 │   ├── parakeet_mlx_streaming.py      # Parakeet MLX streaming implementation (RNNT, experimental)

@@ -1,8 +1,6 @@
 """Parakeet-MLX streaming ASR provider (Apple Silicon optimized)."""
 
 from __future__ import annotations
-import io
-import wave
 import asyncio
 import logging
 from typing import Any, Optional
@@ -11,7 +9,9 @@ import numpy as np
 import mlx.core as mx
 import numpy.typing as npt
 
+from .audio_utils import wav_to_float32
 from .base_streaming import StreamingASRProvider
+from ._parakeet_helpers import load_parakeet_model, warmup_parakeet_model
 
 
 logger = logging.getLogger(__name__)
@@ -79,69 +79,11 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
 
         # Preload model immediately to avoid first-call delay
         logger.info(f"Loading Parakeet model: {model} (precision: {precision})...")
-        self._ensure_model()
+        self.model = load_parakeet_model(self.model_name, self.precision)
         logger.info("Parakeet model loaded successfully")
 
-        # Warmup: Run a dummy inference to pre-compile MLX kernels
-        self._warmup_model()
-
-    def _ensure_model(self) -> None:
-        """Load the Parakeet model."""
-        if self.model is None:
-            from parakeet_mlx import from_pretrained
-
-            # Convert string precision to MLX dtype
-            if self.precision == "fp32":
-                dtype = mx.float32
-            elif self.precision == "bf16":
-                dtype = mx.bfloat16
-            elif self.precision == "fp16":
-                dtype = mx.float16
-            else:
-                logger.warning(f"Unknown precision '{self.precision}', using fp32")
-                dtype = mx.float32
-
-            self.model = from_pretrained(
-                self.model_name,
-                dtype=dtype,
-            )
-
-    def _warmup_model(self) -> None:
-        """Warmup model with dummy inference to pre-compile MLX kernels."""
-        import time
-        import tempfile
-
-        logger.info("Warming up Parakeet model (pre-compiling MLX kernels)...")
-        warmup_start = time.perf_counter()
-
-        try:
-            # Create a short dummy audio file (1 second of silence)
-            sample_rate = 16000
-            duration = 1.0  # 1 second
-            num_samples = int(sample_rate * duration)
-            silence = np.zeros(num_samples, dtype=np.int16)
-
-            # Write to temp WAV file
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-            with wave.open(temp_file.name, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)  # 16-bit
-                wf.setframerate(sample_rate)
-                wf.writeframes(silence.tobytes())
-
-            # Run dummy inference (this compiles MLX kernels)
-            _ = self.model.transcribe(temp_file.name)
-
-            # Cleanup
-            from pathlib import Path
-
-            Path(temp_file.name).unlink(missing_ok=True)
-
-            warmup_duration = (time.perf_counter() - warmup_start) * 1000
-            logger.info(f"Parakeet warmup complete! First inference took {warmup_duration:.0f}ms")
-
-        except Exception as e:
-            logger.warning(f"Parakeet warmup failed (non-critical): {e}")
+        # Warmup: Run a dummy inference to pre-compile kernels
+        warmup_parakeet_model(self.model)
 
     async def start_stream(self) -> None:
         """Initialize streaming session."""
@@ -188,7 +130,7 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
 
         try:
             # Convert WAV bytes to numpy array
-            audio_array_np = self._wav_bytes_to_numpy(audio_chunk)
+            audio_array_np = wav_to_float32(audio_chunk, self.target_sample_rate)
             # logger.debug(f"Parsed WAV: {len(audio_array_np)} samples, range=[{audio_array_np.min():.3f}, {audio_array_np.max():.3f}]")
 
             if len(audio_array_np) == 0:
@@ -451,64 +393,3 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
             logger.info(f"🧹 Repetition cleanup: '{text}' → '{cleaned}'")
 
         return cleaned
-
-    def _wav_bytes_to_numpy(self, audio_bytes: bytes) -> npt.NDArray[np.float32]:
-        """Convert WAV file bytes to numpy array.
-
-        Args:
-            audio_bytes: WAV file bytes
-
-        Returns:
-            Audio as float32 numpy array (16kHz, mono, normalized to [-1, 1])
-
-        """
-        try:
-            # Parse WAV bytes
-            with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
-                sample_rate = wav_file.getframerate()
-                n_channels = wav_file.getnchannels()
-                sample_width = wav_file.getsampwidth()
-                n_frames = wav_file.getnframes()
-
-                # Read frames
-                frames = wav_file.readframes(n_frames)
-
-                # Convert to numpy array
-                if sample_width == 2:  # 16-bit
-                    audio_array = np.frombuffer(frames, dtype=np.int16)
-                elif sample_width == 4:  # 32-bit
-                    audio_array = np.frombuffer(frames, dtype=np.int32)
-                else:
-                    raise ValueError(f"Unsupported sample width: {sample_width} bytes")
-
-                # Convert to float32 and normalize
-                audio_float = audio_array.astype(np.float32)
-                if sample_width == 2:
-                    audio_float /= 32768.0
-                elif sample_width == 4:
-                    audio_float /= 2147483648.0
-
-                # Convert stereo to mono
-                if n_channels == 2:
-                    audio_float = audio_float.reshape(-1, 2).mean(axis=1)
-
-                # Resample to 16kHz if needed
-                if sample_rate != self.target_sample_rate:
-                    audio_float = self._resample_audio(audio_float, sample_rate, self.target_sample_rate)
-
-                return audio_float
-
-        except Exception as e:
-            logger.error(f"Failed to convert WAV bytes: {e}")
-            return np.array([], dtype=np.float32)
-
-    def _resample_audio(self, audio: npt.NDArray[np.float32], from_rate: int, to_rate: int) -> npt.NDArray[np.float32]:
-        """Resample audio to target sample rate."""
-        if from_rate == to_rate:
-            return audio
-
-        duration = len(audio) / from_rate
-        new_length = int(duration * to_rate)
-        old_indices = np.linspace(0, len(audio) - 1, new_length)
-        resampled = np.interp(old_indices, np.arange(len(audio)), audio)
-        return resampled.astype(np.float32)

@@ -7,13 +7,12 @@ Uses nvidia/nemotron-speech-streaming-en-0.6b model with:
 """
 
 from __future__ import annotations
-import io
-import wave
 import logging
 from typing import Optional
 
 import numpy as np
 
+from .audio_utils import wav_to_float32
 from .base_streaming import StreamingASRProvider
 
 
@@ -131,8 +130,8 @@ class NemotronASR(StreamingASRProvider):
 
         """
         # Convert to numpy array
-        audio_array = self._wav_to_array(audio_chunk)
-        if audio_array is None or len(audio_array) == 0:
+        audio_array = wav_to_float32(audio_chunk, self.sample_rate)
+        if len(audio_array) == 0:
             return
 
         # Add to buffer
@@ -285,53 +284,3 @@ class NemotronASR(StreamingASRProvider):
             logger.warning(f"Error in final processing: {e}")
             # Use partial as final if final processing fails
             self._final_transcript = self._partial_transcript
-
-    def _wav_to_array(self, audio_bytes: bytes) -> Optional[np.ndarray]:
-        """Convert WAV bytes to numpy array.
-
-        Args:
-            audio_bytes: WAV or raw PCM bytes
-
-        Returns:
-            Numpy array of audio samples, or None if conversion fails
-
-        """
-        try:
-            # Try to parse as WAV
-            with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
-                sample_rate = wav_file.getframerate()
-                sample_width = wav_file.getsampwidth()
-                n_frames = wav_file.getnframes()
-
-                # Read frames
-                frames = wav_file.readframes(n_frames)
-
-                # Convert to numpy
-                if sample_width == 2:  # 16-bit
-                    audio = np.frombuffer(frames, dtype=np.int16)
-                elif sample_width == 4:  # 32-bit
-                    audio = np.frombuffer(frames, dtype=np.int32)
-                else:
-                    audio = np.frombuffer(frames, dtype=np.int16)
-
-                # Resample if needed
-                if sample_rate != self.sample_rate:
-                    import librosa
-
-                    audio = audio.astype(np.float32) / 32768.0
-                    audio = librosa.resample(
-                        audio,
-                        orig_sr=sample_rate,
-                        target_sr=self.sample_rate,
-                    )
-                    audio = (audio * 32768).astype(np.int16)
-
-                return audio
-
-        except Exception:
-            # Assume raw PCM int16
-            try:
-                return np.frombuffer(audio_bytes, dtype=np.int16)
-            except Exception as e:
-                logger.warning(f"Failed to convert audio: {e}")
-                return None

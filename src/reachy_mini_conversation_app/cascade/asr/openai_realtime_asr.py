@@ -36,16 +36,13 @@ When `use_server_vad=False`:
 """
 
 from __future__ import annotations
-import io
 import json
-import wave
 import base64
 import asyncio
 import logging
 from typing import Any, Optional
 
-import numpy as np
-
+from .audio_utils import wav_to_pcm_int16
 from .base_streaming import StreamingASRProvider
 
 
@@ -190,7 +187,7 @@ class OpenAIRealtimeASR(StreamingASRProvider):
 
         try:
             # Convert WAV 16kHz to PCM 24kHz
-            pcm_24k = self._wav_to_pcm_24k(audio_chunk)
+            pcm_24k = wav_to_pcm_int16(audio_chunk, 24000)
 
             # Base64 encode
             audio_b64 = base64.b64encode(pcm_24k).decode("utf-8")
@@ -333,51 +330,3 @@ class OpenAIRealtimeASR(StreamingASRProvider):
                 logger.debug("OpenAI Realtime WebSocket closed")
         except Exception as e:
             logger.debug(f"Cleanup error (non-critical): {e}")
-
-    def _wav_to_pcm_24k(self, audio_bytes: bytes) -> bytes:
-        """Convert WAV audio to raw PCM int16 at 24kHz.
-
-        Args:
-            audio_bytes: WAV file bytes
-
-        Returns:
-            Raw PCM audio data (int16, 24kHz)
-
-        """
-        try:
-            with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
-                sample_rate = wav_file.getframerate()
-                n_channels = wav_file.getnchannels()
-                sample_width = wav_file.getsampwidth()
-                pcm_data = wav_file.readframes(wav_file.getnframes())
-
-            if sample_width != 2:
-                raise ValueError(f"Unsupported sample width: {sample_width}")
-
-            audio = np.frombuffer(pcm_data, dtype=np.int16)
-
-            # Stereo to mono
-            if n_channels == 2:
-                audio = audio.reshape(-1, 2).mean(axis=1).astype(np.int16)
-
-            # Resample to 24kHz if needed
-            if sample_rate != 24000:
-                audio = self._resample_audio(audio, sample_rate, 24000)
-
-            return audio.tobytes()
-
-        except Exception:
-            # Assume raw PCM 16kHz
-            logger.debug("WAV parsing failed, assuming raw PCM 16kHz")
-            audio = np.frombuffer(audio_bytes, dtype=np.int16)
-            audio = self._resample_audio(audio, 16000, 24000)
-            return audio.tobytes()
-
-    def _resample_audio(self, audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
-        """Resample audio using librosa (high quality)."""
-        import librosa
-
-        audio_float = audio.astype(np.float32) / 32768.0
-        resampled = librosa.resample(audio_float, orig_sr=orig_sr, target_sr=target_sr)
-        resampled = np.clip(resampled * 32768.0, -32768, 32767).astype(np.int16)
-        return resampled
