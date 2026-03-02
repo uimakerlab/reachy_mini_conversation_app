@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import os
+import signal
 import time
 import logging
 from typing import TYPE_CHECKING
@@ -77,6 +78,9 @@ def run_cascade_mode(
     except KeyboardInterrupt:
         logger.info("Keyboard interruption in main thread... closing server.")
     finally:
+        # Ignore further Ctrl+C during cleanup so we always reach os._exit.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+
         # Stop the stream manager
         stream_manager.close()
 
