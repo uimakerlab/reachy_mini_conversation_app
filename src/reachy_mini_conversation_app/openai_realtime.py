@@ -43,6 +43,8 @@ TEXT_INPUT_COST_PER_1M = 4.0
 TEXT_OUTPUT_COST_PER_1M = 16.0
 IMAGE_INPUT_COST_PER_1M = 5.0
 
+_RESPONSE_DONE_TIMEOUT: Final[float] = 30.0
+
 
 def _compute_response_cost(usage: Any) -> float:
     """Compute dollar cost from a response usage object."""
@@ -106,6 +108,14 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
         # Cost tracking
         self.cumulative_cost: float = 0.0
+
+        # Response-in-progress guard: the Realtime API only allows one active
+        # response per conversation at a time.  A dedicated worker task
+        # (_response_sender_loop) dequeues and sends one request at a time
+        self._pending_responses: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._response_done_event: asyncio.Event = asyncio.Event()
+        self._response_done_event.set()
+        self._last_response_rejected: bool = False
 
     def copy(self) -> "OpenaiRealtimeHandler":
         """Create a copy of the handler."""
@@ -263,6 +273,63 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         except Exception as e:
             logger.warning("_restart_session failed: %s", e)
 
+    async def _safe_response_create(self, **kwargs: Any) -> None:
+        """Enqueue a response.create() kwargs for the sender worker _response_sender_loop().
+
+        This method never blocks the caller.
+        """
+        await self._pending_responses.put(kwargs)
+
+    async def _response_sender_loop(self) -> None:
+        """Dedicated worker that sends ``response.create()`` calls serially.
+
+        This logic was designed to comply with the response.create() docstring specification for event ordering:
+        https://github.com/openai/openai-python/blob/3e0c05b84a2056870abf3bd6a5e7849020209cc3/src/openai/resources/realtime/realtime.py#L649C1-L651C30
+
+        For each queued request the worker:
+        1. Waits until no response is active (_response_done_event).
+        2. Sends response.create().
+        3. Waits for the response cycle to complete (response.done).
+        4. If the server rejected with active_response, retries from step 1.
+        """
+        while self.connection:
+            try:
+                kwargs = await self._pending_responses.get()
+            except asyncio.CancelledError:
+                return
+
+            sent = False
+            while not sent and self.connection:
+                try:
+                    await asyncio.wait_for(self._response_done_event.wait(), timeout=_RESPONSE_DONE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning("Timed out waiting for previous response to finish; forcing ahead")
+                    self._response_done_event.set()
+
+                if not self.connection:
+                    break
+
+                self._last_response_rejected = False
+                try:
+                    await self.connection.response.create(**kwargs)
+                except Exception as e:
+                    logger.warning("_response_sender_loop: send failed: %s", e)
+                    break
+
+                try:
+                    await asyncio.wait_for(self._response_done_event.wait(), timeout=_RESPONSE_DONE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning("Timed out waiting for response.done; assuming response completed")
+                    self._response_done_event.set()
+                    break
+
+                # Check if we were rejected
+                if self._last_response_rejected:
+                    logger.debug("response.create was rejected; retrying after active response finished")
+                    continue
+
+                sent = True
+
     async def _handle_tool_result(self, bg_tool: ToolNotification) -> None:
         """Process the result of a tool call."""
         try:
@@ -355,7 +422,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             # If this tool call was triggered by an idle signal, don't make the robot speak.
             # For other tool calls, let the robot reply out loud.
             if not bg_tool.is_idle_tool_call:
-                await self.connection.response.create(
+                await self._safe_response_create(
                     response={
                         "instructions": "Use the tool result just returned and answer concisely in speech.",
                     },
@@ -425,6 +492,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             # Start the background tool manager
             self.tool_manager.start_up(tool_callbacks=[self._handle_tool_result])
 
+            # Start the response sender worker
+            response_sender_task = asyncio.create_task(
+                self._response_sender_loop(), name="response-sender"
+            )
+
             async for event in self.connection:
                 logger.debug(f"OpenAI event: {event.type}")
                 if event.type == "input_audio_buffer.speech_started":
@@ -448,9 +520,12 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     logger.debug("response completed")
 
                 if event.type == "response.created":
+                    self._response_done_event.clear()
                     logger.debug("Response created (active)")
 
                 if event.type == "response.done":
+                    # Doesn't mean the audio is done playing
+                    self._response_done_event.set()
                     logger.debug("Response done")
 
 
@@ -559,7 +634,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     if self.is_idle_tool_call:
                         self.is_idle_tool_call = False
                     else:
-                        await self.connection.response.create(
+                        await self._safe_response_create(
                             response={
                                 "instructions": "Notify what the tool has been running giving meaningful information about the task",
                             },
@@ -574,7 +649,14 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     msg = getattr(err, "message", str(err) if err else "unknown error")
                     code = getattr(err, "code", "")
 
-                    logger.error("Realtime error [%s]: %s (raw=%s)", code, msg, err)
+                    if code == "conversation_already_has_active_response":
+                        # response.create was rejected.  The sender worker
+                        # is waiting on _response_done_event; when the active
+                        # response finishes it will wake up and see this flag.
+                        self._last_response_rejected = True
+                        logger.debug("response.create rejected; worker will retry after active response finishes")
+                    else:
+                        logger.error("Realtime error [%s]: %s (raw=%s)", code, msg, err)
 
                     # Only show user-facing errors, not internal state errors
                     if code not in ("input_audio_buffer_commit_empty",):
@@ -582,7 +664,13 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             AdditionalOutputs({"role": "assistant", "content": f"[error] {msg}"})
                         )
 
-            # Connection closed
+            # Connection closed — stop the response sender worker
+            response_sender_task.cancel()
+            try:
+                await response_sender_task
+            except asyncio.CancelledError:
+                pass
+
             # Stop background tool manager tasks (listener + cleanup)
             await self.tool_manager.shutdown()
 
@@ -648,6 +736,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
     async def shutdown(self) -> None:
         """Shutdown the handler."""
         self._shutdown_requested = True
+
+        # Unblock the response sender worker so it can exit
+        self._response_done_event.set()
 
         # Stop background tool manager tasks (listener + cleanup)
         await self.tool_manager.shutdown()
@@ -766,7 +857,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 "content": [{"type": "input_text", "text": timestamp_msg}],
             },
         )
-        await self.connection.response.create(
+        await self._safe_response_create(
             response={
                 "instructions": "You MUST respond with function calls only - no speech or text. Choose appropriate actions for idle behavior.",
                 "tool_choice": "required",
