@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 import os
-import re
-import time
 import asyncio
 import logging
 import tempfile
@@ -42,8 +40,6 @@ class CascadeGradioUI:
         """
         self.handler = cascade_handler
         self.robot = robot
-        # Tell handler to skip audio playback, since it will be done in gradio UI.
-        self.handler.skip_audio_playback = True
 
         self.shutdown_event = threading.Event()
 
@@ -53,6 +49,14 @@ class CascadeGradioUI:
             head_wobbler=self.handler.deps.head_wobbler,
             shutdown_event=self.shutdown_event,
             tts_sample_rate=self.handler.tts.sample_rate,
+        )
+
+        # Wire speech output so handler plays audio through Gradio's playback system
+        from reachy_mini_conversation_app.cascade.speech_output import GradioSpeechOutput
+
+        self.handler.speech_output = GradioSpeechOutput(
+            tts=self.handler.tts,
+            playback=self.playback,
         )
 
         # VAD recorder created lazily after handler.start() provides event loop
@@ -240,11 +244,9 @@ class CascadeGradioUI:
             # Build responses from TurnResult items
             result["responses"] = self._turn_items_to_responses(turn)
 
-            # Synthesize speech if any speak items
-            if turn.has_speak:
-                logger.info("Synthesizing speak text as one stream")
-                await self._synthesize_for_gradio(turn.speak_text)
-            else:
+            # Speech was already played during tool execution via speech_output.
+            # Print latency summary for non-speech turns (speech path prints its own).
+            if not turn.has_speak:
                 from reachy_mini_conversation_app.cascade.timing import tracker
 
                 logger.info("No speech output - printing latency summary")
@@ -328,225 +330,6 @@ class CascadeGradioUI:
         except Exception as e:
             logger.warning(f"Failed to decode JPEG: {e}")
             return None
-
-    async def _synthesize_for_gradio(self, text: str) -> None:
-        """Synthesize speech and play through pre-warmed audio system.
-
-        1. Generates TTS audio chunks
-        2. Plays audio immediately through pre-warmed sounddevice (robot speaker)
-        3. Feeds chunks to head_wobbler for animation (synchronized with playback)
-
-        Args:
-            text: Text to synthesize
-
-        """
-        import numpy.typing as npt
-
-        from reachy_mini_conversation_app.cascade.timing import tracker
-
-        logger.info(f"Synthesizing speech: '{text[:50]}...'")
-
-        audio_chunks: list[npt.NDArray[np.int16]] = []
-        first_chunk_queued = False
-
-        try:
-            # Split text into sentences for streaming, so TTS can send a first audio faster.
-            sentences = self._split_into_sentences(text)
-            logger.debug(f"Split text into {len(sentences)} sentence chunks for streaming TTS")
-            for i, s in enumerate(sentences):
-                logger.debug(f"  Sentence {i + 1}: '{s}'")
-
-            # Use pre-warmed persistent queues (no thread creation overhead!)
-            logger.debug("Using pre-warmed audio playback system")
-
-            # Generate TTS with PARALLEL sentence generation and ORDERED playback
-            # Key optimization: Generate sentences in parallel, but queue in order
-            total_chunks = 0
-
-            # Gate events ensure chunks queue in sentence order even if TTS responses arrive out of order
-            queue_events = [asyncio.Event() for _ in sentences]
-            queue_events[0].set()  # Sentence 0 can queue immediately
-
-            async def generate_and_queue_sentence(idx: int, sentence: str) -> List[npt.NDArray[np.int16]]:
-                """Generate TTS for one sentence and queue chunks in order."""
-                nonlocal total_chunks, first_chunk_queued
-
-                logger.debug(f"TTS sentence {idx + 1}/{len(sentences)}: '{sentence}' (PARALLEL)")
-                sentence_chunks: list[npt.NDArray[np.int16]] = []
-                sentence_start = time.time()
-
-                # If gate is already open (sentence 0), stream directly to playback
-                gate_is_open = queue_events[idx].is_set()
-
-                if gate_is_open:
-                    # Stream each chunk to playback as it arrives — no buffering
-                    async for chunk in self.handler.tts.synthesize(sentence):
-                        total_chunks += 1
-                        audio_array = np.frombuffer(chunk, dtype=np.int16)
-                        sentence_chunks.append(audio_array)
-                        audio_chunks.append(audio_array)
-                        self.playback.put_audio(audio_array)
-                        self.playback.put_wobbler(chunk)
-                        if not first_chunk_queued:
-                            first_chunk_queued = True
-                            tracker.mark("audio_playback_started")
-                            logger.info(
-                                "First audio chunk playing - playback started while TTS continues in background"
-                            )
-                else:
-                    # Buffer all chunks, then wait for gate before queuing
-                    raw_chunks: list[bytes] = []
-                    async for chunk in self.handler.tts.synthesize(sentence):
-                        total_chunks += 1
-                        audio_array = np.frombuffer(chunk, dtype=np.int16)
-                        sentence_chunks.append(audio_array)
-                        raw_chunks.append(chunk)
-
-                    await queue_events[idx].wait()
-
-                    for audio_array, raw_chunk in zip(sentence_chunks, raw_chunks):
-                        audio_chunks.append(audio_array)
-                        self.playback.put_audio(audio_array)
-                        self.playback.put_wobbler(raw_chunk)
-                        if not first_chunk_queued:
-                            first_chunk_queued = True
-                            tracker.mark("audio_playback_started")
-                            logger.info(
-                                "First audio chunk playing - playback started while TTS continues in background"
-                            )
-
-                gen_duration = time.time() - sentence_start
-                if sentence_chunks:
-                    total_samples = sum(len(c) for c in sentence_chunks)
-                    logger.debug(
-                        f"Sentence {idx + 1} generated: {len(sentence_chunks)} chunks ({total_samples} samples, {total_samples / self.handler.tts.sample_rate:.2f}s) in {gen_duration:.2f}s"
-                    )
-
-                # Signal next sentence can queue
-                if idx + 1 < len(queue_events):
-                    queue_events[idx + 1].set()
-
-                logger.debug(f"Sentence {idx + 1} queued for playback")
-                return sentence_chunks
-
-            # Strategy: Generate sentences with intelligent overlap
-            # - Sentence 1: Start immediately, play as soon as first chunk arrives
-            # - Sentence 2: Start while sentence 1 is still generating/playing
-            # - Sentence 3+: Start with small delay to avoid overwhelming TTS API
-
-            tasks = []
-            for idx, sentence in enumerate(sentences):
-                if idx == 0:
-                    # Sentence 1: Start immediately
-                    task = asyncio.create_task(generate_and_queue_sentence(idx, sentence))
-                    tasks.append(task)
-                elif idx == 1:
-                    # Sentence 2: Start after a small delay (let sentence 1 begin streaming)
-                    await asyncio.sleep(0.3)  # 300ms delay - allows sentence 1 to start playing
-                    task = asyncio.create_task(generate_and_queue_sentence(idx, sentence))
-                    tasks.append(task)
-                else:
-                    # Sentence 3+: Start after previous task completes (avoid API overload)
-                    # But playback is already happening from sentence 1 & 2!
-                    if idx >= 2 and tasks:
-                        await tasks[idx - 1]  # Wait for previous sentence to finish generating
-                    task = asyncio.create_task(generate_and_queue_sentence(idx, sentence))
-                    tasks.append(task)
-
-            # Wait for all sentence generations to complete
-            await asyncio.gather(*tasks)
-            logger.info(f"Parallel TTS complete: All {len(sentences)} sentences generated")
-
-            # Aggregate TTS cost after all sentences are synthesized
-            self.handler._aggregate_cost(self.handler.tts, "TTS")
-
-            logger.info(f"Generated {total_chunks} total audio chunks from {len(sentences)} sentences")
-
-            # Signal end of this playback session to persistent threads
-            self.playback.signal_end_of_turn()
-
-            # Wait for audio to finish playing (estimate based on total duration)
-            if audio_chunks:
-                total_samples = sum(len(chunk) for chunk in audio_chunks)
-                duration_seconds = total_samples / self.handler.tts.sample_rate
-                logger.info(f"Waiting {duration_seconds:.1f}s for playback to complete...")
-                await asyncio.sleep(duration_seconds + 0.5)  # Add 500ms buffer
-
-            logger.info("Playback complete (using pre-warmed system)")
-
-            # Print latency summary now that full pipeline is complete (speech path)
-            from reachy_mini_conversation_app.cascade.timing import tracker
-
-            tracker.print_summary()
-
-        except Exception as e:
-            logger.exception(f"Error synthesizing speech: {e}")
-
-    def _split_into_sentences(self, text: str, min_length: int = 8) -> list[str]:
-        """Split text into sentence-like chunks for streaming TTS.
-
-        Splits on: . ! ? , ; — (but keeps punctuation with the sentence)
-        This allows starting TTS synthesis earlier for long texts.
-
-        Args:
-            text: Text to split
-            min_length: Minimum characters per segment (default 8)
-                       Segments shorter than this are combined with the next segment.
-
-        Returns:
-            List of text segments, each at least min_length characters (except possibly the last)
-
-        """
-        # Split on sentence boundaries but keep the punctuation
-        # Pattern: split after punctuation + optional whitespace
-        pattern = r"([.!?,;—]\s+)"
-        parts = re.split(pattern, text)
-
-        # Recombine parts to keep punctuation with sentences
-        raw_sentences = []
-        current = ""
-        for part in parts:
-            current += part
-            # If this part ends with punctuation + space, it's a sentence boundary
-            if re.match(pattern, part):
-                if current.strip():
-                    raw_sentences.append(current.strip())
-                current = ""
-
-        # Add any remaining text
-        if current.strip():
-            raw_sentences.append(current.strip())
-
-        # If no splits, return original text
-        if not raw_sentences:
-            return [text]
-
-        # Merge short segments to meet minimum length requirement
-        merged_sentences = []
-        accumulator = ""
-
-        for sentence in raw_sentences:
-            # Add to accumulator
-            if accumulator:
-                accumulator += " " + sentence
-            else:
-                accumulator = sentence
-
-            # If accumulator is long enough, add it as a segment
-            if len(accumulator) >= min_length:
-                merged_sentences.append(accumulator)
-                accumulator = ""
-
-        # Add any remaining text (last segment can be shorter)
-        if accumulator:
-            # If we have previous segments, try to append to last one if it's not too long
-            # Otherwise, add as separate segment
-            if merged_sentences and len(merged_sentences[-1]) < min_length * 2:
-                merged_sentences[-1] += " " + accumulator
-            else:
-                merged_sentences.append(accumulator)
-
-        return merged_sentences if merged_sentences else [text]
 
     def _clear_history(self) -> tuple[List[Dict[str, Any]], str]:
         """Clear conversation history."""

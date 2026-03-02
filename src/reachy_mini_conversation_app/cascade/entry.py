@@ -40,7 +40,7 @@ def run_cascade_mode(
         from reachy_mini_conversation_app.cascade.ui import CascadeGradioUI
 
         logger.info("Using Gradio UI for cascade mode")
-        handler = CascadeHandler(deps, skip_audio_playback=True)
+        handler = CascadeHandler(deps)
         cascade_ui = CascadeGradioUI(handler, robot)
         stream_manager = cascade_ui.create_interface()
     else:
@@ -48,7 +48,7 @@ def run_cascade_mode(
         from reachy_mini_conversation_app.cascade.console import CascadeLocalStream
 
         logger.info("Using console mode for cascade (VAD-based speech detection)")
-        handler = CascadeHandler(deps, skip_audio_playback=False)
+        handler = CascadeHandler(deps)
         stream_manager = CascadeLocalStream(handler, robot)
 
     # Start services

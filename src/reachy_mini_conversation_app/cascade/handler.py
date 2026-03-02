@@ -7,7 +7,7 @@ import asyncio
 import logging
 import importlib
 import threading
-from typing import Any, Dict, List, Union, Callable, Awaitable
+from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 from reachy_mini_conversation_app.prompts import get_session_instructions
 from reachy_mini_conversation_app.cascade.asr import ASRProvider, StreamingASRProvider
@@ -24,6 +24,10 @@ from reachy_mini_conversation_app.cascade.transcript_analysis import (
     NoOpTranscriptManager,
     TranscriptAnalysisManager,
 )
+
+
+if TYPE_CHECKING:
+    from reachy_mini_conversation_app.cascade.speech_output import SpeechOutput
 
 
 logger = logging.getLogger(__name__)
@@ -44,19 +48,12 @@ CASCADE_EXTRA_INSTRUCTIONS = """\n\n**IMPORTANT:**
 class CascadeHandler:
     """Main handler for cascade pipeline mode."""
 
-    def __init__(self, deps: ToolDependencies, skip_audio_playback: bool = False):
-        """Initialize cascade handler.
-
-        Args:
-            deps: Tool dependencies for robot control
-            skip_audio_playback: If True, don't play audio in _speak() (for Gradio mode)
-
-        """
+    def __init__(self, deps: ToolDependencies):
+        """Initialize cascade handler."""
         self.deps = deps
-        self.skip_audio_playback = skip_audio_playback
 
-        # Playback callback for console mode
-        self._playback_callback: Callable[[bytes], Awaitable[None]] | None = None
+        # Speech output backend (set by console or Gradio frontend)
+        self.speech_output: SpeechOutput | None = None
 
         # Initialize providers based on config
         self.asr = self._init_asr_provider()
@@ -103,9 +100,7 @@ class CascadeHandler:
         self._current_turn_items: list[TurnItem] = []
         self._turn_results: list[TurnResult] = []
 
-        logger.info(
-            f"Cascade handler initialized (skip_audio_playback={skip_audio_playback}, streaming_asr={self.is_streaming_asr})"
-        )
+        logger.info(f"Cascade handler initialized (streaming_asr={self.is_streaming_asr})")
 
     def _convert_tool_specs_to_chat_format(self, realtime_specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert tool specs from Realtime API format to Chat Completions API format."""
@@ -180,15 +175,6 @@ class CascadeHandler:
     def _init_tts_provider(self) -> TTSProvider:
         """Initialize TTS provider from cascade.yaml config."""
         return self._init_provider("tts")
-
-    def set_playback_callback(self, callback: Callable[[bytes], Awaitable[None]]) -> None:
-        """Set callback for audio playback (console mode).
-
-        Args:
-            callback: Async function that receives audio bytes (PCM int16, 24kHz)
-
-        """
-        self._playback_callback = callback
 
     def _init_transcript_analysis(self) -> TranscriptAnalysisManager | NoOpTranscriptManager:
         """Initialize transcript analysis from profile reactions."""
@@ -576,11 +562,9 @@ class CascadeHandler:
                     logger.info(f"Speaking: {message}")
                     self._current_turn_items.append(TurnItem(kind="speak", text=message))
 
-                    # Only synthesize audio if not in Gradio mode (Gradio UI handles audio playback separately)
-                    if not self.skip_audio_playback:
-                        await self._speak(message)
-                    else:
-                        logger.debug("Skipping audio playback (Gradio mode will handle it)")
+                    if self.speech_output:
+                        await self.speech_output.speak(message)
+                    self._aggregate_cost(self.tts, "TTS")
 
                 # Other tools
                 elif tool_name not in ("speak", "see_image", "camera"):
@@ -616,70 +600,6 @@ class CascadeHandler:
             )
             logger.info("Camera image added to conversation - calling LLM to analyze it")
             await self._process_llm_response()
-
-    async def _speak(self, text: str) -> None:
-        """Synthesize speech and feed to head wobbler for animation.
-
-        Audio Playback Strategy:
-        - Console mode: Audio sent via _playback_callback for robot speaker playback
-        - Gradio mode: Audio is NOT played here - Gradio UI handles playback via browser
-
-        This method:
-        1. Generates TTS audio chunks
-        2. Feeds chunks to head_wobbler for synchronized head animation
-        3. Sends audio to playback callback (console mode only)
-        4. Rate-limits to match real-time audio playback speed
-        """
-        from reachy_mini_conversation_app.cascade.timing import tracker
-
-        try:
-            # Start head wobbler if available
-            if self.deps.head_wobbler:
-                self.deps.head_wobbler.reset()
-
-            # Log what we're saying in console mode
-            if not self.skip_audio_playback:
-                print(f"[TTS] Speaking: {text}")
-
-            # Stream TTS audio for head wobbler animation
-            audio_chunks = []
-            first_chunk_sent = False
-            async for chunk in self.tts.synthesize(text):
-                audio_chunks.append(chunk)
-
-                # Feed to head wobbler for motion
-                if self.deps.head_wobbler:
-                    # Convert to base64 for the wobbler's feed() method
-                    self.deps.head_wobbler.feed(base64.b64encode(chunk).decode("utf-8"))
-
-                # Send to console playback callback (console mode only)
-                if not self.skip_audio_playback and self._playback_callback:
-                    await self._playback_callback(chunk)
-                    if not first_chunk_sent:
-                        tracker.mark("audio_playback_started")
-                        first_chunk_sent = True
-
-                # Rate limiting: match audio generation speed
-                # PCM int16: 2 bytes per sample
-                chunk_duration = len(chunk) / (2 * self.tts.sample_rate)
-                # Sleep for 95% of chunk duration to stay slightly ahead
-                await asyncio.sleep(chunk_duration * 0.95)
-
-            # Aggregate TTS cost after generator completes
-            self._aggregate_cost(self.tts, "TTS")
-
-            logger.info(f"Generated {len(audio_chunks)} audio chunks for head animation")
-
-            # Small buffer to let remaining audio drain from queue/speaker
-            # (we already waited 95% of duration during streaming)
-            await asyncio.sleep(0.5)
-
-            # Reset head wobbler
-            if self.deps.head_wobbler:
-                self.deps.head_wobbler.reset()
-
-        except Exception as e:
-            logger.exception(f"Error speaking: {e}")
 
     def _run_event_loop(self) -> None:
         """Run the asyncio event loop in a background thread."""

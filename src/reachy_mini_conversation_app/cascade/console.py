@@ -106,8 +106,14 @@ class CascadeLocalStream:
         self._speech_chunks: list[np.ndarray] = []
         self._playback_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
-        # Set playback callback on handler
-        self.handler.set_playback_callback(self._queue_audio_for_playback)
+        # Wire speech output so handler plays audio through robot speaker
+        from reachy_mini_conversation_app.cascade.speech_output import ConsoleSpeechOutput
+
+        self.handler.speech_output = ConsoleSpeechOutput(
+            tts=self.handler.tts,
+            head_wobbler=self.handler.deps.head_wobbler,
+            playback_callback=self._queue_audio_for_playback,
+        )
         logger.info("CascadeLocalStream initialized")
 
     async def _queue_audio_for_playback(self, audio_bytes: bytes) -> None:
