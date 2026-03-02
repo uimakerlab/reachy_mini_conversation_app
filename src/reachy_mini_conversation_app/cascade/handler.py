@@ -411,7 +411,7 @@ class CascadeHandler:
             async for chunk in self.llm.generate(
                 messages=self.conversation_history,
                 tools=self.tool_specs,
-                temperature=1.0,  # TODO: maybe move temperature parameter in config ?
+                temperature=self.config.llm_temperature,
             ):
                 if chunk.type == "text_delta" and chunk.content:
                     text_chunks.append(chunk.content)

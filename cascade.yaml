@@ -103,6 +103,7 @@ asr:
 
 llm:
   provider: gemini-2.5-flash-lite  # openai_gpt,gemini-2.5-flash-lite
+  temperature: 1.0
 
   providers:
 

@@ -68,6 +68,7 @@ class CascadeConfig:
         # LLM config
         self.llm_provider = self._cascade["llm"]["provider"]
         self.llm_providers = self._cascade["llm"]["providers"]
+        self.llm_temperature: float = self._cascade["llm"].get("temperature", 1.0)
 
         # TTS config
         self.tts_provider = self._cascade["tts"]["provider"]
