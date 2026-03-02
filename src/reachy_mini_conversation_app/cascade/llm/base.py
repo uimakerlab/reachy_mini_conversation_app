@@ -4,7 +4,7 @@ from __future__ import annotations
 import abc
 import json
 import logging
-from typing import Any, Dict, List, Optional, AsyncIterator
+from typing import Any, Dict, List, Literal, Optional, AsyncIterator
 from dataclasses import dataclass
 
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class LLMChunk:
     """Represents a chunk from LLM streaming response."""
 
-    type: str  # "text_delta", "tool_call", "done"
+    type: Literal["text_delta", "tool_call", "done"]
     content: Optional[str] = None  # Text content for text_delta
     tool_call: Optional[Dict[str, Any]] = None  # Tool call data for tool_call type
 
