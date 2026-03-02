@@ -1,6 +1,7 @@
 """Entry point for cascade mode - keeps cascade logic isolated from main.py."""
 
 from __future__ import annotations
+import os
 import time
 import logging
 from typing import TYPE_CHECKING
@@ -102,3 +103,7 @@ def run_cascade_mode(
 
         time.sleep(1)
         logger.info("Cascade mode shutdown complete.")
+
+        # Hard exit to avoid segfault from PortAudio/sounddevice native
+        # cleanup racing with daemon thread teardown during interpreter shutdown.
+        os._exit(0)
