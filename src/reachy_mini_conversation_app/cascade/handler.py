@@ -414,7 +414,7 @@ class CascadeHandler:
             async for chunk in self.llm.generate(
                 messages=self.conversation_history,
                 tools=self.tool_specs,
-                temperature=self.config.llm_temperature,
+                temperature=get_config().llm_temperature,
             ):
                 if chunk.type == "text_delta" and chunk.content:
                     text_chunks.append(chunk.content)
@@ -583,10 +583,11 @@ class CascadeHandler:
             logger.info("Camera image added to conversation - calling LLM to analyze it")
             await self._process_llm_response()
 
-    def _run_event_loop(self) -> None:
+    def _run_event_loop(self, ready: threading.Event) -> None:
         """Run the asyncio event loop in a background thread."""
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        self.loop.call_soon(ready.set)
         logger.debug("Event loop started in background thread")
         try:
             self.loop.run_forever()
@@ -603,13 +604,10 @@ class CascadeHandler:
         self.running = True
 
         # Start event loop in background thread for async operations
-        self.loop_thread = threading.Thread(target=self._run_event_loop, daemon=True)
+        loop_ready = threading.Event()
+        self.loop_thread = threading.Thread(target=self._run_event_loop, args=(loop_ready,), daemon=True)
         self.loop_thread.start()
-
-        # Wait for event loop to start
-        import time
-
-        time.sleep(0.5)
+        loop_ready.wait(timeout=5)
 
         # Warmup LLM connection
         if self.loop:

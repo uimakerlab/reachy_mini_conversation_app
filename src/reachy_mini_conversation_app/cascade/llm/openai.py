@@ -207,9 +207,8 @@ class OpenAILLM(LLMProvider):
                 )
                 logger.info(f"LLM Cost: ${self.last_cost:.6f} (in={prompt_tokens}, out={completion_tokens})")
 
-            # Yield "done" only after stream is fully consumed and cost is calculated
-            if finished:
-                yield LLMChunk(type="done")
+            # Yield "done" after stream is fully consumed and cost is calculated
+            yield LLMChunk(type="done")
 
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")

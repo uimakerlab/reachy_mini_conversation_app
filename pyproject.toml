@@ -76,8 +76,7 @@ cascade_all = [
   "reachy_mini_conversation_app[cascade_kokoro]",
   "reachy_mini_conversation_app[cascade_elevenlabs]",
   "reachy_mini_conversation_app[cascade_gemini]",
-  "reachy_mini_conversation_app[cascade_deepgram]",
-  "reachy_mini_conversation_app[cascade_openai_realtime]"
+  "reachy_mini_conversation_app[cascade_deepgram]"
 ]
 
 [dependency-groups]
