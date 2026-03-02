@@ -47,14 +47,13 @@ class OpenAITTS(TTSProvider):
         logger.info(f"Initialized OpenAI TTS with model: {model}, voice: {voice} (format: {response_format})")
 
     async def synthesize(self, text: str, voice: Optional[str] = None) -> AsyncIterator[bytes]:
-        """Synthesize text using OpenAI TTS API with streaming.
+        """Synthesize text using OpenAI TTS API with true streaming.
 
-        Args:
-            text: Text to synthesize
-            voice: Voice override (uses default if not provided)
+        Trims leading silence on the first chunk only, then yields subsequent
+        chunks immediately as they arrive from the API.
 
         Yields:
-            Audio bytes
+            Audio bytes (PCM 16-bit)
 
         """
         from reachy_mini_conversation_app.cascade.timing import tracker
@@ -71,12 +70,18 @@ class OpenAITTS(TTSProvider):
         try:
             import time
 
-            # OpenAI TTS streaming - collect all chunks first to check for silence
+            import numpy as np
+
+            SILENCE_THRESHOLD = 327  # ~0.01 * 32767, matches trim_leading_silence default
+
             tracker.mark("tts_api_request_sending")
             request_start = time.perf_counter()
 
-            all_chunks = []
+            is_leading = True
+            leading_buffer = bytearray()
             first_byte = True
+            chunk_count = 0
+
             async with self.client.audio.speech.with_streaming_response.create(
                 model=self.model,
                 voice=voice_to_use,
@@ -84,47 +89,51 @@ class OpenAITTS(TTSProvider):
                 response_format=self.response_format,
             ) as response:
                 async for chunk in response.iter_bytes(chunk_size=1024):
-                    if chunk:
-                        if first_byte:
-                            ttfb_ms = (time.perf_counter() - request_start) * 1000
-                            tracker.mark("tts_api_first_byte", {"ttfb_ms": round(ttfb_ms, 1)})
-                            first_byte = False
-                        all_chunks.append(chunk)
+                    if not chunk:
+                        continue
+
+                    if first_byte:
+                        ttfb_ms = (time.perf_counter() - request_start) * 1000
+                        tracker.mark("tts_api_first_byte", {"ttfb_ms": round(ttfb_ms, 1)})
+                        first_byte = False
+
+                    if is_leading:
+                        leading_buffer.extend(chunk)
+                        # Check if this chunk contains non-silent audio
+                        samples = np.frombuffer(chunk, dtype=np.int16)
+                        if np.any(np.abs(samples) > SILENCE_THRESHOLD):
+                            # Found audio — trim accumulated buffer and start yielding
+                            is_leading = False
+                            full_buffer = np.frombuffer(bytes(leading_buffer), dtype=np.int16)
+                            trimmed = trim_leading_silence(
+                                full_buffer, sample_rate=self.sample_rate, provider_name="OpenAI TTS"
+                            )
+                            tracker.mark("tts_first_chunk_ready")
+                            trimmed_bytes = trimmed.tobytes()
+                            for i in range(0, len(trimmed_bytes), 1024):
+                                sub = trimmed_bytes[i : i + 1024]
+                                if sub:
+                                    if chunk_count == 0:
+                                        logger.info("TTS: First chunk ready (can start playback now!)")
+                                    chunk_count += 1
+                                    yield sub
+                    else:
+                        # Past leading silence — stream directly
+                        chunk_count += 1
+                        yield chunk
+
+            # Edge case: entire audio was silent (yield it unchanged)
+            if is_leading and leading_buffer:
+                tracker.mark("tts_first_chunk_ready")
+                logger.info("TTS: First chunk ready (can start playback now!)")
+                for i in range(0, len(leading_buffer), 1024):
+                    sub = leading_buffer[i : i + 1024]
+                    if sub:
+                        chunk_count += 1
+                        yield sub
 
             tracker.mark("tts_api_complete")
 
-            # Combine all chunks to check for leading silence
-            import numpy as np
-
-            tracker.mark("tts_processing_start")
-            full_audio = b"".join(all_chunks)
-            audio_array = np.frombuffer(full_audio, dtype=np.int16)
-
-            logger.debug(
-                f"OpenAI TTS audio: {len(audio_array)} samples, min: {audio_array.min()}, max: {audio_array.max()}"
-            )
-
-            # Trim leading silence if enabled
-            audio_array = trim_leading_silence(audio_array, sample_rate=self.sample_rate, provider_name="OpenAI TTS")
-
-            # Re-chunk the (potentially trimmed) audio
-            trimmed_bytes = audio_array.tobytes()
-            chunk_size = 1024
-            chunk_count = 0
-
-            tracker.mark("tts_processing_end")
-            tracker.mark("tts_first_chunk_ready")
-
-            for i in range(0, len(trimmed_bytes), chunk_size):
-                chunk = trimmed_bytes[i : i + chunk_size]
-                if chunk:
-                    if chunk_count == 0:
-                        logger.info("TTS: First chunk ready (can start playback now!)")
-                    chunk_count += 1
-                    yield chunk
-
-            # Calculate and accumulate cost after synthesis completes
-            # Use += to accumulate across multiple calls (e.g., per-sentence in Gradio mode)
             if self.cost_per_1m_chars > 0:
                 call_cost = len(text) * self.cost_per_1m_chars / 1e6
                 self.last_cost += call_cost
