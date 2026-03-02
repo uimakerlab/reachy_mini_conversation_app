@@ -30,6 +30,12 @@ def parse_args() -> Tuple[argparse.Namespace, list]:  # type: ignore
         action="store_true",
         help="Use cascade pipeline (ASR→LLM→TTS) instead of a realtime autio-to-audio API",
     )
+    parser.add_argument(
+        "--test-file",
+        type=str,
+        default=None,
+        help="Path to text file with test utterances (one per line). Implies --cascade.",
+    )
     parser.add_argument("--debug", default=False, action="store_true", help="Enable debug logging")
     parser.add_argument(
         "--robot-name",

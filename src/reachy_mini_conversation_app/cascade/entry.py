@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 import os
-import signal
 import time
+import signal
 import logging
 from typing import TYPE_CHECKING
 
@@ -37,7 +37,14 @@ def run_cascade_mode(
 
     logger.info("Using cascade pipeline mode (ASR→LLM→TTS)")
 
-    if args.gradio:
+    if getattr(args, "test_file", None):
+        # Test file mode — feed text utterances through the pipeline
+        from reachy_mini_conversation_app.cascade.test_stream import CascadeTestStream
+
+        logger.info(f"Using test file mode: {args.test_file}")
+        handler = CascadeHandler(deps)
+        stream_manager = CascadeTestStream(handler, robot, args.test_file)
+    elif args.gradio:
         # Gradio UI mode
         from reachy_mini_conversation_app.cascade.ui import CascadeGradioUI
 

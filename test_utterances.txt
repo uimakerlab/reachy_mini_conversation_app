@@ -1,0 +1,5 @@
+# Greetings
+Hello, what is your name?
+Ok so your name is Richie, is this correct?
+I've heard that you love music.
+Also it seems you love pizza and sushis, is that right?
