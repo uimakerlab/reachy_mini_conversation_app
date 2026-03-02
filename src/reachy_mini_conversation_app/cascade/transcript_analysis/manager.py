@@ -208,6 +208,9 @@ class TranscriptAnalysisManager:
         logger.debug(f"Resetting manager ({len(self.triggered_reactions)} reactions triggered)")
         self.triggered_reactions.clear()
         self._triggered_entity_keys.clear()
+        for task in self._pending_tasks:
+            if not task.done():
+                task.cancel()
         self._pending_tasks.clear()
         self._last_analysis_time = 0.0
 

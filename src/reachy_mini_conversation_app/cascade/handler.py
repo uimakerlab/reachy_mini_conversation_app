@@ -209,7 +209,9 @@ class CascadeHandler:
 
     def _on_transcript_final(self, text: str) -> None:
         """Notify final transcript (fire-and-forget, parallel with LLM)."""
-        asyncio.create_task(self.transcript_manager.analyze_final(text))
+        task = asyncio.create_task(self.transcript_manager.analyze_final(text))
+        if hasattr(self.transcript_manager, '_pending_tasks'):
+            self.transcript_manager._pending_tasks.append(task)
 
     def _on_turn_complete(self) -> None:
         """Reset transcript analysis between conversation turns."""
