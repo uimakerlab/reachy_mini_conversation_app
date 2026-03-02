@@ -8,7 +8,7 @@ import inspect
 import logging
 import importlib
 import importlib.util
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -18,6 +18,10 @@ from reachy_mini_conversation_app.config import DEFAULT_PROFILES_DIRECTORY as DE
 # Import config to ensure .env is loaded before reading REACHY_MINI_CUSTOM_PROFILE
 from reachy_mini_conversation_app.config import config  # noqa: F401
 from reachy_mini_conversation_app.tools.tool_constants import SystemTool
+
+
+if TYPE_CHECKING:
+    from reachy_mini_conversation_app.tools.background_tool_manager import BackgroundToolManager
 
 
 logger = logging.getLogger(__name__)
@@ -319,7 +323,7 @@ async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependenc
     return await _dispatch_tool_call(tool_name, _safe_load_obj(args_json), deps)
 
 
-async def dispatch_tool_call_with_manager(tool_name: str, args_json: str, deps: ToolDependencies, tool_manager: Any) -> Dict[str, Any]:
+async def dispatch_tool_call_with_manager(tool_name: str, args_json: str, deps: ToolDependencies, tool_manager: "BackgroundToolManager") -> Dict[str, Any]:
     """Dispatch a tool call, injecting a BackgroundToolManager into the args."""
     args = _safe_load_obj(args_json)
     args["tool_manager"] = tool_manager
