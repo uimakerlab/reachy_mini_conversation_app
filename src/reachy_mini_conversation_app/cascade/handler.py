@@ -144,9 +144,12 @@ class CascadeHandler:
         info = getattr(config, f"get_{provider_type}_provider_info")(name)
         kwargs = getattr(config, f"get_{provider_type}_settings")(name)
 
-        # Add API keys (validated at config load time)
-        for required in info["requires"]:
-            kwargs["api_key"] = api_key_map[required]
+        # Add API key (validated at config load time)
+        requires = info["requires"]
+        if len(requires) == 1:
+            kwargs["api_key"] = api_key_map[requires[0]]
+        elif requires:
+            raise ValueError(f"Multi-key providers not supported: {requires}")
 
         # Merge extra kwargs if provided
         if extra_kwargs:
