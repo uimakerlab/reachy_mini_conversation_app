@@ -3,6 +3,7 @@ import re
 import abc
 import sys
 import json
+import asyncio
 import inspect
 import logging
 import importlib
@@ -175,21 +176,21 @@ def _load_profile_tools() -> None:
         sys.exit(1)
 
     # Parse tool names (skip comments and blank lines)
-    tool_names = set[str]()
+    tool_names = []
     for line in lines:
         line = line.strip()
         # Skip blank lines and comments
         if not line or line.startswith("#"):
             continue
-        tool_names.add(line)
+        tool_names.append(line)
 
     # Add system tools
-    tool_names.update({tool.value for tool in SystemTool})
+    tool_names.extend({tool.value for tool in SystemTool})
 
     logger.info(f"Found {len(tool_names)} tools to load: {tool_names}")
 
     if config.AUTOLOAD_EXTERNAL_TOOLS and config.TOOLS_DIRECTORY and config.TOOLS_DIRECTORY.is_dir():
-        discovered_external_tools: set[str] = set()
+        discovered_external_tools: list[str] = []
         for tool_file in sorted(config.TOOLS_DIRECTORY.glob("*.py")):
             if tool_file.name.startswith("_"):
                 continue
@@ -197,10 +198,10 @@ def _load_profile_tools() -> None:
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", candidate_name):
                 logger.warning("Skipping external tool with invalid name: %s", tool_file.name)
                 continue
-            discovered_external_tools.add(candidate_name)
+            discovered_external_tools.append(candidate_name)
 
         if discovered_external_tools:
-            tool_names.update(discovered_external_tools)
+            tool_names.extend(discovered_external_tools)
             logger.info(
                 "AUTOLOAD_EXTERNAL_TOOLS enabled: added %d external tool(s): %s",
                 len(discovered_external_tools),
@@ -297,24 +298,28 @@ def _safe_load_obj(args_json: str) -> Dict[str, Any]:
         return {}
 
 
-async def _dispatch(tool_name: str, args: Dict[str, Any], deps: ToolDependencies) -> Dict[str, Any]:
+async def _dispatch_tool_call(tool_name: str, args: Dict[str, Any], deps: ToolDependencies) -> Dict[str, Any]:
     tool = ALL_TOOLS.get(tool_name)
     if not tool:
         return {"error": f"unknown tool: {tool_name}"}
     try:
         return await tool(deps, **args)
+    except asyncio.CancelledError:
+        logger.info("Tool cancelled: %s", tool_name)
+        return {"error": "Tool cancelled"}
     except Exception as e:
-        logger.exception("Tool error in %s: %s", tool_name, e)
-        raise e
+        msg = f"{type(e).__name__}: {e}"
+        logger.exception("Tool error in %s: %s", tool_name, msg)
+        return {"error": msg}
 
 
 async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies) -> Dict[str, Any]:
     """Dispatch a tool call by name with JSON args and dependencies."""
-    return await _dispatch(tool_name, _safe_load_obj(args_json), deps)
+    return await _dispatch_tool_call(tool_name, _safe_load_obj(args_json), deps)
 
 
 async def dispatch_tool_call_with_manager(tool_name: str, args_json: str, deps: ToolDependencies, tool_manager: Any) -> Dict[str, Any]:
     """Dispatch a tool call, injecting a BackgroundToolManager into the args."""
     args = _safe_load_obj(args_json)
     args["tool_manager"] = tool_manager
-    return await _dispatch(tool_name, args, deps)
+    return await _dispatch_tool_call(tool_name, args, deps)

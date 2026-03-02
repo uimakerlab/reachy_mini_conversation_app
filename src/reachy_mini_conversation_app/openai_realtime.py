@@ -82,7 +82,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         self.output_sample_rate = OPEN_AI_OUTPUT_SAMPLE_RATE
         self.input_sample_rate = OPEN_AI_INPUT_SAMPLE_RATE
 
-        self.connection: Any = None
+        self.connection: AsyncRealtimeConnection | None = None
         self.output_queue: "asyncio.Queue[Tuple[int, NDArray[np.int16]] | AdditionalOutputs]" = asyncio.Queue()
 
         self.last_activity_time = asyncio.get_event_loop().time()
@@ -299,11 +299,13 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 return
 
             sent = False
-            while not sent and self.connection:
+            max_retries = 5
+            attempts = 0
+            while not sent and self.connection and attempts < max_retries:
                 try:
                     await asyncio.wait_for(self._response_done_event.wait(), timeout=_RESPONSE_DONE_TIMEOUT)
                 except asyncio.TimeoutError:
-                    logger.warning("Timed out waiting for previous response to finish; forcing ahead")
+                    logger.debug("Timed out waiting for previous response to finish; forcing ahead")
                     self._response_done_event.set()
 
                 if not self.connection:
@@ -313,42 +315,43 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 try:
                     await self.connection.response.create(**kwargs)
                 except Exception as e:
-                    logger.warning("_response_sender_loop: send failed: %s", e)
+                    logger.debug("_response_sender_loop: send failed: %s", e)
+                    self._response_done_event.set()
                     break
 
                 try:
                     await asyncio.wait_for(self._response_done_event.wait(), timeout=_RESPONSE_DONE_TIMEOUT)
                 except asyncio.TimeoutError:
-                    logger.warning("Timed out waiting for response.done; assuming response completed")
+                    logger.debug("Timed out waiting for response.done; assuming response completed")
                     self._response_done_event.set()
                     break
 
                 # Check if we were rejected
                 if self._last_response_rejected:
-                    logger.debug("response.create was rejected; retrying after active response finished")
+                    attempts += 1
+                    if attempts >= max_retries:
+                        logger.debug("response.create rejected %d times; giving up", attempts)
+                        break
+                    logger.debug("response.create was rejected; retrying (%d/%d)", attempts, max_retries)
                     continue
 
                 sent = True
 
     async def _handle_tool_result(self, bg_tool: ToolNotification) -> None:
         """Process the result of a tool call."""
-        try:
-            if bg_tool.error is not None:
-                logger.error("Tool '%s' (id=%s) failed with error: %s", bg_tool.tool_name, bg_tool.id, bg_tool.error)
-                tool_result = {"error": bg_tool.error}
-            elif bg_tool.result is not None:
-                tool_result = bg_tool.result
-                logger.info(
-                    "Tool '%s' (id=%s) executed successfully.",
-                    bg_tool.tool_name, bg_tool.id,
-                )
-                logger.debug("Tool '%s' full result: %s", bg_tool.tool_name, tool_result)
-            else:
-                logger.warning("Tool '%s' (id=%s) returned no result and no error", bg_tool.tool_name, bg_tool.id)
-                tool_result = {"error": "No result returned from tool execution"}
-        except Exception as e:
-            logger.error("Tool '%s' (id=%s) result handling failed: %s: %s", bg_tool.tool_name, bg_tool.id, type(e).__name__, e)
-            tool_result = {"error": str(e)}
+        if bg_tool.error is not None:
+            logger.error("Tool '%s' (id=%s) failed with error: %s", bg_tool.tool_name, bg_tool.id, bg_tool.error)
+            tool_result = {"error": bg_tool.error}
+        elif bg_tool.result is not None:
+            tool_result = bg_tool.result
+            logger.info(
+                "Tool '%s' (id=%s) executed successfully.",
+                bg_tool.tool_name, bg_tool.id,
+            )
+            logger.debug("Tool '%s' full result: %s", bg_tool.tool_name, tool_result)
+        else:
+            logger.warning("Tool '%s' (id=%s) returned no result and no error", bg_tool.tool_name, bg_tool.id)
+            tool_result = {"error": "No result returned from tool execution"}
 
         # Connection may have closed while tool was running
         if not self.connection:
@@ -374,8 +377,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         # Gradio UI metadata.status accept only "pending" and "done". Do not accept bg.tool.status values.
                         "metadata": {
                             "title": f"🛠️ Used tool {bg_tool.tool_name}",
-                            "status": "done"
-,
+                            "status": "done",
                         },
                     },
                 ),
@@ -435,6 +437,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         except ConnectionClosedError:
             logger.warning("Connection closed while sending tool result")
             self.connection = None
+            self._response_done_event.set()
 
     async def _run_realtime_session(self) -> None:
         """Establish and manage a single realtime session."""
@@ -483,7 +486,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             logger.info("Realtime session updated successfully")
 
             # Manage event received from the openai server
-            self.connection: AsyncRealtimeConnection = conn # type: ignore[no-redef]
+            self.connection = conn
             try:
                 self._connected_event.set()
             except Exception:
