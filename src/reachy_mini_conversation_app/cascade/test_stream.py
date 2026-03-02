@@ -24,10 +24,17 @@ from reachy_mini_conversation_app.cascade.provider_factory import init_tts_provi
 if TYPE_CHECKING:
     from reachy_mini import ReachyMini
     from reachy_mini_conversation_app.cascade.handler import CascadeHandler
+    from reachy_mini_conversation_app.cascade.turn_result import TurnResult
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_DELAY_BETWEEN_TURNS = 2.0
+INPUT_VOICE = "af_heart"
+
+# Chunk size for simulated real-time streaming (512 samples @ 16kHz = 32ms,
+# matches the VAD chunk size used in console mode).
+STREAM_CHUNK_SAMPLES = 512
+STREAM_SAMPLE_RATE = 16000
 
 
 class CascadeTestStream:
@@ -102,23 +109,21 @@ class CascadeTestStream:
         """Process each utterance through the full pipeline."""
         utterances = self._load_utterances()
         logger.info(f"Loaded {len(utterances)} utterances from {self._test_file}")
+        streaming = self.handler.is_streaming_asr
 
         for i, text in enumerate(utterances):
             logger.info(f"\n{'='*60}")
             logger.info(f"Utterance {i+1}/{len(utterances)}: \"{text}\"")
             logger.info(f"{'='*60}")
 
-            tracker.reset("test_utterance_start")
-            tracker.mark("test_utterance_start")
+            # Generate PCM audio from text (before latency tracking starts)
+            pcm_data = await self._synthesize_pcm(text)
+            logger.info(f"Generated input audio ({len(pcm_data)} bytes PCM)")
 
-            # Generate WAV audio from text
-            wav_bytes = await self._text_to_wav(text)
-            tracker.mark("input_tts_complete")
-            logger.info(f"Generated input audio ({len(wav_bytes)} bytes)")
-
-            # Feed through the cascade pipeline (ASR → LLM → TTS)
-            tracker.mark("recording_captured")
-            turn = await self.handler.process_audio_manual(wav_bytes)
+            if streaming:
+                turn = await self._process_streaming(pcm_data)
+            else:
+                turn = await self._process_manual(pcm_data)
 
             # Log results
             if turn.transcript:
@@ -136,28 +141,89 @@ class CascadeTestStream:
 
         logger.info(f"\nAll {len(utterances)} utterances processed.")
 
-    async def _text_to_wav(self, text: str) -> bytes:
-        """Synthesize text to WAV bytes and play on speakers as "user voice"."""
+    async def _synthesize_pcm(self, text: str) -> bytes:
+        """Synthesize text to raw PCM bytes."""
         pcm_chunks: list[bytes] = []
-        async for chunk in self._input_tts.synthesize(text):
+        async for chunk in self._input_tts.synthesize(text, voice=INPUT_VOICE):
             pcm_chunks.append(chunk)
+        return b"".join(pcm_chunks)
 
-        pcm_data = b"".join(pcm_chunks)
+    def _pcm_to_wav(self, pcm_data: bytes, sample_rate: int) -> bytes:
+        """Wrap raw PCM int16 bytes in a WAV container."""
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm_data)
+        return buf.getvalue()
 
-        # Play the user utterance on speakers so it sounds like a real conversation
+    async def _play_and_wait(self, pcm_data: bytes) -> None:
+        """Queue PCM for speaker playback and wait for it to finish."""
         with self._buffer_lock:
             self._audio_buffer.extend(pcm_data)
         duration = len(pcm_data) / (2 * self._input_tts.sample_rate)
         await asyncio.sleep(duration)
 
+    async def _process_manual(self, pcm_data: bytes) -> TurnResult:
+        """Non-streaming path: play user audio, then send full WAV to pipeline."""
+        await self._play_and_wait(pcm_data)
+
+        # Reset tracker after playback — simulates "user stopped speaking"
+        duration = len(pcm_data) / (2 * self._input_tts.sample_rate)
+        tracker.reset("vad_speech_end")
+        tracker.mark("vad_speech_end")
+        tracker.mark("recording_captured", {"duration_s": round(duration, 2)})
+        wav_bytes = self._pcm_to_wav(pcm_data, self._input_tts.sample_rate)
+        return await self.handler.process_audio_manual(wav_bytes)
+
+    async def _process_streaming(self, pcm_data: bytes) -> TurnResult:
+        """Streaming path: play user audio while feeding chunks to ASR in real time."""
+        from scipy.signal import resample as scipy_resample
+
+        # Resample from TTS rate to 16 kHz for streaming ASR
+        tts_rate = self._input_tts.sample_rate
         audio = np.frombuffer(pcm_data, dtype=np.int16)
-        buffer = io.BytesIO()
-        with wave.open(buffer, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(self._input_tts.sample_rate)
-            wf.writeframes(audio.tobytes())
-        return buffer.getvalue()
+        if tts_rate != STREAM_SAMPLE_RATE:
+            n_out = int(len(audio) * STREAM_SAMPLE_RATE / tts_rate)
+            audio_16k = scipy_resample(audio, n_out).astype(np.int16)
+        else:
+            audio_16k = audio
+
+        # Start speaker playback (non-blocking — sounddevice callback drains it)
+        with self._buffer_lock:
+            self._audio_buffer.extend(pcm_data)
+
+        # Start streaming ASR session
+        await self.handler.process_audio_streaming_start()
+
+        # Feed chunks at real-time pace
+        chunk_duration = STREAM_CHUNK_SAMPLES / STREAM_SAMPLE_RATE
+        offset = 0
+        while offset < len(audio_16k):
+            chunk = audio_16k[offset : offset + STREAM_CHUNK_SAMPLES]
+            wav_chunk = self._pcm_to_wav(chunk.tobytes(), STREAM_SAMPLE_RATE)
+            await self.handler.process_audio_streaming_chunk(wav_chunk)
+            offset += STREAM_CHUNK_SAMPLES
+            await asyncio.sleep(chunk_duration)
+
+        # Wait for speaker playback to finish (may already be done)
+        total_duration = len(pcm_data) / (2 * tts_rate)
+        elapsed_streaming = len(audio_16k) / STREAM_SAMPLE_RATE
+        remaining = total_duration - elapsed_streaming
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+
+        # Reset tracker now — simulates "speech ended" (same as VAD flow)
+        tracker.reset("vad_speech_end")
+        tracker.mark("vad_speech_end")
+        tracker.mark("recording_captured", {"duration_s": round(total_duration, 2)})
+
+        # Finalize streaming ASR and run LLM pipeline
+        turn = await self.handler.process_audio_streaming_end()
+        if turn.transcript:
+            logger.info(f"User: {turn.transcript}")
+        return turn
 
     def _load_utterances(self) -> list[str]:
         """Load utterances from text file, stripping comments and blank lines."""
