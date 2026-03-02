@@ -1,15 +1,12 @@
 """Main cascade handler orchestrating ASR → LLM → TTS pipeline."""
 
 from __future__ import annotations
-import json
-import base64
 import asyncio
 import logging
-import importlib
 import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
-from reachy_mini_conversation_app.prompts import get_session_instructions
+from reachy_mini_conversation_app.cascade import pipeline
 from reachy_mini_conversation_app.cascade.asr import ASRProvider, StreamingASRProvider
 from reachy_mini_conversation_app.cascade.llm import LLMProvider
 from reachy_mini_conversation_app.cascade.tts import TTSProvider
@@ -17,9 +14,15 @@ from reachy_mini_conversation_app.cascade.config import get_config
 from reachy_mini_conversation_app.tools.core_tools import (
     ToolDependencies,
     get_tool_specs,
-    dispatch_tool_call,
 )
 from reachy_mini_conversation_app.cascade.turn_result import TurnItem, TurnResult
+from reachy_mini_conversation_app.cascade.provider_factory import (
+    init_asr_provider,
+    init_llm_provider,
+    init_tts_provider,
+    init_transcript_analysis,
+    convert_tool_specs_to_chat_format,
+)
 from reachy_mini_conversation_app.cascade.transcript_analysis import (
     NoOpTranscriptManager,
     TranscriptAnalysisManager,
@@ -33,18 +36,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-CASCADE_EXTRA_INSTRUCTIONS = """\n\n**IMPORTANT:**
-## SPEAKING TO THE USER
-- To talk to the user, you *MUST* use the 'speak' tool, there is no other way to generate speech.
-- When you want to say something, always use the 'speak' tool, even for short acknowledgments like "OK" or "Sure".
-
-## ISSUING SEVERAL TOOLS IN ONE RESPONSE
-- You can always issue several tools in one response if needed.
-- You can combine the 'speak' tool with other tools in the same response.
-- Do not hesitate to use multiple tools if the situation requires it, especially for complex tasks.
-"""
-
-
 class CascadeHandler:
     """Main handler for cascade pipeline mode."""
 
@@ -56,9 +47,9 @@ class CascadeHandler:
         self.speech_output: SpeechOutput | None = None
 
         # Initialize providers based on config
-        self.asr = self._init_asr_provider()
-        self.llm = self._init_llm_provider()
-        self.tts = self._init_tts_provider()
+        self.asr = init_asr_provider()
+        self.llm = init_llm_provider()
+        self.tts = init_tts_provider()
 
         # Conversation state
         self.conversation_history: List[Dict[str, Any]] = []
@@ -82,14 +73,14 @@ class CascadeHandler:
 
         # Get tool specs and convert to Chat Completions format
         # Note : get_tool_specs() returns Realtime API format, so we need Chat Completions format
-        self.tool_specs = self._convert_tool_specs_to_chat_format(get_tool_specs(exclusion_list=exclusion_list))
+        self.tool_specs = convert_tool_specs_to_chat_format(get_tool_specs(exclusion_list=exclusion_list))
 
         # Side-channel storage for see_image frames (JPEG bytes, indexed)
         self._captured_frames: list[bytes] = []
 
         # Transcript analysis (NoOp if no reactions configured)
         self.transcript_manager: TranscriptAnalysisManager | NoOpTranscriptManager = (
-            self._init_transcript_analysis()
+            init_transcript_analysis(deps)
         )
 
         # Cost tracking
@@ -101,94 +92,6 @@ class CascadeHandler:
         self._turn_results: list[TurnResult] = []
 
         logger.info(f"Cascade handler initialized (streaming_asr={self.is_streaming_asr})")
-
-    def _convert_tool_specs_to_chat_format(self, realtime_specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Convert tool specs from Realtime API format to Chat Completions API format."""
-        chat_specs = []
-        for spec in realtime_specs:
-            if spec["type"] == "function":
-                chat_spec = {
-                    "type": "function",
-                    "function": {
-                        "name": spec["name"],
-                        "description": spec["description"],
-                        "parameters": spec["parameters"],
-                    },
-                }
-                chat_specs.append(chat_spec)
-        return chat_specs
-
-    def _init_provider(self, provider_type: str, extra_kwargs: Dict[str, Any] | None = None) -> Any:
-        """Initialize a provider (ASR/LLM/TTS) from cascade.yaml config.
-
-        Args:
-            provider_type: One of "asr", "llm", "tts"
-            extra_kwargs: Additional kwargs to pass to provider constructor
-
-        Returns:
-            Initialized provider instance
-
-        """
-        config = get_config()
-
-        # All API keys that any provider might need
-        api_key_map = {
-            "OPENAI_API_KEY": config.OPENAI_API_KEY,
-            "DEEPGRAM_API_KEY": config.DEEPGRAM_API_KEY,
-            "GEMINI_API_KEY": config.GEMINI_API_KEY,
-            "ELEVENLABS_API_KEY": config.ELEVENLABS_API_KEY,
-        }
-
-        # Get provider name, info, and settings using dynamic attribute access
-        name = getattr(config, f"{provider_type}_provider")
-        info = getattr(config, f"get_{provider_type}_provider_info")(name)
-        kwargs = getattr(config, f"get_{provider_type}_settings")(name)
-
-        # Add API key (validated at config load time)
-        requires = info["requires"]
-        if len(requires) == 1:
-            kwargs["api_key"] = api_key_map[requires[0]]
-        elif requires:
-            raise ValueError(f"Multi-key providers not supported: {requires}")
-
-        # Merge extra kwargs if provided
-        if extra_kwargs:
-            kwargs.update(extra_kwargs)
-
-        # Dynamic import and instantiate
-        module = importlib.import_module(f"reachy_mini_conversation_app.cascade.{provider_type}.{info['module']}")
-        ProviderClass = getattr(module, info["class"])
-
-        # Log with provider-specific details
-        extra_info = f", streaming={info['streaming']}" if "streaming" in info else ""
-        logger.info(f"Initializing {provider_type.upper()}: {name} (location={info['location']}{extra_info})")
-
-        return ProviderClass(**kwargs)
-
-    def _init_asr_provider(self) -> ASRProvider:
-        """Initialize ASR provider from cascade.yaml config."""
-        return self._init_provider("asr")
-
-    def _init_llm_provider(self) -> LLMProvider:
-        """Initialize LLM provider from cascade.yaml config."""
-        # Add cascade-specific instructions (computed at runtime, not from config)
-        cascade_instructions = get_session_instructions() + CASCADE_EXTRA_INSTRUCTIONS
-        return self._init_provider("llm", {"system_instructions": cascade_instructions})
-
-    def _init_tts_provider(self) -> TTSProvider:
-        """Initialize TTS provider from cascade.yaml config."""
-        return self._init_provider("tts")
-
-    def _init_transcript_analysis(self) -> TranscriptAnalysisManager | NoOpTranscriptManager:
-        """Initialize transcript analysis from profile reactions."""
-        from reachy_mini_conversation_app.cascade.transcript_analysis import get_profile_reactions
-
-        reactions = get_profile_reactions()
-        if not reactions:
-            logger.info("No profile reactions configured, transcript analysis disabled")
-            return NoOpTranscriptManager()
-
-        return TranscriptAnalysisManager(reactions=reactions, deps=self.deps)
 
     # ─────────────────────────────────────────────────────────────────────────────
     # Transcript Analysis Helpers (fire-and-forget, never block pipeline)
@@ -253,7 +156,11 @@ class CascadeHandler:
         # LLM: Text → Response + Tool Calls
         logger.info("Generating LLM response...")
         tracker.mark("llm_start")
-        await self._process_llm_response()
+        await pipeline.process_llm_response(
+            self.llm, self.conversation_history, self.tool_specs,
+            self.speech_output, self._current_turn_items, self._captured_frames,
+            self.deps, self._aggregate_cost, self.tts,
+        )
         tracker.mark("llm_complete")
 
         # Reset transcript analysis for next turn
@@ -398,185 +305,6 @@ class CascadeHandler:
                 if self.deps.movement_manager:
                     self.deps.movement_manager.set_listening(False)
                 raise
-
-    async def _process_llm_response(self) -> None:
-        """Process LLM response with streaming, tool calls, and TTS."""
-        try:
-            # Generate streaming response
-            text_chunks: List[str] = []
-            tool_calls: List[Dict[str, Any]] = []
-
-            async for chunk in self.llm.generate(
-                messages=self.conversation_history,
-                tools=self.tool_specs,
-                temperature=get_config().llm_temperature,
-            ):
-                if chunk.type == "text_delta" and chunk.content:
-                    text_chunks.append(chunk.content)
-                    logger.debug(f"LLM text delta: {chunk.content}")
-
-                elif chunk.type == "tool_call" and chunk.tool_call:
-                    tool_calls.append(chunk.tool_call)
-                    logger.info(f"LLM tool call: {chunk.tool_call}")
-
-                elif chunk.type == "done":
-                    logger.debug("LLM generation complete")
-                    break
-
-            # Aggregate LLM cost after generator completes
-            self._aggregate_cost(self.llm, "LLM")
-
-            # Create assistant message with text, tool calls...
-            assistant_message: Dict[str, Any] = {"role": "assistant"}
-            full_text = ""
-            if text_chunks:
-                full_text = "".join(text_chunks)
-                assistant_message["content"] = full_text
-            if tool_calls:
-                assistant_message["tool_calls"] = tool_calls
-
-            logger.debug(
-                f"_process_llm_response: text_chunks={len(text_chunks)}, tool_calls={len(tool_calls)}, full_text_len={len(full_text)}"
-            )
-
-            if text_chunks or tool_calls:
-                self.conversation_history.append(assistant_message)
-                logger.debug(f"Added assistant message to history, history_len={len(self.conversation_history)}")
-
-            # Handle text-only responses: auto-inject speak tool call
-            # This handles cases where LLM returns text without using the speak tool
-            # In principle it should not happen thanks to the extra instructions.
-            # If it happens, we create a synthetic tool call for speaking
-            if full_text and not tool_calls:
-                logger.info("❓LLM returned text without speak tool - auto-injecting speak call")
-
-                synthetic_tool_call = {
-                    "id": "auto_speak",
-                    "type": "function",
-                    "function": {"name": "speak", "arguments": json.dumps({"message": full_text})},
-                }
-                await self._execute_tool_calls([synthetic_tool_call])
-            elif tool_calls and not any(tc.get("function", {}).get("name") == "speak" for tc in tool_calls):
-                # Tool calls but no speak — record assistant text if present
-                if full_text:
-                    self._current_turn_items.append(TurnItem(kind="assistant", text=full_text))
-            if tool_calls:
-                # Process normal tool calls
-                await self._execute_tool_calls(tool_calls)
-
-        except Exception as e:
-            logger.exception(f"Error processing LLM response: {e}")
-
-    async def _execute_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> None:
-        """Execute tool calls and handle camera/see_image and speak tool specially."""
-        camera_image_bytes: bytes | None = None
-
-        # First pass: execute all tools and add ALL tool results to conversation
-        # This must be done before adding any other messages (OpenAI requires all tool
-        # responses immediately after the assistant message with tool_calls)
-        for tool_call in tool_calls:
-            try:
-                call_id, tool_name, arguments = self.llm.parse_tool_call(tool_call)
-
-                logger.info(f"Executing tool: {tool_name}({arguments})")
-
-                # Execute tool
-                result = await dispatch_tool_call(
-                    tool_name,
-                    json.dumps(arguments),
-                    self.deps,
-                )
-
-                # Do not log full result if the tool returned base64 (huge)
-                if tool_name in ("camera", "see_image") and "b64_im" in result:
-                    logger.info("Tool result: [image in base64, not shown]")
-                else:
-                    logger.info(f"Tool result: {result}")
-
-                # Add tool result to conversation
-                self.conversation_history.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "name": tool_name,
-                        "content": json.dumps(result),
-                    }
-                )
-                logger.debug(
-                    f"Added tool result to history: name={tool_name}, history_len={len(self.conversation_history)}"
-                )
-
-                # Special handling for see_image tool - store frame, replace heavy b64
-                if tool_name == "see_image":
-                    if "b64_im" in result:
-                        b64_im = result["b64_im"]
-                        camera_image_bytes = base64.b64decode(b64_im)
-                        frame_index = len(self._captured_frames)
-                        self._captured_frames.append(camera_image_bytes)
-                        # Replace the heavy b64 blob in conversation history with a lightweight marker
-                        self.conversation_history[-1]["content"] = json.dumps(
-                            {"status": "image_captured", "frame_index": frame_index}
-                        )
-                        self._current_turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
-                        logger.info("see_image: stored frame %d, will add image to conversation", frame_index)
-                    else:
-                        logger.warning(f"see_image returned error: {result}")
-
-                # Special handling for camera tool (backward compat) - store image for later
-                elif tool_name == "camera":
-                    if "b64_im" in result:
-                        b64_im = result["b64_im"]
-                        logger.info("Camera tool executed - will add image to conversation for LLM analysis")
-                        camera_image_bytes = base64.b64decode(b64_im)
-                        self._current_turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
-                    else:
-                        # Camera failed - error already in tool result, LLM will see it
-                        logger.warning(f"Camera tool returned error: {result}")
-
-                # Special handling for speak tool
-                elif tool_name == "speak" and "message" in result:
-                    message = result["message"]
-                    logger.info(f"Speaking: {message}")
-                    self._current_turn_items.append(TurnItem(kind="speak", text=message))
-
-                    if self.speech_output:
-                        await self.speech_output.speak(message)
-                    self._aggregate_cost(self.tts, "TTS")
-
-                # Other tools
-                elif tool_name not in ("speak", "see_image", "camera"):
-                    self._current_turn_items.append(
-                        TurnItem(kind="tool", tool_name=tool_name, tool_content=json.dumps(result))
-                    )
-
-            except Exception as e:
-                logger.exception(f"Error executing tool {tool_name}: {e}")
-
-                # Add error to conversation
-                self.conversation_history.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "name": tool_name,
-                        "content": json.dumps({"error": str(e)}),
-                    }
-                )
-
-        # After all tool results are added, add camera image as user message and call LLM
-        if camera_image_bytes is not None:
-            self.conversation_history.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "image": camera_image_bytes,  # Will be converted to provider format in LLM
-                        }
-                    ],
-                }
-            )
-            logger.info("Camera image added to conversation - calling LLM to analyze it")
-            await self._process_llm_response()
 
     def _run_event_loop(self, ready: threading.Event) -> None:
         """Run the asyncio event loop in a background thread."""

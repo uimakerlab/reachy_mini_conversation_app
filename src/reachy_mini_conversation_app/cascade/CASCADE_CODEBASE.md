@@ -27,7 +27,9 @@ Cascade Mode implements a traditional **ASR → LLM → TTS** conversation pipel
 cascade/
 ├── __init__.py                        # Package exports
 ├── entry.py                           # Entry point from main.py
-├── handler.py                         # Core pipeline orchestrator
+├── handler.py                         # Core orchestrator (lifecycle, ASR routing, state)
+├── provider_factory.py                # Provider initialization (ASR/LLM/TTS factory functions)
+├── pipeline.py                        # LLM response processing & tool execution
 ├── turn_result.py                     # TurnResult + TurnItem dataclasses
 ├── config.py                          # Configuration loader (cascade.yaml)
 ├── timing.py                          # Latency tracking & profiling
@@ -82,14 +84,14 @@ cascade/
 
 ### CascadeHandler (`handler.py`)
 
-The central orchestrator that manages the conversation pipeline.
+The central orchestrator that manages conversation state, ASR routing, and lifecycle.
+Provider initialization is in `provider_factory.py`; LLM/tool pipeline logic is in `pipeline.py`.
 
 **Responsibilities:**
-- Initialize ASR/LLM/TTS providers from config
 - Manage conversation history (OpenAI message format)
-- Orchestrate ASR → LLM → Tool execution pipeline
-- Execute tool calls (speak, camera, movements)
-- Handle multi-modal inputs (text + images)
+- Route audio to ASR (manual and streaming paths)
+- Transcript analysis callbacks (fire-and-forget)
+- Cost tracking
 - Run async event loop in background thread
 
 **Key Attributes:**
@@ -118,12 +120,35 @@ async process_audio_streaming_end() -> TurnResult
 
 def clear_state() -> None
     # Reset conversation history, captured frames, and turn results
+```
 
-async _process_llm_response() -> None
-    # Stream LLM, collect text/tool calls, execute tools
+### Provider Factory (`provider_factory.py`)
 
-async _execute_tool_calls(tool_calls) -> None
+Pure factory functions for constructing ASR/LLM/TTS providers and transcript analysis
+from `cascade.yaml` config. No runtime state — called once during `CascadeHandler.__init__`.
+
+**Key Functions:**
+```python
+init_asr_provider() -> ASRProvider
+init_llm_provider() -> LLMProvider
+init_tts_provider() -> TTSProvider
+init_transcript_analysis(deps) -> TranscriptAnalysisManager | NoOpTranscriptManager
+convert_tool_specs_to_chat_format(specs) -> List[Dict]
+```
+
+### Pipeline (`pipeline.py`)
+
+Module-level async functions for LLM response processing and tool execution.
+Mutates conversation history, turn items, and captured frames in-place via list arguments.
+
+**Key Functions:**
+```python
+async process_llm_response(llm, conversation_history, tool_specs, ...) -> None
+    # Stream LLM, collect text/tool calls, dispatch to execute_tool_calls
+
+async execute_tool_calls(tool_calls, llm, conversation_history, ...) -> None
     # Execute individual tools, handle camera/speak specially
+    # Recursively calls process_llm_response after camera image analysis
 ```
 
 ### TurnResult (`turn_result.py`)
@@ -150,10 +175,10 @@ class TurnResult:
 ```
 
 **How items are populated:**
-- `speak` — from `_execute_tool_calls()` when speak tool is called
-- `image` — from `_execute_tool_calls()` when see_image or camera tool returns JPEG
-- `tool` — from `_execute_tool_calls()` for other tools (movements, etc.)
-- `assistant` — from `_process_llm_response()` when LLM returns text + tool calls but no speak
+- `speak` — from `pipeline.execute_tool_calls()` when speak tool is called
+- `image` — from `pipeline.execute_tool_calls()` when see_image or camera tool returns JPEG
+- `tool` — from `pipeline.execute_tool_calls()` for other tools (movements, etc.)
+- `assistant` — from `pipeline.process_llm_response()` when LLM returns text + tool calls but no speak
 
 The handler stores completed turns in `_turn_results: list[TurnResult]`, used by the UI's continuous-mode poller.
 
@@ -486,10 +511,12 @@ main.py
       │
       ├─> handler.py (CascadeHandler)
       │   │
-      │   ├─> config.py
-      │   ├─> asr/ providers
-      │   ├─> llm/ providers
-      │   ├─> tts/ providers
+      │   ├─> provider_factory.py (init_asr/llm/tts_provider)
+      │   │   ├─> config.py
+      │   │   ├─> asr/ providers
+      │   │   ├─> llm/ providers
+      │   │   └─> tts/ providers
+      │   ├─> pipeline.py (process_llm_response, execute_tool_calls)
       │   └─> transcript_analysis/ (TranscriptAnalysisManager)
       │       ├─> loader.py (reads profiles/<name>/reactions.yaml)
       │       ├─> keyword_analyzer.py
