@@ -190,7 +190,7 @@ def _load_profile_tools() -> None:
     logger.info(f"Found {len(tool_names)} tools to load: {tool_names}")
 
     if config.AUTOLOAD_EXTERNAL_TOOLS and config.TOOLS_DIRECTORY and config.TOOLS_DIRECTORY.is_dir():
-        discovered_external_tools: list[str] = []
+        discovered_external_tools: List[str] = []
         for tool_file in sorted(config.TOOLS_DIRECTORY.glob("*.py")):
             if tool_file.name.startswith("_"):
                 continue
@@ -200,12 +200,13 @@ def _load_profile_tools() -> None:
                 continue
             discovered_external_tools.append(candidate_name)
 
-        if discovered_external_tools:
-            tool_names.extend(discovered_external_tools)
+        extra_tools = [name for name in discovered_external_tools if name not in tool_names]
+        if extra_tools:
+            tool_names.extend(extra_tools)
             logger.info(
                 "AUTOLOAD_EXTERNAL_TOOLS enabled: added %d external tool(s): %s",
-                len(discovered_external_tools),
-                discovered_external_tools,
+                len(extra_tools),
+                extra_tools,
             )
 
     for tool_name in tool_names:
