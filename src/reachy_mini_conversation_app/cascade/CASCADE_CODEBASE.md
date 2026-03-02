@@ -28,6 +28,7 @@ cascade/
 ├── __init__.py                        # Package exports
 ├── entry.py                           # Entry point from main.py
 ├── handler.py                         # Core pipeline orchestrator
+├── turn_result.py                     # TurnResult + TurnItem dataclasses
 ├── config.py                          # Configuration loader (cascade.yaml)
 ├── timing.py                          # Latency tracking & profiling
 ├── vad.py                             # Silero VAD for continuous mode
@@ -101,7 +102,7 @@ tool_specs: List[Dict]        # Tools in Chat Completions format
 
 **Key Methods:**
 ```python
-async process_audio_manual(audio_bytes) -> str
+async process_audio_manual(audio_bytes) -> TurnResult
     # Entry point for push-to-talk recording
 
 async process_audio_streaming_start() -> None
@@ -110,8 +111,11 @@ async process_audio_streaming_start() -> None
 async process_audio_streaming_chunk(chunk) -> Optional[str]
     # Send chunk to streaming ASR, get partial transcript
 
-async process_audio_streaming_end() -> str
+async process_audio_streaming_end() -> TurnResult
     # Finalize streaming ASR, run LLM pipeline
+
+def clear_state() -> None
+    # Reset conversation history, captured frames, and turn results
 
 async _process_llm_response() -> None
     # Stream LLM, collect text/tool calls, execute tools
@@ -119,6 +123,37 @@ async _process_llm_response() -> None
 async _execute_tool_calls(tool_calls) -> None
     # Execute individual tools, handle camera/speak specially
 ```
+
+### TurnResult (`turn_result.py`)
+
+Structured result returned by the handler after each conversation turn. Decouples handler output from UI rendering — the UI never parses `conversation_history` directly.
+
+```python
+@dataclass
+class TurnItem:
+    kind: str         # "speak" | "image" | "tool" | "assistant"
+    text: str         # For speak/assistant items
+    image_jpeg: bytes # For image items (raw JPEG bytes)
+    tool_name: str    # For tool items
+    tool_content: str # For tool items (JSON string)
+
+@dataclass
+class TurnResult:
+    transcript: str           # User's speech transcript
+    items: list[TurnItem]     # Ordered displayable items
+    cost: float               # ASR + LLM cost for this turn
+
+    speak_text: str           # (property) All speak items joined with ". "
+    has_speak: bool           # (property) Whether any speak item exists
+```
+
+**How items are populated:**
+- `speak` — from `_execute_tool_calls()` when speak tool is called
+- `image` — from `_execute_tool_calls()` when see_image or camera tool returns JPEG
+- `tool` — from `_execute_tool_calls()` for other tools (movements, etc.)
+- `assistant` — from `_process_llm_response()` when LLM returns text + tool calls but no speak
+
+The handler stores completed turns in `_turn_results: list[TurnResult]`, used by the UI's continuous-mode poller.
 
 ### UI Components (`ui/`)
 
@@ -294,14 +329,16 @@ User clicks STOP
       │           • speak: Extract message for TTS
       │           • camera: Add image, re-call LLM
       │
-      └─> Return transcript to UI
+      └─> Return TurnResult to UI
+          (transcript, items=[speak/image/tool/assistant], cost)
 
-UI extracts responses from history:
+UI iterates TurnResult.items:
   │
-  ├─ Find speak tool messages → combine text
-  ├─ Split into sentences
+  ├─ speak items → join text, split into sentences
+  ├─ image items → decode JPEG, save to temp file
+  ├─ tool items → display with metadata
   │
-  └─ PHASE 4: TTS
+  └─ PHASE 4: TTS (if has_speak)
       └─ For each sentence:
           ├─ tts.synthesize(sentence) → audio chunks
           ├─ Queue to audio_queue → playback thread

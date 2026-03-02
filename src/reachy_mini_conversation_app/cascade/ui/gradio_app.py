@@ -1,14 +1,16 @@
 """Gradio UI for cascade mode."""
 
 from __future__ import annotations
+import os
 import re
-import json
 import time
 import asyncio
 import logging
+import tempfile
 import threading
 from typing import TYPE_CHECKING, Any, Dict, List
 
+import cv2
 import numpy as np
 import gradio as gr
 
@@ -21,6 +23,7 @@ if TYPE_CHECKING:
     from reachy_mini_conversation_app.cascade.handler import CascadeHandler
 
 from reachy_mini_conversation_app.cascade.asr import StreamingASRProvider
+from reachy_mini_conversation_app.cascade.turn_result import TurnResult
 
 
 logger = logging.getLogger(__name__)
@@ -54,7 +57,7 @@ class CascadeGradioUI:
         # VAD recorder created lazily after handler.start() provides event loop
         self._vad_recorder: ContinuousVADRecorder | None = None
         self.continuous_mode = False
-        self._shown_camera_indices: set[int] = set()  # Track which camera messages have been shown
+        self._shown_turn_count: int = 0  # Track how many turns have been rendered in continuous mode
 
     def _is_streaming_asr(self) -> bool:
         """Check if the ASR provider supports streaming."""
@@ -173,98 +176,16 @@ class CascadeGradioUI:
                 }
                 status = state_messages.get(recorder.state, "Listening...")
 
-                # Update chat history from handler's conversation history
-                # This syncs any new messages added during continuous processing
-                # Use same logic as _process_audio_async: prefer speak tool over assistant content
-                has_speak_tool = any(
-                    msg.get("role") == "tool" and msg.get("name") == "speak"
-                    for msg in self.handler.conversation_history
-                )
+                # Rebuild chat from turn results
+                turns = self.handler._turn_results
+                if not turns:
+                    return chat_history, status
 
-                new_history = []
-                for msg_idx, msg in enumerate(self.handler.conversation_history):
-                    role = msg.get("role")
-                    content = msg.get("content", "")
-
-                    if role == "user" and content:
-                        # User messages (skip multimodal content like images)
-                        if isinstance(content, str):
-                            new_history.append({"role": "user", "content": content})
-
-                    elif role == "assistant":
-                        # Only show assistant content if no speak tool (to avoid duplicates)
-                        if not has_speak_tool and content:
-                            new_history.append({"role": "assistant", "content": content})
-
-                    elif role == "tool" and msg.get("name") == "speak":
-                        # Speak tool results contain the actual response text
-                        try:
-                            tool_content = json.loads(content) if isinstance(content, str) else content
-                            if "message" in tool_content:
-                                new_history.append({"role": "assistant", "content": tool_content["message"]})
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-
-                    elif role == "tool" and msg.get("name") not in ("speak", None):
-                        tool_name = msg.get("name")
-                        if tool_name == "see_image":
-                            # Display image from side-channel frame storage
-                            try:
-                                tool_content = json.loads(content) if isinstance(content, str) else content
-                                frame_index = tool_content.get("frame_index")
-                                if frame_index is not None and frame_index < len(self.handler._captured_frames):
-                                    import cv2
-                                    jpeg_bytes = self.handler._captured_frames[frame_index]
-                                    np_arr = np.frombuffer(jpeg_bytes, np.uint8)
-                                    np_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                                    if np_img is not None:
-                                        rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
-                                        new_history.append({
-                                            "role": "assistant",
-                                            "content": gr.Image(value=rgb_frame),
-                                        })
-                                        if msg_idx not in self._shown_camera_indices:
-                                            self._shown_camera_indices.add(msg_idx)
-                                            logger.info(f"poll_continuous_updates: Added see_image frame {frame_index} (idx={msg_idx})")
-                            except Exception as e:
-                                logger.warning(f"poll_continuous_updates: Failed to add see_image: {e}")
-                        elif tool_name == "camera":
-                            # Display camera image from the base64 data in conversation history (backward compat)
-                            try:
-                                tool_content = json.loads(content) if isinstance(content, str) else content
-                                if "b64_im" in tool_content:
-                                    import base64
-
-                                    import cv2
-
-                                    # Decode base64 to numpy array
-                                    img_bytes = base64.b64decode(tool_content["b64_im"])
-                                    np_arr = np.frombuffer(img_bytes, np.uint8)
-                                    np_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                                    if np_img is not None:
-                                        rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
-                                        new_history.append(
-                                            {
-                                                "role": "assistant",
-                                                "content": gr.Image(value=rgb_frame),
-                                            }
-                                        )
-                                        # Only log once per camera image
-                                        if msg_idx not in self._shown_camera_indices:
-                                            self._shown_camera_indices.add(msg_idx)
-                                            logger.info(f"poll_continuous_updates: Added camera image (idx={msg_idx})")
-                            except Exception as e:
-                                logger.warning(f"poll_continuous_updates: Failed to add camera image: {e}")
-                        else:
-                            # Display other tool executions with metadata
-                            tool_content = msg.get("content", "{}")
-                            new_history.append(
-                                {
-                                    "role": "assistant",
-                                    "content": tool_content,
-                                    "metadata": {"title": f"🛠️ Used tool {tool_name}", "status": "done"},
-                                }
-                            )
+                new_history: list[dict[str, Any]] = []
+                for turn in turns:
+                    if turn.transcript:
+                        new_history.append({"role": "user", "content": turn.transcript})
+                    new_history.extend(self._turn_items_to_chat(turn))
 
                 return new_history if new_history else chat_history, status
 
@@ -302,160 +223,27 @@ class CascadeGradioUI:
         }
 
         try:
-            # Store the current conversation length to track new messages
-            initial_history_length = len(self.handler.conversation_history)
-
             # Choose streaming or batch processing based on ASR provider
             if self._is_streaming_asr():
-                # Streaming path: Finalize stream and get transcript
-                # Note: Streaming session was already started in recorder
-                # and chunks were sent during recording
                 logger.info("Finalizing streaming ASR session...")
-                transcript = await self.handler.process_audio_streaming_end()
+                turn = await self.handler.process_audio_streaming_end()
             else:
-                # Batch path: Use handler's process_audio_manual which handles ASR->LLM->TTS pipeline
-                # Note: This will execute speak tools but won't play audio (that's done separately below)
-                transcript = await self.handler.process_audio_manual(audio_bytes)
+                turn = await self.handler.process_audio_manual(audio_bytes)
 
-            result["transcript"] = transcript
+            result["transcript"] = turn.transcript
 
-            if not transcript.strip():
+            if not turn.transcript.strip():
                 result["error"] = "Empty transcript"
                 return result
 
-            new_messages = self.handler.conversation_history[initial_history_length:]
-            logger.debug(f"initial_history_length={initial_history_length}, new_messages_count={len(new_messages)}")
-            for i, msg in enumerate(new_messages):
-                role = msg.get("role")
-                name = msg.get("name", "")
-                content_preview = str(msg.get("content", ""))[:100]
-                logger.debug(f"new_msg[{i}] role={role}, name={name}, content_preview={content_preview}")
+            # Build responses from TurnResult items
+            result["responses"] = self._turn_items_to_responses(turn)
 
-            # Collect all speech messages first (to play them all in one stream)
-            speak_messages = []
-
-            # Check if there are any speak tool calls (to avoid duplicate messages)
-            has_speak_tool = any(
-                msg.get("role") == "tool" and msg.get("name") == "speak"
-                for msg in self.handler.conversation_history[initial_history_length:]
-            )
-
-            # Extract responses from conversation history that were added during processing
-            # The handler adds: user message, assistant message(s), and tool results
-            for message in self.handler.conversation_history[initial_history_length:]:
-                role = message.get("role")
-
-                if role == "assistant":
-                    # Only add assistant text if there's NO speak tool (to avoid duplicates)
-                    # When speak tool is present, we'll show that message instead
-                    if not has_speak_tool and "content" in message and message["content"]:
-                        result["responses"].append(message["content"])
-
-                elif role == "tool":
-                    tool_name = message.get("name")
-                    if tool_name == "speak":
-                        # Extract speak tool results for display, since this tool is used in place of a message
-                        try:
-                            tool_content = json.loads(message.get("content", "{}"))
-                            if "message" in tool_content:
-                                result["responses"].append(f"{tool_content['message']}")
-                                # Collect speak messages to synthesize all at once
-                                speak_messages.append(tool_content["message"])
-                        except json.JSONDecodeError:
-                            pass
-                    elif tool_name == "see_image":
-                        # Display image from side-channel frame storage
-                        logger.info("Processing see_image tool for UI display")
-                        try:
-                            raw_content = message.get("content", "{}")
-                            tool_content = json.loads(raw_content)
-                            frame_index = tool_content.get("frame_index")
-                            if frame_index is not None and frame_index < len(self.handler._captured_frames):
-                                import os
-                                import tempfile
-
-                                import cv2
-                                jpeg_bytes = self.handler._captured_frames[frame_index]
-                                np_arr = np.frombuffer(jpeg_bytes, np.uint8)
-                                np_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                                if np_img is not None:
-                                    temp_file = tempfile.NamedTemporaryFile(
-                                        suffix=".jpg", delete=False, dir="/tmp"
-                                    )
-                                    temp_path = temp_file.name
-                                    temp_file.close()
-                                    success = cv2.imwrite(temp_path, np_img)
-                                    file_size = os.path.getsize(temp_path) if os.path.exists(temp_path) else 0
-                                    logger.info(f"see_image save: success={success}, path={temp_path}, size={file_size} bytes")
-                                    result["responses"].append({
-                                        "role": "assistant",
-                                        "content": {"_image_path": temp_path},
-                                    })
-                                else:
-                                    logger.warning("see_image: failed to decode stored frame %d", frame_index)
-                        except json.JSONDecodeError as e:
-                            logger.warning(f"Failed to parse see_image tool result: {e}")
-                        except Exception as e:
-                            logger.exception(f"Failed to add see_image to chat: {e}")
-                    elif tool_name == "camera":
-                        # Display camera image in chat (backward compat)
-                        logger.info("Processing camera tool for UI display")
-                        try:
-                            raw_content = message.get("content", "{}")
-                            tool_content = json.loads(raw_content)
-                            has_b64 = "b64_im" in tool_content
-                            has_worker = self.handler.deps.camera_worker is not None
-                            logger.info(f"Camera conditions: has_b64_im={has_b64}, has_camera_worker={has_worker}")
-                            if has_b64 and has_worker:
-                                np_img = self.handler.deps.camera_worker.get_latest_frame()
-                                if np_img is not None:
-                                    import os
-                                    import tempfile
-
-                                    import cv2
-
-                                    # Save to temp file for Gradio Chatbot display
-                                    temp_file = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False, dir="/tmp")
-                                    temp_path = temp_file.name
-                                    temp_file.close()
-                                    # cv2.imwrite expects BGR which is what camera provides
-                                    success = cv2.imwrite(temp_path, np_img)
-                                    file_size = os.path.getsize(temp_path) if os.path.exists(temp_path) else 0
-                                    logger.info(
-                                        f"Image save: success={success}, path={temp_path}, size={file_size} bytes, shape={np_img.shape}"
-                                    )
-                                    # Store image path - FileData will be created in sync context
-                                    result["responses"].append(
-                                        {
-                                            "role": "assistant",
-                                            "content": {"_image_path": temp_path},
-                                        }
-                                    )
-                                    logger.info(f"Added camera image path to responses: {temp_path}")
-                                else:
-                                    logger.warning("camera_worker.get_latest_frame() returned None")
-                        except json.JSONDecodeError as e:
-                            logger.warning(f"Failed to parse camera tool result: {e}")
-                        except Exception as e:
-                            logger.exception(f"Failed to add camera image to chat: {e}")
-                    elif tool_name:
-                        # Display other tool executions with metadata (collapsible in Gradio)
-                        tool_content = message.get("content", "{}")
-                        result["responses"].append(
-                            {
-                                "role": "assistant",
-                                "content": tool_content,  # Already JSON string from handler
-                                "metadata": {"title": f"🛠️ Used tool {tool_name}", "status": "done"},
-                            }
-                        )
-
-            # In case there are several speech messages in a single stream (it shouldn't happen too much), concatenate them.
-            if speak_messages:
-                combined_text = ". ".join(speak_messages)
-                logger.info(f"Synthesizing {len(speak_messages)} speak message(s) as one stream")
-                await self._synthesize_for_gradio(combined_text)
+            # Synthesize speech if any speak items
+            if turn.has_speak:
+                logger.info("Synthesizing speak text as one stream")
+                await self._synthesize_for_gradio(turn.speak_text)
             else:
-                # No speech - print summary here since _synthesize_for_gradio won't be called
                 from reachy_mini_conversation_app.cascade.timing import tracker
 
                 logger.info("No speech output - printing latency summary")
@@ -463,13 +251,82 @@ class CascadeGradioUI:
 
             result["success"] = True
 
-            logger.debug(f"Returning result - success={result['success']}, responses_count={len(result['responses'])}")
-
         except Exception as e:
             logger.exception(f"Error in async processing: {e}")
             result["error"] = str(e)
 
         return result
+
+    def _turn_items_to_responses(self, turn: TurnResult) -> list[Any]:
+        """Convert TurnResult items to _process_audio_async response list."""
+        responses: list[Any] = []
+        for item in turn.items:
+            if item.kind == "speak":
+                responses.append(item.text)
+            elif item.kind == "assistant":
+                responses.append(item.text)
+            elif item.kind == "image":
+                temp_path = self._save_jpeg_to_temp(item.image_jpeg)
+                if temp_path:
+                    responses.append({"role": "assistant", "content": {"_image_path": temp_path}})
+            elif item.kind == "tool":
+                responses.append({
+                    "role": "assistant",
+                    "content": item.tool_content,
+                    "metadata": {"title": f"🛠️ Used tool {item.tool_name}", "status": "done"},
+                })
+        return responses
+
+    def _turn_items_to_chat(self, turn: TurnResult) -> list[dict[str, Any]]:
+        """Convert TurnResult items to Gradio chatbot message dicts."""
+        messages: list[dict[str, Any]] = []
+        for item in turn.items:
+            if item.kind == "speak":
+                messages.append({"role": "assistant", "content": item.text})
+            elif item.kind == "assistant":
+                messages.append({"role": "assistant", "content": item.text})
+            elif item.kind == "image":
+                rgb = self._decode_jpeg_to_rgb(item.image_jpeg)
+                if rgb is not None:
+                    messages.append({"role": "assistant", "content": gr.Image(value=rgb)})
+            elif item.kind == "tool":
+                messages.append({
+                    "role": "assistant",
+                    "content": item.tool_content,
+                    "metadata": {"title": f"🛠️ Used tool {item.tool_name}", "status": "done"},
+                })
+        return messages
+
+    @staticmethod
+    def _save_jpeg_to_temp(jpeg_bytes: bytes) -> str | None:
+        """Save JPEG bytes to a temp file, return path or None on failure."""
+        try:
+            np_arr = np.frombuffer(jpeg_bytes, np.uint8)
+            np_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if np_img is None:
+                return None
+            temp_file = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False, dir="/tmp")
+            temp_path = temp_file.name
+            temp_file.close()
+            cv2.imwrite(temp_path, np_img)
+            logger.info(f"Saved image to {temp_path} ({os.path.getsize(temp_path)} bytes)")
+            return temp_path
+        except Exception as e:
+            logger.warning(f"Failed to save JPEG to temp: {e}")
+            return None
+
+    @staticmethod
+    def _decode_jpeg_to_rgb(jpeg_bytes: bytes) -> np.ndarray | None:
+        """Decode JPEG bytes to RGB numpy array, or None on failure."""
+        try:
+            np_arr = np.frombuffer(jpeg_bytes, np.uint8)
+            np_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if np_img is None:
+                return None
+            return cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
+        except Exception as e:
+            logger.warning(f"Failed to decode JPEG: {e}")
+            return None
 
     async def _synthesize_for_gradio(self, text: str) -> None:
         """Synthesize speech and play through pre-warmed audio system.
@@ -692,9 +549,8 @@ class CascadeGradioUI:
 
     def _clear_history(self) -> tuple[List[Dict[str, Any]], str]:
         """Clear conversation history."""
-        self.handler.conversation_history = []
-        self.handler._captured_frames.clear()
-        self._shown_camera_indices.clear()
+        self.handler.clear_state()
+        self._shown_turn_count = 0
         return [], "History cleared"
 
     def launch(self, **kwargs: Any) -> None:

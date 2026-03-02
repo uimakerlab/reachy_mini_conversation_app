@@ -19,6 +19,7 @@ from reachy_mini_conversation_app.tools.core_tools import (
     get_tool_specs,
     dispatch_tool_call,
 )
+from reachy_mini_conversation_app.cascade.turn_result import TurnItem, TurnResult
 from reachy_mini_conversation_app.cascade.transcript_analysis import (
     NoOpTranscriptManager,
     TranscriptAnalysisManager,
@@ -96,6 +97,11 @@ class CascadeHandler:
 
         # Cost tracking
         self.cumulative_cost: float = 0.0
+        self._turn_cost: float = 0.0
+
+        # Turn result tracking
+        self._current_turn_items: list[TurnItem] = []
+        self._turn_results: list[TurnResult] = []
 
         logger.info(
             f"Cascade handler initialized (skip_audio_playback={skip_audio_playback}, streaming_asr={self.is_streaming_asr})"
@@ -225,10 +231,11 @@ class CascadeHandler:
         if hasattr(provider, "last_cost") and provider.last_cost > 0:
             cost = provider.last_cost
             self.cumulative_cost += cost
+            self._turn_cost += cost
             logger.info(f"Cost ({provider_name}): ${cost:.4f} | Cumulative: ${self.cumulative_cost:.4f}")
             provider.last_cost = 0.0  # Reset for next call
 
-    async def process_audio_manual(self, audio_bytes: bytes) -> str:
+    async def process_audio_manual(self, audio_bytes: bytes) -> TurnResult:
         """Process recorded audio through the cascade pipeline.
 
         Called manually from Gradio UI.
@@ -237,13 +244,17 @@ class CascadeHandler:
             audio_bytes: WAV audio bytes from Gradio recording
 
         Returns:
-            Transcript of user's speech
+            TurnResult with transcript, displayable items, and cost
 
         """
         from reachy_mini_conversation_app.cascade.timing import tracker
 
         # Note: tracker.reset() is called in gradio_ui._stop_recording()
         # to capture user_stop_click in the same timeline
+
+        # Reset per-turn state
+        self._current_turn_items = []
+        self._turn_cost = 0.0
 
         async with self.processing_lock:
             try:
@@ -263,7 +274,7 @@ class CascadeHandler:
                     logger.warning("Empty transcript, ignoring")
                     if self.deps.movement_manager:
                         self.deps.movement_manager.set_listening(False)
-                    return ""
+                    return TurnResult()
 
                 # Add user message to history
                 self.conversation_history.append({"role": "user", "content": transcript})
@@ -284,9 +295,14 @@ class CascadeHandler:
                 # Reset transcript analysis for next conversation
                 self._on_turn_complete()
 
-                # Note: summary will be printed in gradio_ui after TTS completes
-
-                return transcript
+                # Build and store TurnResult
+                turn = TurnResult(
+                    transcript=transcript,
+                    items=list(self._current_turn_items),
+                    cost=self._turn_cost,
+                )
+                self._turn_results.append(turn)
+                return turn
 
             except Exception as e:
                 logger.exception(f"Error processing audio: {e}")
@@ -346,16 +362,20 @@ class CascadeHandler:
             return partial
         return None
 
-    async def process_audio_streaming_end(self) -> str:
+    async def process_audio_streaming_end(self) -> TurnResult:
         """Finalize streaming session, get final transcript, and run LLM pipeline.
 
         Called from Gradio UI when user stops recording with a streaming ASR provider.
 
         Returns:
-            Final complete transcript
+            TurnResult with transcript, displayable items, and cost
 
         """
         from reachy_mini_conversation_app.cascade.timing import tracker
+
+        # Reset per-turn state
+        self._current_turn_items = []
+        self._turn_cost = 0.0
 
         async with self.processing_lock:
             try:
@@ -369,7 +389,7 @@ class CascadeHandler:
                 else:
                     # Fallback to batch (shouldn't happen if UI checks properly)
                     logger.warning("ASR provider does not support streaming, this shouldn't happen")
-                    return ""
+                    return TurnResult()
 
                 logger.info(f"User said: {transcript}")
 
@@ -377,7 +397,7 @@ class CascadeHandler:
                     logger.warning("Empty transcript, ignoring")
                     if self.deps.movement_manager:
                         self.deps.movement_manager.set_listening(False)
-                    return ""
+                    return TurnResult()
 
                 # Add user message to history
                 self.conversation_history.append({"role": "user", "content": transcript})
@@ -401,7 +421,14 @@ class CascadeHandler:
                 # Reset partial transcript tracking
                 self._last_partial_transcript = ""
 
-                return transcript
+                # Build and store TurnResult
+                turn = TurnResult(
+                    transcript=transcript,
+                    items=list(self._current_turn_items),
+                    cost=self._turn_cost,
+                )
+                self._turn_results.append(turn)
+                return turn
 
             except Exception as e:
                 logger.exception(f"Error processing streaming audio: {e}")
@@ -466,7 +493,11 @@ class CascadeHandler:
                     "function": {"name": "speak", "arguments": json.dumps({"message": full_text})},
                 }
                 await self._execute_tool_calls([synthetic_tool_call])
-            elif tool_calls:
+            elif tool_calls and not any(tc.get("function", {}).get("name") == "speak" for tc in tool_calls):
+                # Tool calls but no speak — record assistant text if present
+                if full_text:
+                    self._current_turn_items.append(TurnItem(kind="assistant", text=full_text))
+            if tool_calls:
                 # Process normal tool calls
                 await self._execute_tool_calls(tool_calls)
 
@@ -523,6 +554,7 @@ class CascadeHandler:
                         self.conversation_history[-1]["content"] = json.dumps(
                             {"status": "image_captured", "frame_index": frame_index}
                         )
+                        self._current_turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
                         logger.info("see_image: stored frame %d, will add image to conversation", frame_index)
                     else:
                         logger.warning(f"see_image returned error: {result}")
@@ -533,6 +565,7 @@ class CascadeHandler:
                         b64_im = result["b64_im"]
                         logger.info("Camera tool executed - will add image to conversation for LLM analysis")
                         camera_image_bytes = base64.b64decode(b64_im)
+                        self._current_turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
                     else:
                         # Camera failed - error already in tool result, LLM will see it
                         logger.warning(f"Camera tool returned error: {result}")
@@ -541,12 +574,19 @@ class CascadeHandler:
                 elif tool_name == "speak" and "message" in result:
                     message = result["message"]
                     logger.info(f"Speaking: {message}")
+                    self._current_turn_items.append(TurnItem(kind="speak", text=message))
 
                     # Only synthesize audio if not in Gradio mode (Gradio UI handles audio playback separately)
                     if not self.skip_audio_playback:
                         await self._speak(message)
                     else:
                         logger.debug("Skipping audio playback (Gradio mode will handle it)")
+
+                # Other tools
+                elif tool_name not in ("speak", "see_image", "camera"):
+                    self._current_turn_items.append(
+                        TurnItem(kind="tool", tool_name=tool_name, tool_content=json.dumps(result))
+                    )
 
             except Exception as e:
                 logger.exception(f"Error executing tool {tool_name}: {e}")
@@ -693,3 +733,10 @@ class CascadeHandler:
             self.loop_thread.join(timeout=5)
 
         logger.info("Cascade handler stopped")
+
+    def clear_state(self) -> None:
+        """Reset all conversation and turn state (called from UI clear button)."""
+        self.conversation_history.clear()
+        self._captured_frames.clear()
+        self._current_turn_items.clear()
+        self._turn_results.clear()

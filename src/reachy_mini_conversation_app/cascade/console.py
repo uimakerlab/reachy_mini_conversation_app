@@ -198,7 +198,8 @@ class CascadeLocalStream:
                     audio_data = np.concatenate(self._speech_chunks)
                     duration = len(audio_data) / SILERO_SAMPLE_RATE
                     tracker.mark("recording_captured", {"duration_s": round(duration, 2)})
-                    transcript = await self.handler.process_audio_streaming_end()
+                    turn = await self.handler.process_audio_streaming_end()
+                    transcript = turn.transcript
                     if transcript:
                         logger.info(f"User: {transcript}")
                     else:
@@ -227,7 +228,8 @@ class CascadeLocalStream:
         wav_bytes = self._audio_to_wav(audio_data, SILERO_SAMPLE_RATE)
         logger.info("Transcribing...")
 
-        transcript = await self.handler.process_audio_manual(wav_bytes)
+        turn = await self.handler.process_audio_manual(wav_bytes)
+        transcript = turn.transcript
         if transcript:
             logger.info(f"User: {transcript}")
         else:
