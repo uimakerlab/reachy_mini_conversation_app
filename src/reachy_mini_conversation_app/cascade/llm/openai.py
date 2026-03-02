@@ -128,7 +128,6 @@ class OpenAILLM(LLMProvider):
             accumulated_text = ""
             accumulated_tool_calls: Dict[int, Dict[str, Any]] = {}
             usage_data: Any = None
-            finished = False
             first_token = True
             chunk_count = 0
 
@@ -178,10 +177,8 @@ class OpenAILLM(LLMProvider):
                         if tool_call_delta.function.name:
                             accumulated_tool_calls[idx]["function"]["name"] = tool_call_delta.function.name
 
-                # Mark when streaming content is done (but don't yield "done" yet - usage chunk comes after)
+                # Yield accumulated tool calls when streaming content is done
                 if chunk.choices[0].finish_reason:
-                    finished = True
-                    # Yield accumulated tool calls now
                     for tool_call in accumulated_tool_calls.values():
                         logger.info(f"Tool call: {tool_call['function']['name']}")
                         yield LLMChunk(type="tool_call", tool_call=tool_call)

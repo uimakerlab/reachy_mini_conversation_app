@@ -1,10 +1,8 @@
 """Gradio UI for cascade mode."""
 
 from __future__ import annotations
-import os
 import asyncio
 import logging
-import tempfile
 import threading
 from typing import TYPE_CHECKING, Any, Dict, List
 
@@ -62,7 +60,6 @@ class CascadeGradioUI:
         # VAD recorder created lazily after handler.start() provides event loop
         self._vad_recorder: ContinuousVADRecorder | None = None
         self.continuous_mode = False
-        self._shown_turn_count: int = 0  # Track how many turns have been rendered in continuous mode
 
     def _is_streaming_asr(self) -> bool:
         """Check if the ASR provider supports streaming."""
@@ -223,7 +220,6 @@ class CascadeGradioUI:
         result: Dict[str, Any] = {
             "success": False,
             "transcript": None,
-            "responses": [],
             "error": None,
         }
 
@@ -241,9 +237,6 @@ class CascadeGradioUI:
                 result["error"] = "Empty transcript"
                 return result
 
-            # Build responses from TurnResult items
-            result["responses"] = self._turn_items_to_responses(turn)
-
             # Speech was already played during tool execution via speech_output.
             # Print latency summary for non-speech turns (speech path prints its own).
             if not turn.has_speak:
@@ -259,26 +252,6 @@ class CascadeGradioUI:
             result["error"] = str(e)
 
         return result
-
-    def _turn_items_to_responses(self, turn: TurnResult) -> list[Any]:
-        """Convert TurnResult items to _process_audio_async response list."""
-        responses: list[Any] = []
-        for item in turn.items:
-            if item.kind == "speak":
-                responses.append(item.text)
-            elif item.kind == "assistant":
-                responses.append(item.text)
-            elif item.kind == "image":
-                temp_path = self._save_jpeg_to_temp(item.image_jpeg)
-                if temp_path:
-                    responses.append({"role": "assistant", "content": {"_image_path": temp_path}})
-            elif item.kind == "tool":
-                responses.append({
-                    "role": "assistant",
-                    "content": item.tool_content,
-                    "metadata": {"title": f"🛠️ Used tool {item.tool_name}", "status": "done"},
-                })
-        return responses
 
     def _turn_items_to_chat(self, turn: TurnResult) -> list[dict[str, Any]]:
         """Convert TurnResult items to Gradio chatbot message dicts."""
@@ -301,24 +274,6 @@ class CascadeGradioUI:
         return messages
 
     @staticmethod
-    def _save_jpeg_to_temp(jpeg_bytes: bytes) -> str | None:
-        """Save JPEG bytes to a temp file, return path or None on failure."""
-        try:
-            np_arr = np.frombuffer(jpeg_bytes, np.uint8)
-            np_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            if np_img is None:
-                return None
-            temp_file = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False, dir="/tmp")
-            temp_path = temp_file.name
-            temp_file.close()
-            cv2.imwrite(temp_path, np_img)
-            logger.info(f"Saved image to {temp_path} ({os.path.getsize(temp_path)} bytes)")
-            return temp_path
-        except Exception as e:
-            logger.warning(f"Failed to save JPEG to temp: {e}")
-            return None
-
-    @staticmethod
     def _decode_jpeg_to_rgb(jpeg_bytes: bytes) -> np.ndarray | None:
         """Decode JPEG bytes to RGB numpy array, or None on failure."""
         try:
@@ -334,7 +289,6 @@ class CascadeGradioUI:
     def _clear_history(self) -> tuple[List[Dict[str, Any]], str]:
         """Clear conversation history."""
         self.handler.clear_state()
-        self._shown_turn_count = 0
         return [], "History cleared"
 
     def launch(self, **kwargs: Any) -> None:

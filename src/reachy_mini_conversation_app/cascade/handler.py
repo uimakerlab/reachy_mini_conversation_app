@@ -349,17 +349,10 @@ class CascadeHandler:
 
             # Analyze partial transcript (debounced, fire-and-forget)
             if partial:
-                # Only log if transcript changed (reduce spam)
-                if partial != self._last_partial_transcript:
-                    logger.debug(f"🎤 Got partial transcript: '{partial[:60]}...'")
-                    self._last_partial_transcript = partial
-
                 # Use stable text for entity extraction to avoid noisy draft tokens
                 stable_text = self._get_stable_text(partial)
                 await self._on_transcript_partial(stable_text)
 
-            if partial and partial != self._last_partial_transcript:
-                logger.debug(f"Partial transcript: {partial}")
             return partial
         return None
 

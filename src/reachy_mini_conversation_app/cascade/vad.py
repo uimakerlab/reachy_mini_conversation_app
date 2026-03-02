@@ -14,9 +14,6 @@ logger = logging.getLogger(__name__)
 
 # Silero VAD requires specific sample rates and chunk sizes
 SILERO_SAMPLE_RATE = 16000
-# Valid chunk sizes for Silero VAD (in samples at 16kHz)
-# 256 = 16ms, 512 = 32ms, 768 = 48ms, 1024 = 64ms, 1536 = 96ms
-VALID_CHUNK_SIZES = [256, 512, 768, 1024, 1536]
 
 
 class SileroVAD:

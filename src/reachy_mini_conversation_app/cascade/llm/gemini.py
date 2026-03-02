@@ -200,8 +200,8 @@ class GeminiLLM(LLMProvider):
 
             # Calculate cost from usage metadata
             if usage_metadata and (self.input_cost_per_1m > 0 or self.output_cost_per_1m > 0):
-                prompt_tokens = getattr(usage_metadata, "prompt_token_count", 0)
-                completion_tokens = getattr(usage_metadata, "candidates_token_count", 0)
+                prompt_tokens = getattr(usage_metadata, "prompt_token_count", 0) or 0
+                completion_tokens = getattr(usage_metadata, "candidates_token_count", 0) or 0
                 self.last_cost = (
                     prompt_tokens * self.input_cost_per_1m / 1e6
                     + completion_tokens * self.output_cost_per_1m / 1e6

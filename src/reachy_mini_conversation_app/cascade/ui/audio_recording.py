@@ -43,9 +43,6 @@ class StreamingASRCallbacks:
     on_chunk: Callable[[bytes], None]
     """Called for each audio chunk (as WAV bytes) during recording."""
 
-    on_end: Callable[[], None] | None = None
-    """Optional callback when recording ends."""
-
 
 class PushToTalkRecorder:
     """Manual push-to-talk recording mode.
