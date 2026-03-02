@@ -297,19 +297,24 @@ def _safe_load_obj(args_json: str) -> Dict[str, Any]:
         return {}
 
 
-async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
-    """Dispatch a tool call by name with JSON args and dependencies."""
+async def _dispatch(tool_name: str, args: Dict[str, Any], deps: ToolDependencies) -> Dict[str, Any]:
     tool = ALL_TOOLS.get(tool_name)
-
     if not tool:
         return {"error": f"unknown tool: {tool_name}"}
-
-    args = _safe_load_obj(args_json)
-    tool_manager = kwargs.get("tool_manager")
-    if tool_manager is not None:
-        args["tool_manager"] = tool_manager
     try:
         return await tool(deps, **args)
     except Exception as e:
         logger.exception("Tool error in %s: %s", tool_name, e)
         raise e
+
+
+async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies) -> Dict[str, Any]:
+    """Dispatch a tool call by name with JSON args and dependencies."""
+    return await _dispatch(tool_name, _safe_load_obj(args_json), deps)
+
+
+async def dispatch_tool_call_with_manager(tool_name: str, args_json: str, deps: ToolDependencies, tool_manager: Any) -> Dict[str, Any]:
+    """Dispatch a tool call, injecting a BackgroundToolManager into the args."""
+    args = _safe_load_obj(args_json)
+    args["tool_manager"] = tool_manager
+    return await _dispatch(tool_name, args, deps)
