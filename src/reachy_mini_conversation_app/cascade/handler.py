@@ -13,7 +13,7 @@ from reachy_mini_conversation_app.prompts import get_session_instructions
 from reachy_mini_conversation_app.cascade.asr import ASRProvider, StreamingASRProvider
 from reachy_mini_conversation_app.cascade.llm import LLMProvider
 from reachy_mini_conversation_app.cascade.tts import TTSProvider
-from reachy_mini_conversation_app.cascade.config import config
+from reachy_mini_conversation_app.cascade.config import get_config
 from reachy_mini_conversation_app.tools.core_tools import (
     ToolDependencies,
     get_tool_specs,
@@ -73,7 +73,7 @@ class CascadeHandler:
         self._last_partial_transcript = ""
 
         # Store streaming status based on config
-        self.is_streaming_asr = config.is_asr_streaming()
+        self.is_streaming_asr = get_config().is_asr_streaming()
 
         # Dynamic tool gating based on available capabilities
         exclusion_list: list[str] = []
@@ -129,6 +129,8 @@ class CascadeHandler:
             Initialized provider instance
 
         """
+        config = get_config()
+
         # All API keys that any provider might need
         api_key_map = {
             "OPENAI_API_KEY": config.OPENAI_API_KEY,
@@ -142,10 +144,8 @@ class CascadeHandler:
         info = getattr(config, f"get_{provider_type}_provider_info")(name)
         kwargs = getattr(config, f"get_{provider_type}_settings")(name)
 
-        # Validate and add API keys
+        # Add API keys (validated at config load time)
         for required in info["requires"]:
-            if not api_key_map.get(required):
-                raise ValueError(f"{required} not set (required by {name})")
             kwargs["api_key"] = api_key_map[required]
 
         # Merge extra kwargs if provided

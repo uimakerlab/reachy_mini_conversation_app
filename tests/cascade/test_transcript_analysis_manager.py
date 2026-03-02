@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from reachy_mini_conversation_app.cascade.config import set_config
 from reachy_mini_conversation_app.cascade.transcript_analysis.base import (
     EntityMatch,
     TriggerMatch,
@@ -15,6 +16,16 @@ from reachy_mini_conversation_app.cascade.transcript_analysis.base import (
 from reachy_mini_conversation_app.cascade.transcript_analysis.manager import (
     TranscriptAnalysisManager,
 )
+
+
+@pytest.fixture(autouse=True)
+def _mock_cascade_config():
+    """Inject a mock CascadeConfig so entity tests don't need cascade.yaml."""
+    mock_cfg = MagicMock()
+    mock_cfg.gliner_model = "urchade/gliner_small-v2.1"
+    set_config(mock_cfg)
+    yield
+    set_config(None)
 
 
 def _make_reaction(

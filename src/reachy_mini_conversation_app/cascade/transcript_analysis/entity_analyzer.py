@@ -30,10 +30,10 @@ class EntityAnalyzer(TranscriptAnalyzer):
                 "GLiNER not installed. Install with: pip install 'reachy_mini_conversation_app[cascade_gliner]'"
             )
 
-        from reachy_mini_conversation_app.cascade.config import config
+        from reachy_mini_conversation_app.cascade.config import get_config
 
         self.entity_labels = entity_labels
-        self.model_name = config.gliner_model
+        self.model_name = get_config().gliner_model
 
         logger.info(f"Loading GLiNER model: {self.model_name}")
         self.model = GLiNER.from_pretrained(self.model_name)

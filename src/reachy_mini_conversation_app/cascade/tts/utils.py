@@ -5,7 +5,7 @@ import logging
 import numpy as np
 import numpy.typing as npt
 
-from reachy_mini_conversation_app.cascade.config import config
+from reachy_mini_conversation_app.cascade.config import get_config
 
 
 logger = logging.getLogger(__name__)
@@ -52,11 +52,12 @@ def trim_leading_silence(
         logger.debug(f"{provider_name}: {silence_duration_ms:.0f}ms leading silence (acceptable)")
         return audio_array
 
+    cfg = get_config()
     logger.warning(
-        f"{provider_name}: {silence_duration_ms:.0f}ms of leading silence detected (trim_silence={config.tts_trim_silence})"
+        f"{provider_name}: {silence_duration_ms:.0f}ms of leading silence detected (trim_silence={cfg.tts_trim_silence})"
     )
 
-    if not config.tts_trim_silence:
+    if not cfg.tts_trim_silence:
         logger.info(f"{provider_name}: Keeping silence (tts_trim_silence=false)")
         return audio_array
 

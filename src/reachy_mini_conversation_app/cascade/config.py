@@ -2,6 +2,7 @@
 
 import os
 import logging
+import platform
 from typing import Any, Dict
 from pathlib import Path
 
@@ -24,8 +25,10 @@ def _load_cascade_config() -> Dict[str, Any]:
     config_file = Path("cascade.yaml")
 
     if not config_file.exists():
+        abs_path = config_file.resolve()
         raise RuntimeError(
-            "cascade.yaml not found. Please create it:\nThe cascade.yaml file configures ASR, LLM, and TTS providers."
+            f"cascade.yaml not found at {abs_path}. "
+            "Run the app from the project root, or copy cascade.yaml to your working directory."
         )
 
     try:
@@ -69,12 +72,13 @@ class CascadeConfig:
         # TTS config
         self.tts_provider = self._cascade["tts"]["provider"]
         self.tts_providers = self._cascade["tts"]["providers"]
-        self.tts_trim_silence = self._cascade["tts"]["trim_silence"]
+        self.tts_trim_silence = self._cascade["tts"].get("trim_silence", True)
 
         # Transcript analysis config (optional section)
         ta = self._cascade.get("transcript_analysis", {})
         self.gliner_model: str = ta.get("gliner_model", "urchade/gliner_small-v2.1")
 
+        self._validate()
         self._log_config()
 
     def get_asr_provider_info(self, name: str | None = None) -> Dict[str, Any]:
@@ -120,6 +124,52 @@ class CascadeConfig:
         info = self.get_tts_provider_info(name)
         return {k: v for k, v in info.items() if k not in TTS_METADATA_KEYS}
 
+    def _validate(self) -> None:
+        """Validate selected providers at config load time."""
+        api_key_env = {
+            "OPENAI_API_KEY": self.OPENAI_API_KEY,
+            "DEEPGRAM_API_KEY": self.DEEPGRAM_API_KEY,
+            "GEMINI_API_KEY": self.GEMINI_API_KEY,
+            "ELEVENLABS_API_KEY": self.ELEVENLABS_API_KEY,
+        }
+
+        for section, provider_name, providers_dict in [
+            ("asr", self.asr_provider, self.asr_providers),
+            ("llm", self.llm_provider, self.llm_providers),
+            ("tts", self.tts_provider, self.tts_providers),
+        ]:
+            # Provider exists?
+            if provider_name not in providers_dict:
+                available = ", ".join(providers_dict.keys())
+                raise RuntimeError(
+                    f"Unknown {section.upper()} provider '{provider_name}'. Available: {available}"
+                )
+
+            info = providers_dict[provider_name]
+
+            # Required API keys set?
+            for required in info.get("requires", []):
+                if not api_key_env.get(required):
+                    raise RuntimeError(
+                        f"{required} environment variable is not set. "
+                        f"Required by {section.upper()} provider '{provider_name}'. "
+                        f"Set it in your .env file or environment."
+                    )
+
+            # Hardware compatible?
+            hw = info.get("hardware")
+            if hw == "apple_silicon":
+                if platform.machine() != "arm64" or platform.system() != "Darwin":
+                    raise RuntimeError(
+                        f"{section.upper()} provider '{provider_name}' requires Apple Silicon (macOS arm64). "
+                        f"Detected: {platform.system()} {platform.machine()}. "
+                        f"Choose a cloud provider or one compatible with your hardware."
+                    )
+            elif hw == "cuda_or_mps":
+                logger.warning(
+                    f"{section.upper()} provider '{provider_name}' works best with CUDA or MPS GPU."
+                )
+
     def _log_config(self) -> None:
         """Log the loaded configuration."""
         logger.info(f"Cascade: ASR={self.asr_provider}, LLM={self.llm_provider}, TTS={self.tts_provider}")
@@ -128,5 +178,18 @@ class CascadeConfig:
         logger.debug(f"TTS provider info: {self.get_tts_provider_info()}")
 
 
-# Singleton instance - loaded on import
-config = CascadeConfig()
+_config: CascadeConfig | None = None
+
+
+def get_config() -> CascadeConfig:
+    """Return the cascade config singleton (created on first call)."""
+    global _config
+    if _config is None:
+        _config = CascadeConfig()
+    return _config
+
+
+def set_config(cfg: CascadeConfig | None) -> None:
+    """Override the cascade config singleton (for testing)."""
+    global _config
+    _config = cfg
