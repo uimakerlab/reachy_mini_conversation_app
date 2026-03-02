@@ -128,13 +128,13 @@ class ElevenLabsTTS(TTSProvider):
             audio_array = np.frombuffer(full_audio, dtype=np.int16)
 
             logger.info(
-                f"ElevenLabs TTS audio: {len(audio_array)} samples ({len(audio_array) / 24000:.2f}s), min: {audio_array.min()}, max: {audio_array.max()}"
+                f"ElevenLabs TTS audio: {len(audio_array)} samples ({len(audio_array) / self.sample_rate:.2f}s), min: {audio_array.min()}, max: {audio_array.max()}"
             )
 
             # Trim leading silence if enabled
-            audio_array = trim_leading_silence(audio_array, provider_name="ElevenLabs TTS")
+            audio_array = trim_leading_silence(audio_array, sample_rate=self.sample_rate, provider_name="ElevenLabs TTS")
 
-            # Always re-chunk for streaming playback (4096 samples = ~170ms at 24kHz)
+            # Always re-chunk for streaming playback
             audio_bytes = audio_array.tobytes()
             chunk_size = 4096 * 2  # 4096 samples * 2 bytes per sample
             chunks = []
@@ -142,7 +142,7 @@ class ElevenLabsTTS(TTSProvider):
                 chunks.append(audio_bytes[i : i + chunk_size])
 
             logger.info(
-                f"ElevenLabs: Final output: {len(chunks)} chunks, {len(audio_bytes)} bytes ({len(audio_array) / 24000:.2f}s)"
+                f"ElevenLabs: Final output: {len(chunks)} chunks, {len(audio_bytes)} bytes ({len(audio_array) / self.sample_rate:.2f}s)"
             )
 
             tracker.mark("tts_processing_end")

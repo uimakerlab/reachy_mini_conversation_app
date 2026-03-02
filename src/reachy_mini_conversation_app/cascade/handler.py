@@ -649,7 +649,6 @@ class CascadeHandler:
 
                 # Feed to head wobbler for motion
                 if self.deps.head_wobbler:
-                    # Note: OpenAI TTS outputs PCM int16 at 24kHz
                     # Convert to base64 for the wobbler's feed() method
                     self.deps.head_wobbler.feed(base64.b64encode(chunk).decode("utf-8"))
 
@@ -661,8 +660,8 @@ class CascadeHandler:
                         first_chunk_sent = True
 
                 # Rate limiting: match audio generation speed
-                # PCM int16 at 24kHz: 2 bytes per sample
-                chunk_duration = len(chunk) / (2 * 24000)
+                # PCM int16: 2 bytes per sample
+                chunk_duration = len(chunk) / (2 * self.tts.sample_rate)
                 # Sleep for 95% of chunk duration to stay slightly ahead
                 await asyncio.sleep(chunk_duration * 0.95)
 

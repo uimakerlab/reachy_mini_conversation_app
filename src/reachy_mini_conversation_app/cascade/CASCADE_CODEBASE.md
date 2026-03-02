@@ -287,6 +287,8 @@ class LLMProvider(ABC):
 **Base class** (`base.py`):
 ```python
 class TTSProvider(ABC):
+    @property
+    def sample_rate(self) -> int:  # Default 24000; override for non-24kHz providers
     async synthesize(text, voice=None) -> AsyncIterator[bytes]
 ```
 

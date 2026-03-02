@@ -52,6 +52,7 @@ class CascadeGradioUI:
             robot=robot,
             head_wobbler=self.handler.deps.head_wobbler,
             shutdown_event=self.shutdown_event,
+            tts_sample_rate=self.handler.tts.sample_rate,
         )
 
         # VAD recorder created lazily after handler.start() provides event loop
@@ -418,7 +419,7 @@ class CascadeGradioUI:
                 if sentence_chunks:
                     total_samples = sum(len(c) for c in sentence_chunks)
                     logger.debug(
-                        f"Sentence {idx + 1} generated: {len(sentence_chunks)} chunks ({total_samples} samples, {total_samples / 24000:.2f}s) in {gen_duration:.2f}s"
+                        f"Sentence {idx + 1} generated: {len(sentence_chunks)} chunks ({total_samples} samples, {total_samples / self.handler.tts.sample_rate:.2f}s) in {gen_duration:.2f}s"
                     )
 
                 # Signal next sentence can queue
@@ -467,7 +468,7 @@ class CascadeGradioUI:
             # Wait for audio to finish playing (estimate based on total duration)
             if audio_chunks:
                 total_samples = sum(len(chunk) for chunk in audio_chunks)
-                duration_seconds = total_samples / 24000
+                duration_seconds = total_samples / self.handler.tts.sample_rate
                 logger.info(f"Waiting {duration_seconds:.1f}s for playback to complete...")
                 await asyncio.sleep(duration_seconds + 0.5)  # Add 500ms buffer
 

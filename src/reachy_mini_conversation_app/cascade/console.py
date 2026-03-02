@@ -28,8 +28,6 @@ logger = logging.getLogger(__name__)
 
 # Minimum chunk size for Silero VAD (512 samples = 32ms at 16kHz)
 VAD_MIN_CHUNK_SIZE = 512
-# TTS output sample rate (OpenAI TTS outputs PCM at 24kHz)
-TTS_SAMPLE_RATE = 24000
 
 
 def to_mono(audio: np.ndarray) -> np.ndarray:
@@ -269,9 +267,10 @@ class CascadeLocalStream:
             # Convert to float32 [-1, 1]
             audio_float = audio_data.astype(np.float32) / 32768.0
 
-            # Resample from TTS rate (24kHz) to output rate if needed
-            if TTS_SAMPLE_RATE != output_sample_rate:
-                num_samples = int(len(audio_float) * output_sample_rate / TTS_SAMPLE_RATE)
+            # Resample from TTS rate to output rate if needed
+            tts_rate = self.handler.tts.sample_rate
+            if tts_rate != output_sample_rate:
+                num_samples = int(len(audio_float) * output_sample_rate / tts_rate)
                 audio_float = resample(audio_float, num_samples).astype(np.float32)
 
             # Push to robot speaker

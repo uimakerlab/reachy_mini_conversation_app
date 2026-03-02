@@ -36,6 +36,7 @@ class AudioPlaybackSystem:
         robot: ReachyMini | None,
         head_wobbler: HeadWobbler | None,
         shutdown_event: threading.Event | None = None,
+        tts_sample_rate: int = 24000,
     ) -> None:
         """Initialize playback system.
 
@@ -44,11 +45,13 @@ class AudioPlaybackSystem:
             head_wobbler: Head wobbler for animation during speech
             shutdown_event: External shutdown event for coordinated shutdown.
                            If None, creates an internal event.
+            tts_sample_rate: TTS audio sample rate in Hz (default 24kHz)
 
         """
         self.robot = robot
         self.head_wobbler = head_wobbler
         self.shutdown_event = shutdown_event or threading.Event()
+        self.tts_sample_rate = tts_sample_rate
 
         self._audio_queue: Queue[npt.NDArray[np.int16] | None] = Queue(maxsize=100)
         self._wobbler_queue: Queue[bytes | None] = Queue(maxsize=100)
@@ -168,7 +171,7 @@ class AudioPlaybackSystem:
 
                 # Create stream once (pre-warmed)
                 stream = sd.OutputStream(
-                    samplerate=24000,
+                    samplerate=self.tts_sample_rate,
                     channels=1,
                     dtype=np.int16,
                     blocksize=4096,
@@ -260,11 +263,11 @@ class AudioPlaybackSystem:
                         # Convert int16 to float32 for robot.media
                         audio_float = chunk.astype(np.float32) / 32768.0
 
-                        # Resample if needed (TTS outputs 24kHz)
-                        if device_sample_rate != 24000:
+                        # Resample if needed
+                        if device_sample_rate != self.tts_sample_rate:
                             audio_float = librosa.resample(
                                 audio_float,
-                                orig_sr=24000,
+                                orig_sr=self.tts_sample_rate,
                                 target_sr=device_sample_rate,
                             )
 
@@ -318,7 +321,7 @@ class AudioPlaybackSystem:
                         self.head_wobbler.feed(base64.b64encode(chunk).decode("utf-8"))
 
                     # Rate limit to match playback
-                    chunk_duration = len(chunk) / (2 * 24000)
+                    chunk_duration = len(chunk) / (2 * self.tts_sample_rate)
                     time.sleep(chunk_duration)
 
                 except Empty:
