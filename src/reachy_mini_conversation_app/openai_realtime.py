@@ -675,7 +675,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     except asyncio.CancelledError:
                         pass
 
-                # Stop background tool manager tasks (listener + cleanup) in all paths.
+                # Stop background tool manager tasks (listener + cleanup) in all patus.
                 await self.tool_manager.shutdown()
 
     # Microphone receive
