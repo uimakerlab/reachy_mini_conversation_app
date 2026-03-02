@@ -221,6 +221,48 @@ class CascadeHandler:
             logger.info(f"Cost ({provider_name}): ${cost:.4f} | Cumulative: ${self.cumulative_cost:.4f}")
             provider.last_cost = 0.0  # Reset for next call
 
+    async def _run_pipeline_after_transcription(self, transcript: str) -> TurnResult:
+        """Run the shared post-ASR pipeline: validate → history → LLM → TTS → result.
+
+        Called by both manual and streaming paths after transcription is obtained.
+        Caller must hold self.processing_lock.
+        """
+        from reachy_mini_conversation_app.cascade.timing import tracker
+
+        if not transcript.strip():
+            logger.warning("Empty transcript, ignoring")
+            if self.deps.movement_manager:
+                self.deps.movement_manager.set_listening(False)
+            return TurnResult()
+
+        # Add user message to history
+        self.conversation_history.append({"role": "user", "content": transcript})
+
+        # Update robot state - done listening
+        if self.deps.movement_manager:
+            self.deps.movement_manager.set_listening(False)
+
+        # Analyze final transcript (parallel with LLM, fire-and-forget)
+        self._on_transcript_final(transcript)
+
+        # LLM: Text → Response + Tool Calls
+        logger.info("Generating LLM response...")
+        tracker.mark("llm_start")
+        await self._process_llm_response()
+        tracker.mark("llm_complete")
+
+        # Reset transcript analysis for next turn
+        self._on_turn_complete()
+
+        # Build and store TurnResult
+        turn = TurnResult(
+            transcript=transcript,
+            items=list(self._current_turn_items),
+            cost=self._turn_cost,
+        )
+        self._turn_results.append(turn)
+        return turn
+
     async def process_audio_manual(self, audio_bytes: bytes) -> TurnResult:
         """Process recorded audio through the cascade pipeline.
 
@@ -248,7 +290,7 @@ class CascadeHandler:
                 if self.deps.movement_manager:
                     self.deps.movement_manager.set_listening(True)
 
-                # 1. ASR: Audio → Text
+                # ASR: Audio → Text
                 logger.info("Transcribing...")
                 tracker.mark("transcribing_start")
                 transcript = await self.asr.transcribe(audio_bytes, language="en")
@@ -256,39 +298,7 @@ class CascadeHandler:
                 self._aggregate_cost(self.asr, "ASR")
                 logger.info(f"User said: {transcript}")
 
-                if not transcript.strip():
-                    logger.warning("Empty transcript, ignoring")
-                    if self.deps.movement_manager:
-                        self.deps.movement_manager.set_listening(False)
-                    return TurnResult()
-
-                # Add user message to history
-                self.conversation_history.append({"role": "user", "content": transcript})
-
-                # Update robot state - done listening
-                if self.deps.movement_manager:
-                    self.deps.movement_manager.set_listening(False)
-
-                # Analyze final transcript (parallel with LLM, fire-and-forget)
-                self._on_transcript_final(transcript)
-
-                # 2. LLM: Text → Response + Tool Calls
-                logger.info("Generating LLM response...")
-                tracker.mark("llm_start")
-                await self._process_llm_response()
-                tracker.mark("llm_complete")
-
-                # Reset transcript analysis for next conversation
-                self._on_turn_complete()
-
-                # Build and store TurnResult
-                turn = TurnResult(
-                    transcript=transcript,
-                    items=list(self._current_turn_items),
-                    cost=self._turn_cost,
-                )
-                self._turn_results.append(turn)
-                return turn
+                return await self._run_pipeline_after_transcription(transcript)
 
             except Exception as e:
                 logger.exception(f"Error processing audio: {e}")
@@ -373,47 +383,16 @@ class CascadeHandler:
                     tracker.mark("asr_complete", {"transcript_len": len(transcript)})
                     self._aggregate_cost(self.asr, "ASR")
                 else:
-                    # Fallback to batch (shouldn't happen if UI checks properly)
                     logger.warning("ASR provider does not support streaming, this shouldn't happen")
                     return TurnResult()
 
                 logger.info(f"User said: {transcript}")
 
-                if not transcript.strip():
-                    logger.warning("Empty transcript, ignoring")
-                    if self.deps.movement_manager:
-                        self.deps.movement_manager.set_listening(False)
-                    return TurnResult()
+                turn = await self._run_pipeline_after_transcription(transcript)
 
-                # Add user message to history
-                self.conversation_history.append({"role": "user", "content": transcript})
-
-                # Update robot state - done listening
-                if self.deps.movement_manager:
-                    self.deps.movement_manager.set_listening(False)
-
-                # Analyze final transcript (parallel with LLM, fire-and-forget)
-                self._on_transcript_final(transcript)
-
-                # 2. LLM: Text → Response + Tool Calls
-                logger.info("Generating LLM response...")
-                tracker.mark("llm_start")
-                await self._process_llm_response()
-                # llm_complete is already marked inside the LLM provider
-
-                # Reset transcript analysis for next conversation
-                self._on_turn_complete()
-
-                # Reset partial transcript tracking
+                # Reset partial transcript tracking (streaming-specific)
                 self._last_partial_transcript = ""
 
-                # Build and store TurnResult
-                turn = TurnResult(
-                    transcript=transcript,
-                    items=list(self._current_turn_items),
-                    cost=self._turn_cost,
-                )
-                self._turn_results.append(turn)
                 return turn
 
             except Exception as e:
