@@ -609,7 +609,7 @@ class CascadeHandler:
         time.sleep(0.5)
 
         # Warmup LLM connection
-        if hasattr(self.llm, "warmup") and self.loop:
+        if self.loop:
             logger.info("Pre-warming LLM connection...")
             asyncio.run_coroutine_threadsafe(self.llm.warmup(), self.loop)
 

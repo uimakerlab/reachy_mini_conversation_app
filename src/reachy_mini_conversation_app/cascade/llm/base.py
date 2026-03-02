@@ -43,6 +43,9 @@ class LLMProvider(abc.ABC):
         """
         raise NotImplementedError
 
+    async def warmup(self) -> None:
+        """Warm up the LLM provider. Override if needed."""
+
     def parse_tool_call(self, tool_call: Dict[str, Any]) -> tuple[str, str, Dict[str, Any]]:
         """Parse a tool call into its components.
 

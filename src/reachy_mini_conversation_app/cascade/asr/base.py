@@ -8,6 +8,9 @@ from typing import Optional
 class ASRProvider(abc.ABC):
     """Abstract base class for ASR providers."""
 
+    async def warmup(self) -> None:
+        """Warm up the ASR provider. Override if needed."""
+
     @abc.abstractmethod
     async def transcribe(self, audio_bytes: bytes, language: Optional[str] = None) -> str:
         """Transcribe audio bytes to text.
