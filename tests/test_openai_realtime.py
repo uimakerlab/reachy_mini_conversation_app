@@ -50,9 +50,6 @@ async def test_start_up_retries_on_abrupt_close(monkeypatch: Any, caplog: Any) -
     monkeypatch.setattr(rt_mod, "ConnectionClosedError", FakeCCE)
 
     # Make asyncio.sleep return immediately (for backoff)
-    # but still yield to the event loop via sleep(0).
-    # A plain `return None` would never yield, starving concurrent tasks
-    # like _response_sender_loop and preventing them from making progress.
     _real_sleep = asyncio.sleep
     async def _mock_sleep(*_a: Any, **_kw: Any) -> None: await _real_sleep(0)
     monkeypatch.setattr(asyncio, "sleep", _mock_sleep, raising=False)
