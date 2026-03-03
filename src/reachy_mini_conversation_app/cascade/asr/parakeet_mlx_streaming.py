@@ -131,7 +131,6 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
         try:
             # Convert WAV bytes to numpy array
             audio_array_np = wav_to_float32(audio_chunk, self.target_sample_rate)
-            # logger.debug(f"Parsed WAV: {len(audio_array_np)} samples, range=[{audio_array_np.min():.3f}, {audio_array_np.max():.3f}]")
 
             if len(audio_array_np) == 0:
                 logger.warning("Empty audio chunk received, skipping")
@@ -140,10 +139,6 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
             # Buffer the chunk
             self.chunk_buffer.append(audio_array_np)
             self.total_buffered_samples += len(audio_array_np)
-
-            # logger.debug(
-            #     f"Buffered {len(audio_array_np)} samples (buffer: {self.total_buffered_samples}/{self.buffer_target_samples})"
-            # )
 
             # Only send to model when we have enough data (250ms)
             if self.total_buffered_samples >= self.buffer_target_samples:
@@ -205,7 +200,6 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
             draft_tokens = self.transcriber.draft_tokens
 
             num_finalized = len(finalized_tokens)
-            num_draft = len(draft_tokens)
 
             # Check if we have NEW finalized tokens
             new_finalized_count = num_finalized - self.num_finalized_tokens
@@ -230,11 +224,6 @@ class ParakeetMLXStreamingASR(StreamingASRProvider):
                     self.unstable_tail = draft_text
             else:
                 self.unstable_tail = ""
-
-            # # Log state
-            # logger.debug(
-            #     f"ASR state: {num_finalized} finalized, {num_draft} draft | stable='{self.stable_text}' | tail='{self.unstable_tail}'"
-            # )
 
             # Return combined text for display
             if self.stable_text and self.unstable_tail:

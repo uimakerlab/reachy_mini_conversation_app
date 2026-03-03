@@ -43,15 +43,12 @@ class SileroVAD:
 
         # Load Silero VAD model
         logger.info("Loading Silero VAD model...")
-        self.model, utils = torch.hub.load(
+        self.model, _utils = torch.hub.load(
             "snakers4/silero-vad",
             "silero_vad",
             trust_repo=True,
         )
         self.model.eval()
-
-        # Get utility functions
-        (self.get_speech_timestamps, self.save_audio, self.read_audio, self.VADIterator, self.collect_chunks) = utils
 
         # State tracking for streaming
         self._speech_frames = 0
@@ -160,52 +157,3 @@ class SileroVAD:
         self.model.reset_states()
         logger.debug("VAD state reset")
 
-    def get_speech_segments(
-        self,
-        audio: np.ndarray,
-        sample_rate: int = SILERO_SAMPLE_RATE,
-    ) -> list[dict]:
-        """Get speech segments from a complete audio buffer.
-
-        This is useful for batch processing of recorded audio.
-
-        Args:
-            audio: Complete audio buffer as numpy array.
-            sample_rate: Sample rate of the audio.
-
-        Returns:
-            List of dicts with 'start' and 'end' timestamps in seconds.
-
-        """
-        if sample_rate != SILERO_SAMPLE_RATE:
-            raise ValueError(f"Silero VAD requires {SILERO_SAMPLE_RATE}Hz audio, got {sample_rate}Hz")
-
-        # Convert to float32 tensor
-        if audio.dtype == np.int16:
-            audio_float = audio.astype(np.float32) / 32768.0
-        else:
-            audio_float = audio.astype(np.float32)
-
-        tensor = torch.from_numpy(audio_float)
-
-        # Get speech timestamps
-        timestamps = self.get_speech_timestamps(
-            tensor,
-            self.model,
-            sampling_rate=sample_rate,
-            threshold=self.threshold,
-            min_speech_duration_ms=self.min_speech_duration_ms,
-            min_silence_duration_ms=self.min_silence_duration_ms,
-        )
-
-        # Convert sample indices to seconds
-        segments = []
-        for ts in timestamps:
-            segments.append(
-                {
-                    "start": ts["start"] / sample_rate,
-                    "end": ts["end"] / sample_rate,
-                }
-            )
-
-        return segments

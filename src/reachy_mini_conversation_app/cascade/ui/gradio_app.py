@@ -89,7 +89,6 @@ class CascadeGradioUI:
                 sample_rate=16000,
                 streaming_asr_callbacks=self._create_streaming_callbacks(),
                 on_speech_captured=self._on_vad_speech_captured,
-                event_loop=self.handler.loop,
             )
         return self._vad_recorder
 

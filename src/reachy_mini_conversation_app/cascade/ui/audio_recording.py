@@ -3,7 +3,6 @@
 from __future__ import annotations
 import io
 import wave
-import asyncio
 import logging
 import threading
 from enum import Enum
@@ -54,19 +53,16 @@ class PushToTalkRecorder:
         self,
         sample_rate: int = 16000,
         streaming_asr_callbacks: StreamingASRCallbacks | None = None,
-        event_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """Initialize recorder.
 
         Args:
             sample_rate: Recording sample rate (default 16kHz)
             streaming_asr_callbacks: Optional callbacks for streaming ASR
-            event_loop: Event loop for async callback execution
 
         """
         self.sample_rate = sample_rate
         self.streaming_callbacks = streaming_asr_callbacks
-        self.event_loop = event_loop
 
         self._recording = False
         self._audio_frames: List[npt.NDArray[np.int16]] = []
@@ -231,7 +227,6 @@ class ContinuousVADRecorder:
         sample_rate: int = 16000,
         streaming_asr_callbacks: StreamingASRCallbacks | None = None,
         on_speech_captured: Callable[[bytes], None] | None = None,
-        event_loop: asyncio.AbstractEventLoop | None = None,
         vad_threshold: float = 0.5,
         min_speech_duration_ms: int = 250,
         min_silence_duration_ms: int = 700,
@@ -242,7 +237,6 @@ class ContinuousVADRecorder:
             sample_rate: Recording sample rate (default 16kHz)
             streaming_asr_callbacks: Optional callbacks for streaming ASR
             on_speech_captured: Callback when complete utterance is captured (receives WAV bytes)
-            event_loop: Event loop for async callback execution
             vad_threshold: VAD detection threshold (0-1)
             min_speech_duration_ms: Minimum speech duration to trigger detection
             min_silence_duration_ms: Silence duration to end speech segment
@@ -251,7 +245,6 @@ class ContinuousVADRecorder:
         self.sample_rate = sample_rate
         self.streaming_callbacks = streaming_asr_callbacks
         self.on_speech_captured = on_speech_captured
-        self.event_loop = event_loop
         self.vad_threshold = vad_threshold
         self.min_speech_duration_ms = min_speech_duration_ms
         self.min_silence_duration_ms = min_silence_duration_ms
@@ -333,8 +326,6 @@ class ContinuousVADRecorder:
 
         State machine: IDLE -> LISTENING -> RECORDING -> PROCESSING -> LISTENING
         """
-        import time
-
         from reachy_mini_conversation_app.cascade.vad import SILERO_SAMPLE_RATE
         from reachy_mini_conversation_app.cascade.timing import tracker
 
@@ -374,9 +365,6 @@ class ContinuousVADRecorder:
                         vad_audio = data.flatten()
 
                     # Process through VAD
-                    if self._vad is None:
-                        continue
-
                     speech_started, speech_ended = self._vad.process_chunk(vad_audio, SILERO_SAMPLE_RATE)
 
                     if self._state == ContinuousState.LISTENING:
@@ -446,9 +434,6 @@ class ContinuousVADRecorder:
                             self._state = ContinuousState.LISTENING
                             logger.info("VAD: Ready for next utterance")
 
-                    elif self._state == ContinuousState.PROCESSING:
-                        # Wait for processing to complete (shouldn't stay here long)
-                        time.sleep(0.01)
 
         except Exception as e:
             logger.exception(f"Error in continuous recording loop: {e}")
