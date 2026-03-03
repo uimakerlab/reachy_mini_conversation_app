@@ -16,11 +16,14 @@ from pydantic import Field, BaseModel, PrivateAttr
 from reachy_mini_conversation_app.tools.core_tools import (
     ToolDependencies,
     dispatch_tool_call,
+    dispatch_tool_call_with_manager,
 )
-from reachy_mini_conversation_app.tools.tool_constants import ToolState
+from reachy_mini_conversation_app.tools.tool_constants import ToolState, SystemTool
 
 
 logger = logging.getLogger(__name__)
+
+_SYSTEM_TOOL_NAMES: set[str] = {t.value for t in SystemTool}
 
 class ToolProgress(BaseModel):
     """Progress of a background tool."""
@@ -48,6 +51,9 @@ class ToolCallRoutine(BaseModel):
 
     async def __call__(self, tool_manager: BackgroundToolManager) -> Any:
         """Execute the stored callable with its arguments."""
+        if self.tool_name in _SYSTEM_TOOL_NAMES:
+            # For safety purposes, we only allow system tools to be called with the tool manager
+            return await dispatch_tool_call_with_manager(tool_name=self.tool_name, args_json=self.args_json_str, deps=self.deps, tool_manager=tool_manager)
         return await dispatch_tool_call(tool_name=self.tool_name, args_json=self.args_json_str, deps=self.deps)
 
 
