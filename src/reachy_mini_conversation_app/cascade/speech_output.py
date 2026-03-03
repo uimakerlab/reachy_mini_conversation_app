@@ -56,7 +56,7 @@ class ConsoleSpeechOutput:
         if self.head_wobbler:
             self.head_wobbler.reset()
 
-        print(f"[TTS] Speaking: {text}")
+        logger.debug(f"[TTS] Speaking: {text}")
 
         audio_chunks: list[bytes] = []
         first_chunk_sent = False
