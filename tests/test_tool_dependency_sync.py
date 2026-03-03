@@ -230,6 +230,11 @@ def test_sync_tool_space_dependencies_rolls_back_on_failure(
         "mypkg @ https://example.com/pkg.whl",
         "git+https://github.com/org/repo.git",
         "../local_package",
+        "..\\local_package",
+        ".\\local_package",
+        "C:\\local_package",
+        "c:/local_package",
+        "\\\\server\\share\\package.whl",
         "file:///tmp/local.whl",
     ],
 )

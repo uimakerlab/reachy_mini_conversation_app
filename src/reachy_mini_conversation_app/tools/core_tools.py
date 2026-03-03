@@ -199,7 +199,7 @@ def _load_profile_tools() -> None:
 
     # Read and parse tools.txt
     try:
-        with open(tools_txt_path, "r") as f:
+        with open(tools_txt_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
     except Exception as e:
         logger.error(f"✗ Failed to read tools.txt: {e}")

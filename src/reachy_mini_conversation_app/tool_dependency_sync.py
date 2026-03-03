@@ -44,9 +44,13 @@ _UNSAFE_REQUIREMENTS_SUBSTRINGS = (
 _UNSAFE_REQUIREMENTS_PATH_PREFIXES = (
     "./",
     "../",
+    ".\\",
+    "..\\",
     "/",
+    "\\",
     "~",
 )
+_WINDOWS_DRIVE_PATH_PATTERN = re.compile(r"^[a-z]:[\\/]")
 
 
 @dataclass(frozen=True)
@@ -123,7 +127,7 @@ def _validate_requirements_for_safe_install(requirements_path: Path) -> None:
                 "pip directives/options are not allowed for external tool dependency sync."
             )
 
-        if lowered.startswith(_UNSAFE_REQUIREMENTS_PATH_PREFIXES) or re.match(r"^[a-z]:\\\\", lowered):
+        if lowered.startswith(_UNSAFE_REQUIREMENTS_PATH_PREFIXES) or _WINDOWS_DRIVE_PATH_PATTERN.match(lowered):
             raise ValueError(
                 f"Unsafe requirements.txt entry at line {line_no}: '{requirement}'. "
                 "Local file paths are not allowed for external tool dependency sync."
