@@ -212,9 +212,11 @@ class CascadeLocalStream:
                 else:
                     await self._process_recorded_audio()
 
-                # Reset for next utterance
+                # Reset for next utterance — flush stale mic audio accumulated
+                # during processing (includes robot's own TTS echo)
                 self._speech_chunks = []
                 self._vad.reset()
+                self._vad_chunk_buffer.clear()
                 self._state = VADState.LISTENING
                 logger.info("Listening...")
 

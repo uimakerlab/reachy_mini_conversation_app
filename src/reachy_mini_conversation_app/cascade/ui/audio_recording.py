@@ -384,7 +384,7 @@ class ContinuousVADRecorder:
                         if speech_started:
                             logger.info("VAD: Speech started - recording")
                             self._state = ContinuousState.RECORDING
-                            self._audio_frames = []
+                            # Keep pre-roll frames (don't reset _audio_frames)
                             tracker.reset("user_conversation_turn")
                             tracker.mark("vad_speech_start")
 

@@ -139,7 +139,9 @@ class GeminiLLM(LLMProvider):
             logger.debug(f"Stream opened in {stream_open_time:.1f}ms")
 
             accumulated_text = ""
-            accumulated_tool_calls: List[Dict[str, Any]] = []
+            # Track tool calls by (candidate_idx, part_idx) to prevent duplicates
+            # when a function call is streamed across multiple chunks
+            tool_calls_by_position: Dict[tuple[int, int], Dict[str, Any]] = {}
             first_token = True
             chunk_count = 0
 
@@ -163,20 +165,21 @@ class GeminiLLM(LLMProvider):
                     accumulated_text += chunk.text
                     yield LLMChunk(type="text_delta", content=chunk.text)
 
-                # Handle function calls
+                # Handle function calls — deduplicate by position
                 if hasattr(chunk, "candidates") and chunk.candidates:
-                    for candidate in chunk.candidates:
+                    for cand_idx, candidate in enumerate(chunk.candidates):
                         if hasattr(candidate, "content") and candidate.content:
                             if hasattr(candidate.content, "parts") and candidate.content.parts:
-                                for part in candidate.content.parts:
+                                for part_idx, part in enumerate(candidate.content.parts):
                                     if hasattr(part, "function_call") and part.function_call:
-                                        # Convert Gemini function call to OpenAI format
+                                        key = (cand_idx, part_idx)
                                         tool_call = self._convert_function_call_to_openai(part.function_call)
-                                        accumulated_tool_calls.append(tool_call)
-                                        logger.info(f"Function call: {part.function_call.name}")
+                                        if key not in tool_calls_by_position:
+                                            logger.info(f"Function call: {part.function_call.name}")
+                                        tool_calls_by_position[key] = tool_call
 
-            # Yield accumulated tool calls at the end
-            for tool_call in accumulated_tool_calls:
+            # Yield deduplicated tool calls at the end
+            for tool_call in tool_calls_by_position.values():
                 yield LLMChunk(type="tool_call", tool_call=tool_call)
 
             total_time = (time.perf_counter() - request_start) * 1000
@@ -191,7 +194,7 @@ class GeminiLLM(LLMProvider):
                 "llm_complete",
                 {
                     "text_len": len(accumulated_text),
-                    "tool_calls": len(accumulated_tool_calls),
+                    "tool_calls": len(tool_calls_by_position),
                     "chunks": chunk_count,
                     "total_ms": round(total_time, 1),
                     "first_chunk_ms": round(first_chunk_latency, 1) if first_chunk_latency else None,
@@ -386,6 +389,6 @@ class GeminiLLM(LLMProvider):
             "type": "function",
             "function": {
                 "name": function_call.name,
-                "arguments": json.dumps(function_call.args),
+                "arguments": json.dumps(function_call.args or {}),
             },
         }

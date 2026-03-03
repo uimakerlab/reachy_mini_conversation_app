@@ -126,6 +126,8 @@ async def execute_tool_calls(
     # This must be done before adding any other messages (OpenAI requires all tool
     # responses immediately after the assistant message with tool_calls)
     for tool_call in tool_calls:
+        call_id = ""
+        tool_name = "unknown"
         try:
             call_id, tool_name, arguments = llm.parse_tool_call(tool_call)
 
@@ -179,6 +181,12 @@ async def execute_tool_calls(
                     b64_im = result["b64_im"]
                     logger.info("Camera tool executed - will add image to conversation for LLM analysis")
                     camera_image_bytes = base64.b64decode(b64_im)
+                    frame_index = len(captured_frames)
+                    captured_frames.append(camera_image_bytes)
+                    # Replace the heavy b64 blob in conversation history with a lightweight marker
+                    conversation_history[-1]["content"] = json.dumps(
+                        {"status": "image_captured", "frame_index": frame_index}
+                    )
                     current_turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
                 else:
                     # Camera failed - error already in tool result, LLM will see it
