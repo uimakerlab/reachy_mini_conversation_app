@@ -12,6 +12,12 @@ import numpy.typing as npt
 logger = logging.getLogger(__name__)
 
 
+def _read_wav(wav_bytes: bytes) -> tuple[int, int, int, bytes]:
+    """Parse WAV bytes and return (sample_rate, channels, sample_width, raw_frames)."""
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        return wf.getframerate(), wf.getnchannels(), wf.getsampwidth(), wf.readframes(wf.getnframes())
+
+
 def _resample(audio: npt.NDArray[np.float32], orig_sr: int, target_sr: int) -> npt.NDArray[np.float32]:
     """Resample float32 audio using librosa (high-quality sinc/FFT)."""
     import librosa
@@ -24,11 +30,7 @@ def wav_to_float32(wav_bytes: bytes, target_sr: int) -> npt.NDArray[np.float32]:
 
     Handles int16/int32 input, stereo-to-mono, and resampling via librosa.
     """
-    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
-        sr = wf.getframerate()
-        channels = wf.getnchannels()
-        sw = wf.getsampwidth()
-        frames = wf.readframes(wf.getnframes())
+    sr, channels, sw, frames = _read_wav(wav_bytes)
 
     if sw == 2:
         audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
@@ -48,11 +50,7 @@ def wav_to_float32(wav_bytes: bytes, target_sr: int) -> npt.NDArray[np.float32]:
 
 def wav_to_pcm_int16(wav_bytes: bytes, target_sr: int) -> bytes:
     """Parse WAV bytes and return raw PCM int16 at *target_sr*."""
-    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
-        sr = wf.getframerate()
-        channels = wf.getnchannels()
-        sw = wf.getsampwidth()
-        pcm = wf.readframes(wf.getnframes())
+    sr, channels, sw, pcm = _read_wav(wav_bytes)
 
     if sw != 2:
         raise ValueError(f"Unsupported sample width: {sw} bytes (expected 2)")

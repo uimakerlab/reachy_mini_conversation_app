@@ -114,6 +114,8 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
         if self._total_samples == 0:
             return ""
 
+        last_partial = self._last_partial or ""
+
         # Always transcribe the full audio for the final result (only runs once).
         # Progressive partials use the sliding window, but the final LLM input
         # benefits from full-context transcription.
@@ -121,6 +123,14 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
         audio_mx = mx.array(full_audio, dtype=mx.float32)
         result = self._model.decode_chunk(audio_mx, verbose=False)
         transcript = result.text.strip()
+
+        # Fall back to last partial if re-transcription returns empty
+        if not transcript and last_partial:
+            logger.warning(
+                f"Full re-transcription returned empty ({self._total_samples} samples), "
+                f"falling back to last partial: '{last_partial}'"
+            )
+            transcript = last_partial
 
         # Reset
         self._audio_buffer = []

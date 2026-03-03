@@ -20,6 +20,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _audio_to_wav(data: bytes, sample_rate: int) -> bytes:
+    """Encode raw PCM int16 data as WAV bytes."""
+    wav_buffer = io.BytesIO()
+    with wave.open(wav_buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)  # 16-bit
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(data)
+    return wav_buffer.getvalue()
+
+
 class ContinuousState(Enum):
     """State machine for continuous VAD-based recording."""
 
@@ -158,14 +169,7 @@ class PushToTalkRecorder:
         if self._audio_data is None or len(self._audio_data) == 0:
             return None
 
-        wav_buffer = io.BytesIO()
-        with wave.open(wav_buffer, "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)  # 16-bit
-            wav_file.setframerate(self.sample_rate)
-            wav_file.writeframes(self._audio_data.tobytes())
-
-        return wav_buffer.getvalue()
+        return _audio_to_wav(self._audio_data.tobytes(), self.sample_rate)
 
     def _record_audio(self) -> None:
         """Record audio from microphone in background thread."""
@@ -193,16 +197,7 @@ class PushToTalkRecorder:
 
                     # Send chunk to streaming ASR if callbacks provided
                     if self.streaming_callbacks:
-                        # Convert chunk to WAV bytes
-                        wav_buffer = io.BytesIO()
-                        with wave.open(wav_buffer, "wb") as wav_file:
-                            wav_file.setnchannels(1)
-                            wav_file.setsampwidth(2)  # 16-bit
-                            wav_file.setframerate(self.sample_rate)
-                            wav_file.writeframes(data.tobytes())
-
-                        chunk_wav = wav_buffer.getvalue()
-                        self.streaming_callbacks.on_chunk(chunk_wav)
+                        self.streaming_callbacks.on_chunk(_audio_to_wav(data.tobytes(), self.sample_rate))
 
             # Thread cleanup - only set audio_data if main thread hasn't already done it
             # (main thread may have concatenated early for low latency)
@@ -379,6 +374,15 @@ class ContinuousVADRecorder:
                             # Initialize streaming ASR if callbacks provided
                             if self.streaming_callbacks:
                                 self.streaming_callbacks.on_start()
+                                # Send pre-roll frames so the ASR sees the speech onset
+                                for frame in self._audio_frames:
+                                    self.streaming_callbacks.on_chunk(
+                                        _audio_to_wav(frame.tobytes(), self.sample_rate)
+                                    )
+                                # Also send the current chunk (won't enter RECORDING branch this iteration)
+                                self.streaming_callbacks.on_chunk(
+                                    _audio_to_wav(data.tobytes(), self.sample_rate)
+                                )
 
                         # Always collect audio (we might need pre-roll)
                         self._audio_frames.append(data.copy())
@@ -393,14 +397,7 @@ class ContinuousVADRecorder:
 
                         # Send chunk to streaming ASR if callbacks provided
                         if self.streaming_callbacks:
-                            wav_buffer = io.BytesIO()
-                            with wave.open(wav_buffer, "wb") as wav_file:
-                                wav_file.setnchannels(1)
-                                wav_file.setsampwidth(2)
-                                wav_file.setframerate(self.sample_rate)
-                                wav_file.writeframes(data.tobytes())
-                            chunk_wav = wav_buffer.getvalue()
-                            self.streaming_callbacks.on_chunk(chunk_wav)
+                            self.streaming_callbacks.on_chunk(_audio_to_wav(data.tobytes(), self.sample_rate))
 
                         if speech_ended:
                             logger.info("VAD: Speech ended - processing")
@@ -415,14 +412,7 @@ class ContinuousVADRecorder:
                                 tracker.mark("recording_captured", {"duration_s": round(duration, 2)})
 
                                 # Convert to WAV and call callback
-                                wav_buffer = io.BytesIO()
-                                with wave.open(wav_buffer, "wb") as wav_file:
-                                    wav_file.setnchannels(1)
-                                    wav_file.setsampwidth(2)
-                                    wav_file.setframerate(self.sample_rate)
-                                    wav_file.writeframes(audio_data.tobytes())
-
-                                wav_bytes = wav_buffer.getvalue()
+                                wav_bytes = _audio_to_wav(audio_data.tobytes(), self.sample_rate)
 
                                 # Call speech captured callback
                                 if self.on_speech_captured:
