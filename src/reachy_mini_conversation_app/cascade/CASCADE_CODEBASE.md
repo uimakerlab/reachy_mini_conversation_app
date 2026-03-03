@@ -26,15 +26,17 @@ Cascade Mode implements a traditional **ASR → LLM → TTS** conversation pipel
 
 ```
 cascade/
-├── __init__.py                        # Package exports
+├── __init__.py                        # Package init (no public exports)
 ├── entry.py                           # Entry point from main.py
 ├── handler.py                         # Core orchestrator (lifecycle, ASR routing, state)
 ├── provider_factory.py                # Provider initialization (ASR/LLM/TTS factory functions)
 ├── pipeline.py                        # LLM response processing & tool execution
+├── speech_output.py                   # SpeechOutput protocol + Gradio/Console implementations
 ├── turn_result.py                     # TurnResult + TurnItem dataclasses
 ├── config.py                          # Configuration loader (cascade.yaml)
 ├── timing.py                          # Latency tracking & profiling
 ├── vad.py                             # Silero VAD for continuous mode
+├── console.py                         # Console mode with VAD (CascadeLocalStream)
 ├── test_stream.py                     # Test file mode (automated TTS→ASR→LLM→TTS testing)
 │
 ├── ui/                                # Gradio interface components
@@ -98,12 +100,20 @@ Provider initialization is in `provider_factory.py`; LLM/tool pipeline logic is 
 
 **Key Attributes:**
 ```python
-asr: ASRProvider              # Current ASR implementation
-llm: LLMProvider              # Current LLM implementation
-tts: TTSProvider              # Current TTS implementation
-conversation_history: List    # OpenAI format: [{"role": "...", "content": ...}]
-processing_lock: asyncio.Lock # Prevent concurrent audio processing
-tool_specs: List[Dict]        # Tools in Chat Completions format
+deps: ToolDependencies            # Tool dependencies (robot, vision, movement, etc.)
+speech_output: SpeechOutput|None  # TTS playback backend (set by console or Gradio frontend)
+asr: ASRProvider                  # Current ASR implementation
+llm: LLMProvider                  # Current LLM implementation
+tts: TTSProvider                  # Current TTS implementation
+conversation_history: List        # OpenAI format: [{"role": "...", "content": ...}]
+processing_lock: asyncio.Lock     # Prevent concurrent audio processing
+tool_specs: List[Dict]            # Tools in Chat Completions format
+is_streaming_asr: bool            # Whether current ASR provider supports streaming
+transcript_manager                # TranscriptAnalysisManager | NoOpTranscriptManager
+_captured_frames: list[bytes]     # Side-channel storage for see_image JPEG frames
+_current_turn_items: list[TurnItem]  # Per-turn accumulator for displayable items
+_turn_results: list[TurnResult]   # Completed turns (used by UI continuous-mode poller)
+cumulative_cost: float            # Running cost total across all turns
 ```
 
 **Key Methods:**
@@ -120,8 +130,18 @@ async process_audio_streaming_chunk(chunk) -> Optional[str]
 async process_audio_streaming_end() -> TurnResult
     # Finalize streaming ASR, run LLM pipeline
 
+def start() -> None
+    # Start background event loop (Gradio mode only)
+
+def stop() -> None
+    # Stop background event loop
+
 def clear_state() -> None
     # Reset conversation history, captured frames, and turn results
+
+async _run_pipeline_after_transcription(transcript) -> TurnResult
+    # Shared post-ASR pipeline (validate → history → LLM → TTS → result)
+    # Called by both manual and streaming paths
 ```
 
 ### Provider Factory (`provider_factory.py`)
@@ -145,12 +165,18 @@ Mutates conversation history, turn items, and captured frames in-place via list 
 
 **Key Functions:**
 ```python
-async process_llm_response(llm, conversation_history, tool_specs, ...) -> None
+async process_llm_response(llm, conversation_history, tool_specs,
+                           speech_output, current_turn_items, captured_frames,
+                           deps, aggregate_cost_fn, tts) -> None
     # Stream LLM, collect text/tool calls, dispatch to execute_tool_calls
+    # Auto-injects a synthetic speak tool call if the LLM returns text without
+    # using the speak tool (fallback for models that skip the tool)
 
 async execute_tool_calls(tool_calls, llm, conversation_history, ...) -> None
-    # Execute individual tools, handle camera/speak specially
-    # Recursively calls process_llm_response after camera image analysis
+    # Execute individual tools, handle camera/see_image/speak specially:
+    #   speak → calls speech_output.speak() for TTS synthesis + playback
+    #   see_image → stores JPEG in captured_frames, replaces b64 in history
+    #   camera → stores image, re-calls process_llm_response for analysis
 ```
 
 ### TurnResult (`turn_result.py`)
@@ -170,7 +196,7 @@ class TurnItem:
 class TurnResult:
     transcript: str           # User's speech transcript
     items: list[TurnItem]     # Ordered displayable items
-    cost: float               # ASR + LLM cost for this turn
+    cost: float               # ASR + LLM cost for this turn (not TTS)
 
     speak_text: str           # (property) All speak items joined with ". "
     has_speak: bool           # (property) Whether any speak item exists
@@ -255,6 +281,45 @@ launch(**kwargs) -> None            # Start server
 close() -> None                     # Shutdown all subsystems
 ```
 
+### SpeechOutput (`speech_output.py`)
+
+Protocol and implementations for TTS synthesis + playback. The handler calls `speech_output.speak(text)` inside `execute_tool_calls` when the `speak` tool fires — this is where TTS actually happens.
+
+**Protocol:**
+```python
+class SpeechOutput(Protocol):
+    async def speak(text: str) -> None
+```
+
+**Implementations:**
+
+| Class | Used by | Behavior |
+|-------|---------|----------|
+| `ConsoleSpeechOutput` | `CascadeLocalStream`, `CascadeTestStream` | Streams TTS chunks to a playback callback with rate limiting; drives head wobbler per chunk |
+| `GradioSpeechOutput` | `CascadeGradioUI` | Splits text into sentences via `split_into_sentences()`, generates TTS in parallel with gate-event ordering, queues to `AudioPlaybackSystem` |
+
+**`split_into_sentences(text, min_length=8)`** — Splits on `.!?,;—`, keeps punctuation attached, merges short segments under `min_length` characters.
+
+### Console Mode (`console.py`)
+
+VAD-based console interface for the cascade pipeline, used when neither `--gradio` nor `--test-file` is specified. Records from `robot.media`, detects speech with Silero VAD, and plays responses through the robot speaker.
+
+**Key Classes:**
+
+- `AudioChunkBuffer` — Accumulates audio samples and yields fixed-size chunks for VAD
+- `VADState` — Enum: LISTENING → RECORDING → PROCESSING
+- `CascadeLocalStream` — Stream manager that runs two concurrent async loops:
+  - `_record_loop()` — reads mic frames, resamples to 16kHz, processes through VAD state machine
+  - `_play_loop()` — pulls audio from playback queue, resamples to output rate, pushes to `robot.media`
+
+```python
+stream = CascadeLocalStream(handler, robot)
+stream.launch()   # Blocking: runs asyncio event loop
+stream.close()    # Stop media, cancel tasks
+```
+
+Wires `ConsoleSpeechOutput` into `handler.speech_output` at init time so the pipeline plays audio through the robot speaker.
+
 ---
 
 ## Provider Abstractions
@@ -271,7 +336,8 @@ class ASRProvider(ABC):
 ```python
 class StreamingASRProvider(ASRProvider):
     async start_stream() -> None
-    async send_chunk(chunk) -> Optional[str]  # Partial transcript
+    async send_audio_chunk(audio_chunk: bytes) -> None
+    async get_partial_transcript() -> Optional[str]
     async end_stream() -> str                  # Final transcript
 ```
 
@@ -306,8 +372,8 @@ class LLMProvider(ABC):
 **Implementations:**
 | Provider | Models |
 |----------|--------|
-| `OpenAILLM` | GPT-4, GPT-4o, GPT-4-turbo |
-| `GeminiLLM` | Gemini 2.0 Flash |
+| `OpenAILLM` | GPT-4o-mini, GPT-5.2-chat (any OpenAI chat model) |
+| `GeminiLLM` | Gemini 2.5 Flash Lite (any Gemini model) |
 
 ### TTS Providers (`tts/`)
 
@@ -351,29 +417,25 @@ User clicks STOP
       ├─ PHASE 2: LLM
       │   └─ llm.generate(history, tools) → response + tool_calls
       │       └─ Add assistant message to history
+      │       └─ If text-only (no tool calls): auto-inject speak tool call
       │
-      ├─ PHASE 3: Tool Execution
+      ├─ PHASE 3: Tool Execution + TTS
       │   └─ For each tool_call:
-      │       ├─ Execute tool
-      │       ├─ Add result to history
+      │       ├─ Execute tool, add result to history
       │       └─ Special handling:
-      │           • speak: Extract message for TTS
-      │           • camera: Add image, re-call LLM
+      │           • speak: call speech_output.speak(message)
+      │             └─ TTS synthesis + playback happens HERE
+      │           • see_image: store JPEG, replace b64 in history
+      │           • camera: store image, re-call LLM for analysis
       │
       └─> Return TurnResult to UI
           (transcript, items=[speak/image/tool/assistant], cost)
 
-UI iterates TurnResult.items:
+UI uses TurnResult.items for display only:
   │
-  ├─ speak items → join text, split into sentences
-  ├─ image items → decode JPEG, save to temp file
-  ├─ tool items → display with metadata
-  │
-  └─ PHASE 4: TTS (if has_speak)
-      └─ For each sentence:
-          ├─ tts.synthesize(sentence) → audio chunks
-          ├─ Queue to audio_queue → playback thread
-          └─ Queue to wobbler_queue → head animation
+  ├─ speak items → show in chatbot
+  ├─ image items → decode JPEG, display
+  └─ tool items → display with metadata
 ```
 
 ### Streaming ASR Flow
@@ -405,35 +467,68 @@ User clicks STOP
 
 ### Config File: `cascade.yaml`
 
+Each section has a `provider:` key selecting the active provider and a `providers:` dict defining all available providers. Each provider entry contains metadata keys (`module`, `class`, `streaming`, `location`, `requires`, `hardware`, `description`) plus provider-specific settings.
+
 ```yaml
 asr:
-  provider: "parakeet" | "openai_whisper" | "parakeet_streaming" | "deepgram_streaming"
-  parakeet:
-    model: "parakeet-large"
-    precision: "float16" | "bfloat16"
-  parakeet_streaming:
-    context_size: [256, 256]
-    depth: 2
-  deepgram_streaming:
-    model: "nova-2"
+  provider: parakeet_mlx_progressive  # Selected provider name
+  providers:
+    whisper_openai:
+      module: whisper_openai
+      class: WhisperOpenAIASR
+      streaming: false
+      requires: [OPENAI_API_KEY]
+      model: whisper-1
+    deepgram:
+      module: deepgram
+      class: DeepgramASR
+      streaming: true
+      requires: [DEEPGRAM_API_KEY]
+      model: nova-2
+    parakeet_mlx:
+      module: parakeet_mlx
+      class: ParakeetMLXASR
+      streaming: false
+      hardware: apple_silicon
+      model: mlx-community/parakeet-tdt-0.6b-v3
+      precision: bf16
+    # ... other providers (parakeet_mlx_streaming, parakeet_mlx_progressive, nemotron, openai_realtime_asr)
 
 llm:
-  provider: "openai_gpt" | "gemini"
-  openai_gpt:
-    model: "gpt-4o" | "gpt-4" | "gpt-4-turbo"
-  gemini:
-    model: "gemini-2.0-flash"
+  provider: gemini-2.5-flash-lite
+  temperature: 1.0
+  providers:
+    gpt-4o-mini:
+      module: openai
+      class: OpenAILLM
+      requires: [OPENAI_API_KEY]
+      model: gpt-4o-mini
+    gemini-2.5-flash-lite:
+      module: gemini
+      class: GeminiLLM
+      requires: [GEMINI_API_KEY]
+      model: gemini-2.5-flash-lite
 
 tts:
-  provider: "openai_tts" | "kokoro" | "elevenlabs"
-  trim_silence: true | false
-  openai_tts:
-    voice: "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer"
-  kokoro:
-    voice: "af" | "am" | "bf" | "bm"
-  elevenlabs:
-    voice_id: "..."
-    model: "eleven_monolingual_v1" | "eleven_turbo_v2"
+  provider: kokoro
+  trim_silence: true
+  providers:
+    tts_openai:
+      module: openai
+      class: OpenAITTS
+      requires: [OPENAI_API_KEY]
+      voice: alloy
+    kokoro:
+      module: kokoro
+      class: KokoroTTS
+      hardware: apple_silicon
+      voice: am_adam
+    elevenlabs:
+      module: elevenlabs
+      class: ElevenLabsTTS
+      requires: [ELEVENLABS_API_KEY]
+      voice_id: "..."
+      model: eleven_flash_v2_5
 ```
 
 ### Environment Variables
@@ -447,10 +542,35 @@ ELEVENLABS_API_KEY  # Required for ElevenLabs TTS
 
 ### Config Loading (`config.py`)
 
+Lazy singleton via `get_config()` (created on first call, not on import):
+
 ```python
-config = CascadeConfig()  # Singleton, loaded on import
-# Access: config.CASCADE_ASR_PROVIDER, config.CASCADE_LLM_MODEL, etc.
+from cascade.config import get_config
+config = get_config()
+
+# Key attributes:
+config.asr_provider       # str — selected ASR provider name
+config.llm_provider       # str — selected LLM provider name
+config.tts_provider       # str — selected TTS provider name
+config.asr_providers      # dict — all ASR provider definitions
+config.llm_providers      # dict — all LLM provider definitions
+config.tts_providers      # dict — all TTS provider definitions
+config.llm_temperature    # float — LLM temperature (default 1.0)
+config.tts_trim_silence   # bool — trim silence from TTS output
+config.gliner_model       # str — GLiNER model for entity recognition
+config.OPENAI_API_KEY     # str|None — from environment
+config.DEEPGRAM_API_KEY   # str|None
+config.GEMINI_API_KEY     # str|None
+config.ELEVENLABS_API_KEY # str|None
+
+# Helper methods:
+config.get_asr_settings()    # Provider settings (excludes metadata)
+config.is_asr_streaming()    # Whether selected ASR supports streaming
+config.get_llm_settings()
+config.get_tts_settings()
 ```
+
+`set_config(cfg)` is available for test overrides.
 
 ---
 
@@ -470,8 +590,8 @@ Pre-warmed persistent threads created at UI startup:
        (maxsize=100)
             │
 ┌───────────┴─────────────┐
-│ gradio_ui               │  ← Enqueues TTS chunks
-│ _synthesize_for_gradio  │
+│ GradioSpeechOutput      │  ← Enqueues TTS chunks (from speech_output.py)
+│ .speak()                │
 └───────────┬─────────────┘
             │
        wobbler_queue
@@ -519,24 +639,38 @@ main.py
       │   │   ├─> llm/ providers
       │   │   └─> tts/ providers
       │   ├─> pipeline.py (process_llm_response, execute_tool_calls)
+      │   │   └─> speech_output.py (SpeechOutput.speak() for TTS)
       │   └─> transcript_analysis/ (TranscriptAnalysisManager)
       │       ├─> loader.py (reads profiles/<name>/reactions.yaml)
       │       ├─> keyword_analyzer.py
       │       └─> entity_analyzer.py (optional, requires gliner)
       │
-      └─> ui/gradio_app.py (CascadeGradioUI)
-          │
-          ├─> ui/audio_playback.py (AudioPlaybackSystem)
-          ├─> ui/audio_recording.py (Recorders)
+      ├─[--gradio]─> ui/gradio_app.py (CascadeGradioUI)
+      │   ├─> ui/audio_playback.py (AudioPlaybackSystem)
+      │   ├─> ui/audio_recording.py (Recorders)
+      │   ├─> speech_output.py (GradioSpeechOutput → AudioPlaybackSystem)
+      │   └─> handler (reference)
+      │
+      ├─[default]─> console.py (CascadeLocalStream)
+      │   ├─> speech_output.py (ConsoleSpeechOutput → robot.media)
+      │   ├─> vad.py (SileroVAD)
+      │   └─> handler (reference)
+      │
+      └─[--test-file]─> test_stream.py (CascadeTestStream)
+          ├─> speech_output.py (ConsoleSpeechOutput → sounddevice)
           └─> handler (reference)
 ```
 
 **Key relationships:**
-- `entry.py` creates both handler and UI, wires them together
+- `entry.py` creates handler + one stream manager, wires `speech_output` into handler
 - Handler owns conversation state, provider instances, and transcript analysis
-- UI owns audio I/O and display, reads from handler
-- AudioPlaybackSystem handles pre-warmed playback threads
-- Recording classes encapsulate push-to-talk and VAD modes
+- Pipeline calls `handler.speech_output.speak()` during tool execution — TTS happens inside the pipeline
+- Each stream manager provides its own `SpeechOutput` implementation:
+  - Gradio: `GradioSpeechOutput` (parallel sentence synthesis → pre-warmed playback threads)
+  - Console: `ConsoleSpeechOutput` (rate-limited streaming → robot speaker)
+  - Test: `ConsoleSpeechOutput` (rate-limited streaming → sounddevice callback)
+- AudioPlaybackSystem handles pre-warmed playback threads (Gradio mode only)
+- Recording classes encapsulate push-to-talk and VAD modes (Gradio mode only)
 - Transcript analysis runs in parallel with the main ASR → LLM → TTS pipeline
 
 ---
@@ -547,13 +681,13 @@ main.py
 
 `run_cascade_mode()` selects one of three stream managers based on CLI flags:
 
-| Priority | Condition | Stream Manager | Handler lifecycle |
-|----------|-----------|----------------|-------------------|
-| 1 | `--test-file` | `CascadeTestStream` | Synchronous (no `handler.start()`) |
-| 2 | `--gradio` | `CascadeGradioUI` | Background event loop (`handler.start()` / `handler.stop()`) |
-| 3 | (default) | `CascadeLocalStream` | Synchronous (no `handler.start()`) |
+| Priority | Condition | Stream Manager | Source file | Handler lifecycle |
+|----------|-----------|----------------|-------------|-------------------|
+| 1 | `--test-file` | `CascadeTestStream` | `test_stream.py` | Synchronous (no `handler.start()`) |
+| 2 | `--gradio` | `CascadeGradioUI.create_interface()` | `ui/gradio_app.py` | Background event loop (`handler.start()` / `handler.stop()`) |
+| 3 | (default) | `CascadeLocalStream` | `console.py` | Synchronous (no `handler.start()`) |
 
-All three share the same shutdown sequence: `stream_manager.close()` → stop services → `robot.client.disconnect()` → `os._exit(0)`.
+All three share the same shutdown sequence: `stream_manager.close()` → stop services → `robot.media.close()` → `robot.client.disconnect()` → `os._exit(0)`.
 
 ### Command Line Usage
 
@@ -569,20 +703,23 @@ reachy-mini-conversation-app --cascade --gradio --head-tracker yolo
 
 Profiles end-to-end latency from user action to first audio playback.
 
-**Key Events:**
-- `user_stop_click` - User clicks STOP recording
-- `recording_ready` - Audio frames concatenated to WAV
-- `asr_complete` - Transcription finished
-- `llm_start` / `llm_complete` - LLM generation
-- `tts_first_chunk_ready` - First audio chunk from TTS
-- `audio_playback_started` - First chunk written to speaker
+**Key Events (two flows):**
+
+Button flow (Gradio push-to-talk):
+- `user_stop_click` → `recording_ready` → `transcribing_start` → `asr_complete` → `llm_start` → `llm_complete` → `tts_start` → `tts_first_chunk_ready` → `audio_playback_started`
+
+VAD flow (console mode, continuous mode, test file):
+- `vad_speech_end` → `recording_captured` → `transcribing_start` → `asr_complete` → `llm_start` → `llm_complete` → `tts_start` → `tts_first_chunk_ready` → `audio_playback_started`
+
+`print_summary()` auto-detects which flow was used and displays the appropriate stages.
 
 **Usage:**
 ```python
 from cascade.timing import tracker
 
-tracker.reset("pipeline_start")
+tracker.reset("vad_speech_end")  # or "pipeline_start" for button flow
 tracker.mark("event_name", {"metadata": "value"})
+tracker.get_duration("start_event", "end_event")  # -> ms or None
 tracker.print_summary()
 ```
 
@@ -723,19 +860,19 @@ class ReactionConfig:
     name: str
     callback: Callable[..., Awaitable[None]]
     trigger: TriggerConfig
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = field(default_factory=dict)
     repeatable: bool = False
 
 @dataclass
 class TriggerConfig:
-    words: list[str] = []
-    entities: list[str] = []
-    all: list[TriggerConfig] = []
+    words: list[str] = field(default_factory=list)
+    entities: list[str] = field(default_factory=list)
+    all: list[TriggerConfig] = field(default_factory=list)
 
 @dataclass
 class TriggerMatch:
-    words: list[str] = []
-    entities: list[EntityMatch] = []
+    words: list[str] = field(default_factory=list)
+    entities: list[EntityMatch] = field(default_factory=list)
 
 @dataclass
 class EntityMatch:
@@ -748,17 +885,12 @@ class EntityMatch:
 
 ## Design Decisions
 
-**Why Handler doesn't play audio:**
-- Gradio UI needs full control for pre-warmed zero-latency playback
-- Enables parallel sentence synthesis
-- Head wobbler synchronization
-- Non-blocking UI updates
-
-**Why TTS is called by UI, not Handler:**
-- Handler executes `speak` tool but doesn't synthesize
-- UI extracts speak messages from conversation history
-- UI can optimize playback strategy independently
-- Decouples audio presentation from pipeline logic
+**Why TTS is driven by a `SpeechOutput` protocol, not hardcoded:**
+- `speak` tool calls `speech_output.speak()` inside the pipeline — TTS happens as part of tool execution
+- Each stream manager injects its own implementation:
+  - Gradio: `GradioSpeechOutput` — parallel sentence synthesis, pre-warmed playback threads
+  - Console/Test: `ConsoleSpeechOutput` — rate-limited streaming with playback callback
+- Handler and pipeline stay decoupled from audio I/O details
 
 **Why conversation history lives in Handler:**
 - Handler needs full context for LLM generation
@@ -941,7 +1073,6 @@ TOTAL PERCEIVED LATENCY: Speech End → First Audio
 
 ## Future Extensions
 
-- Console Mode with VAD (voice activity detection)
 - Streaming TTS integration
 - Multi-language support with per-provider language codes
 - Visual/audio cues for tool execution feedback
