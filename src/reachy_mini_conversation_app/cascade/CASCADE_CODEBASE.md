@@ -14,8 +14,9 @@ Cascade Mode implements a traditional **ASR → LLM → TTS** conversation pipel
 
 ### Current Scope
 
-- Gradio UI only (console mode with VAD not yet implemented)
-- Manual push-to-talk recording
+- Gradio UI with push-to-talk and continuous VAD recording
+- Console mode with VAD-based speech detection
+- Test file mode for automated end-to-end testing (`--test-file`)
 - Optional streaming ASR support
 - Head wobbler animation synchronized with audio playback
 
@@ -34,6 +35,7 @@ cascade/
 ├── config.py                          # Configuration loader (cascade.yaml)
 ├── timing.py                          # Latency tracking & profiling
 ├── vad.py                             # Silero VAD for continuous mode
+├── test_stream.py                     # Test file mode (automated TTS→ASR→LLM→TTS testing)
 │
 ├── ui/                                # Gradio interface components
 │   ├── __init__.py                    # Exports CascadeGradioUI
@@ -543,38 +545,15 @@ main.py
 
 ### Entry Function (`entry.py`)
 
-```python
-def run_cascade_mode(deps, robot, args, logger) -> None:
-    """Entry called from main.py when --cascade flag is set."""
+`run_cascade_mode()` selects one of three stream managers based on CLI flags:
 
-    # Validate Gradio requirement
-    if not args.gradio:
-        logger.error("Cascade mode requires --gradio flag")
-        sys.exit(1)
+| Priority | Condition | Stream Manager | Handler lifecycle |
+|----------|-----------|----------------|-------------------|
+| 1 | `--test-file` | `CascadeTestStream` | Synchronous (no `handler.start()`) |
+| 2 | `--gradio` | `CascadeGradioUI` | Background event loop (`handler.start()` / `handler.stop()`) |
+| 3 | (default) | `CascadeLocalStream` | Synchronous (no `handler.start()`) |
 
-    # Initialize components
-    handler = CascadeHandler(deps)
-    cascade_ui = CascadeGradioUI(handler, robot)
-    stream_manager = cascade_ui.create_interface()
-
-    # Start background services
-    deps.movement_manager.start()
-    deps.head_wobbler.start()
-    deps.camera_worker.start()
-    deps.vision_manager.start()
-    handler.start()
-
-    # Run Gradio (blocks until user closes)
-    try:
-        stream_manager.launch()
-    except KeyboardInterrupt:
-        logger.info("Shutdown...")
-    finally:
-        # Cleanup all services
-        stream_manager.close()
-        handler.stop()
-        # ... stop other services
-```
+All three share the same shutdown sequence: `stream_manager.close()` → stop services → `robot.client.disconnect()` → `os._exit(0)`.
 
 ### Command Line Usage
 
@@ -864,6 +843,99 @@ openai_realtime_asr:
 - True real-time mid-speech partials would require periodic audio commits (causing fragmented transcripts)
 
 **Potential fix (not implemented):** Pre-warm WebSocket connection before speech starts, keeping it in standby mode to eliminate connection latency.
+
+---
+
+## Test File Mode (`test_stream.py`)
+
+Automated end-to-end testing of the cascade pipeline without human interaction. Reads text utterances from a file, synthesizes them to audio via TTS, and feeds the audio through the full pipeline (TTS→ASR→LLM→TTS→robot).
+
+### Usage
+
+```bash
+# Implies --cascade automatically
+reachy-mini-conversation-app --test-file scripts/test_utterances.txt --no-camera
+```
+
+### Test File Format
+
+Plain text, one utterance per line. `#` comments and blank lines are ignored:
+
+```
+# Greetings
+Hello, what is your name?
+
+# Movement commands
+Can you look to the left?
+```
+
+### Architecture
+
+`CascadeTestStream` is a stream manager (like `CascadeLocalStream` or `CascadeGradioUI`) that replaces mic/VAD input with synthetic audio.
+
+```
+Text file → Input TTS (af_heart voice) → PCM audio
+                                            │
+                    ┌───────────────────────┤
+                    │                       │
+                    ▼                       ▼
+            Speaker playback        ASR (streaming or batch)
+            (sounddevice callback)          │
+                                            ▼
+                                    LLM → Tool calls
+                                            │
+                                            ▼
+                                    Output TTS (robot voice)
+                                            │
+                                            ▼
+                                    Speaker playback
+                                    (same sounddevice stream)
+```
+
+**Key components:**
+
+- **Input TTS** — Separate `TTSProvider` instance using a distinct voice (`af_heart`) so user and robot are distinguishable
+- **Callback-based playback** — `sd.OutputStream` in callback mode pulls from a `bytearray` buffer at a steady rate. Both user and robot audio share this buffer, avoiding the choppy playback that blocking `write()` calls cause in an async context
+- **Two processing paths:**
+  - **Streaming ASR** (`_process_streaming`): resamples PCM to 16kHz, feeds 32ms chunks at real-time pace via `process_audio_streaming_start/chunk/end`. This triggers partial transcripts and transcript analysis reactions during "speech", matching the live VAD flow
+  - **Batch ASR** (`_process_manual`): plays user audio, then sends full WAV via `process_audio_manual`
+
+### What This Tests
+
+- Full ASR→LLM→TTS pipeline with real provider calls
+- Tool calling (speak, movements, emotions)
+- Transcript analysis / live reactions (streaming path only)
+- Head wobbler animation synchronized with response audio
+- Movement manager integration
+- Cost tracking across turns
+- Latency tracking (uses `vad_speech_end` reference for correct summary)
+- Conversation history accumulation across turns
+
+### What This Does NOT Test
+
+Since `CascadeTestStream` is its own stream manager, it bypasses several components that the other modes use:
+
+- **VAD speech detection** — Utterances are pre-defined text, not detected from audio. Silero VAD is never invoked
+- **Microphone input / robot.media recording** — No `start_recording()` or `get_audio_sample()` calls. Audio comes from TTS, not hardware
+- **Gradio UI** — No web interface, no push-to-talk buttons, no chatbot display, no `AudioPlaybackSystem`
+- **Robot speaker output** — Response audio plays through computer speakers (`sounddevice`), not `robot.media.push_audio_sample()`
+- **ContinuousVADRecorder / PushToTalkRecorder** — These recording classes are not used
+- **Barge-in / interruption handling** — Utterances are sequential with fixed delays; there is no overlap between user speech and robot response
+- **Audio resampling for robot hardware** — The `_play_loop` resampling path in `CascadeLocalStream` (TTS rate → robot output rate) is not exercised
+- **Camera / vision pipeline** — Typically run with `--no-camera`; `describe_scene` tool calls would fail without it
+
+### Latency Tracking
+
+The tracker is reset **after** input TTS playback finishes (not when utterance generation starts), so the summary reflects only the pipeline latency. It uses `vad_speech_end` as the reference event so `print_summary()` recognizes the VAD flow and shows all stages:
+
+```
+1. Recording Capture
+2. ASR Processing
+3. LLM Generation
+4. TTS time to first audio
+   ↳ Audio system delay
+TOTAL PERCEIVED LATENCY: Speech End → First Audio
+```
 
 ---
 
