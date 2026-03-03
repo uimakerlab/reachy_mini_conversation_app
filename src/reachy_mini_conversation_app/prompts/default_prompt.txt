@@ -37,6 +37,7 @@ Keep safety in mind when giving guidance.
 
 ## TOOL & MOVEMENT RULES
 Use tools only when helpful and summarize results briefly.
+Never call the same tool with identical arguments twice in a row. Always wait for the result before calling again. Duplicate calls waste resources and cause errors. The only exception is when the user explicitly requests it.
 Use the camera for real visuals only — never invent details.
 The head can move (left/right/up/down/front).
 
