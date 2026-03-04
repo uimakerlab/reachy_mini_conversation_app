@@ -50,10 +50,7 @@ cascade/
 │   ├── base.py                        # ASRProvider abstract base
 │   ├── base_streaming.py              # StreamingASRProvider abstract base
 │   ├── audio_utils.py                 # Shared WAV parsing & resampling (librosa)
-│   ├── _parakeet_helpers.py           # Shared Parakeet model loading & warmup
 │   ├── whisper_openai.py              # OpenAI Whisper implementation
-│   ├── parakeet_mlx.py                # Parakeet MLX batch implementation
-│   ├── parakeet_mlx_streaming.py      # Parakeet MLX streaming implementation (RNNT, experimental)
 │   ├── parakeet_mlx_progressive.py    # Parakeet MLX progressive (sentence-aware sliding window)
 │   ├── deepgram.py                    # Deepgram streaming implementation
 │   ├── nemotron.py                    # Nemotron ASR implementation
@@ -358,8 +355,6 @@ class StreamingASRProvider(ASRProvider):
 | Provider | Type | Description |
 |----------|------|-------------|
 | `WhisperOpenAIASR` | Batch | OpenAI Whisper API |
-| `ParakeetMLXASR` | Batch | Local Parakeet via MLX (parakeet-mlx) |
-| `ParakeetMLXStreamingASR` | Streaming | Local RNNT streaming via MLX (parakeet-mlx, experimental) |
 | `ParakeetMLXProgressiveASR` | Streaming | Local progressive with sentence-aware sliding window (mlx-audio) |
 | `DeepgramASR` | Streaming | Deepgram Nova via WebSocket |
 | `NemotronASR` | Streaming | NVIDIA Nemotron ASR |
@@ -493,14 +488,7 @@ asr:
       streaming: true
       requires: [DEEPGRAM_API_KEY]
       model: nova-2
-    parakeet_mlx:
-      module: parakeet_mlx
-      class: ParakeetMLXASR
-      streaming: false
-      hardware: apple_silicon
-      model: mlx-community/parakeet-tdt-0.6b-v3
-      precision: bf16
-    # ... other providers (parakeet_mlx_streaming, parakeet_mlx_progressive, nemotron, openai_realtime_asr)
+    # ... other providers (parakeet_mlx_progressive, nemotron, openai_realtime_asr)
 
 llm:
   provider: gemini-2.5-flash-lite
@@ -912,40 +900,11 @@ class EntityMatch:
 
 ### MLX Thread Affinity (Apple Silicon)
 
-**Problem:** Local MLX-based providers (Parakeet) may produce empty transcriptions when called from Gradio.
+**Problem:** Local MLX-based providers (Parakeet) may produce empty transcriptions when MLX operations run in thread pool workers.
 
-**Root Cause:** MLX has thread affinity requirements. The cascade architecture involves multiple threads:
-1. **Main thread** - Gradio UI
-2. **Handler event loop thread** - Runs `asyncio` event loop via `threading.Thread`
-3. **Thread pool workers** - Created by `asyncio.to_thread()` for "non-blocking" operations
+**Root Cause:** MLX has thread affinity requirements. When MLX operations are wrapped in `asyncio.to_thread()`, they execute in different thread pool workers. MLX models loaded in one thread context may not work correctly when inference runs in a different thread.
 
-When MLX operations are wrapped in `asyncio.to_thread()`, they execute in different thread pool workers. MLX models loaded in one thread context may not work correctly when inference runs in a different thread.
-
-**Symptoms:**
-- Audio chunks are sent successfully (logs show "✓ Sent X samples")
-- But `result.text` is always empty
-- `draft_tokens` and `finalized_tokens` lists remain empty
-- Works fine in standalone tests (single thread), fails in Gradio
-
-**Solution:** Run all MLX operations **synchronously** - no `asyncio.to_thread()`:
-
-```python
-# ❌ WRONG - spawns thread pool workers
-async def send_audio_chunk(self, chunk):
-    def _add_audio():
-        with self._lock:
-            self.transcriber.add_audio(mx.array(audio))
-    await asyncio.to_thread(_add_audio)
-
-# ✅ CORRECT - synchronous, respects thread affinity
-async def send_audio_chunk(self, chunk):
-    audio_mlx = mx.array(audio)
-    self.transcriber.add_audio(audio_mlx)
-```
-
-**Why this works:** MLX operations are fast on Apple Silicon (~10-50ms for small chunks). The slight blocking is acceptable and avoids thread context issues.
-
-**Comparison with cloud providers:** Deepgram streaming works with fire-and-forget `asyncio.run_coroutine_threadsafe()` because it only does async network I/O (WebSocket send) - no local compute. The transcription happens server-side.
+**Solution:** Run all MLX operations **synchronously** in local providers — no `asyncio.to_thread()`. MLX operations are fast on Apple Silicon (~10-50ms for small chunks), so the slight blocking is acceptable.
 
 **Key takeaway:** For local ML inference on Apple Silicon, prefer synchronous execution over threading abstractions.
 
