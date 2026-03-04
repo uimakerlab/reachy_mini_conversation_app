@@ -470,7 +470,19 @@ User clicks STOP
 
 ### Config File: `cascade.yaml`
 
-Each section has a `provider:` key selecting the active provider and a `providers:` dict defining all available providers. Each provider entry contains metadata keys (`module`, `class`, `streaming`, `location`, `requires`, `hardware`, `description`) plus provider-specific settings.
+Each section has a `provider:` key selecting the active provider and a `providers:` dict defining all available providers. Each provider entry contains metadata keys (`module`, `class`, `streaming`, `location`, `requires`, `hardware`, `description`, `import_check`, `install_extra`) plus provider-specific settings.
+
+#### Hardware Tags
+
+| Tag | Validation | Used by |
+|---|---|---|
+| `apple_silicon` | Hard error if not arm64 + Darwin | parakeet_mlx_progressive |
+| `cuda` | Hard error if `torch.cuda.is_available()` is False | nemotron |
+| `null` | No check | kokoro, cloud providers |
+
+#### Dependency Checks
+
+Local providers can declare `import_check` (module to import) and `install_extra` (uv extra name). At config load time, if the import fails, a `RuntimeError` is raised with install instructions.
 
 ```yaml
 asr:
@@ -517,7 +529,9 @@ tts:
     kokoro:
       module: kokoro
       class: KokoroTTS
-      hardware: apple_silicon
+      hardware: null
+      import_check: kokoro
+      install_extra: cascade_kokoro
       voice: am_adam
     elevenlabs:
       module: elevenlabs
@@ -900,13 +914,7 @@ class EntityMatch:
 
 ### MLX Thread Affinity (Apple Silicon)
 
-**Problem:** Local MLX-based providers (Parakeet) may produce empty transcriptions when MLX operations run in thread pool workers.
-
-**Root Cause:** MLX has thread affinity requirements. When MLX operations are wrapped in `asyncio.to_thread()`, they execute in different thread pool workers. MLX models loaded in one thread context may not work correctly when inference runs in a different thread.
-
-**Solution:** Run all MLX operations **synchronously** in local providers — no `asyncio.to_thread()`. MLX operations are fast on Apple Silicon (~10-50ms for small chunks), so the slight blocking is acceptable.
-
-**Key takeaway:** For local ML inference on Apple Silicon, prefer synchronous execution over threading abstractions.
+**Note:** MLX-based providers (Parakeet) call MLX synchronously inside async methods, intentionally blocking the event loop for ~10-50ms per chunk. Do **not** wrap these calls in `asyncio.to_thread()` — MLX has thread affinity requirements and will produce empty transcriptions if inference runs in a different thread than model loading. The blocking is negligible at this scale. If a future model makes inference significantly slower (>100ms), consider a dedicated single-thread executor instead.
 
 ### OpenAI Realtime ASR - "Streaming" Misconception
 

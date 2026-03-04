@@ -1,5 +1,6 @@
 """Cascade-specific configuration, loaded only when cascade mode is active."""
 
+import importlib
 import os
 import logging
 import platform
@@ -15,9 +16,9 @@ logger = logging.getLogger(__name__)
 logging.getLogger("numba").setLevel(logging.WARNING)
 
 # Metadata keys (not passed to provider constructor)
-ASR_METADATA_KEYS = {"module", "class", "streaming", "location", "requires", "hardware", "description", "status"}
+ASR_METADATA_KEYS = {"module", "class", "streaming", "location", "requires", "hardware", "description", "status", "import_check", "install_extra"}
 LLM_METADATA_KEYS = {"module", "class", "location", "requires", "description"}
-TTS_METADATA_KEYS = {"module", "class", "location", "requires", "hardware", "description"}
+TTS_METADATA_KEYS = {"module", "class", "location", "requires", "hardware", "description", "import_check", "install_extra"}
 
 
 def _load_cascade_config() -> Dict[str, Any]:
@@ -157,6 +158,18 @@ class CascadeConfig:
                         f"Set it in your .env file or environment."
                     )
 
+            # Required dependency installed?
+            import_check = info.get("import_check")
+            if import_check:
+                try:
+                    importlib.import_module(import_check)
+                except ImportError:
+                    extra = info.get("install_extra", "???")
+                    raise RuntimeError(
+                        f"{section.upper()} provider '{provider_name}' requires '{import_check}'. "
+                        f"Install with: uv sync --extra {extra}"
+                    )
+
             # Hardware compatible?
             hw = info.get("hardware")
             if hw == "apple_silicon":
@@ -166,10 +179,20 @@ class CascadeConfig:
                         f"Detected: {platform.system()} {platform.machine()}. "
                         f"Choose a cloud provider or one compatible with your hardware."
                     )
-            elif hw == "cuda_or_mps":
-                logger.warning(
-                    f"{section.upper()} provider '{provider_name}' works best with CUDA or MPS GPU."
-                )
+            elif hw == "cuda":
+                try:
+                    import torch
+                    if not torch.cuda.is_available():
+                        raise RuntimeError(
+                            f"{section.upper()} provider '{provider_name}' requires an NVIDIA CUDA GPU. "
+                            f"No CUDA device detected. Choose a cloud provider instead."
+                        )
+                    logger.info(f"{section.upper()} provider '{provider_name}': CUDA GPU detected.")
+                except ImportError:
+                    raise RuntimeError(
+                        f"{section.upper()} provider '{provider_name}' requires PyTorch with CUDA support. "
+                        f"PyTorch is not installed."
+                    )
 
     def _log_config(self) -> None:
         """Log the loaded configuration."""

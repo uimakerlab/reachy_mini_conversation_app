@@ -53,6 +53,8 @@ asr:
       location: local
       requires: []
       hardware: apple_silicon
+      import_check: mlx_audio
+      install_extra: cascade_parakeet_progressive
       description: "Parakeet MLX progressive - live transcription with sentence-aware sliding window"
       # Settings
       model: mlx-community/parakeet-tdt-0.6b-v3
@@ -60,14 +62,16 @@ asr:
       max_window_size: 15.0
       sentence_buffer: 2.0
 
-    # ========== LOCAL PROVIDERS (CUDA/MPS) ==========
+    # ========== LOCAL PROVIDERS (CUDA) ==========
     nemotron:
       module: nemotron
       class: NemotronASR
       streaming: true
       location: local
       requires: []
-      hardware: cuda_or_mps
+      hardware: cuda
+      import_check: nemo.collections
+      install_extra: cascade_nemotron
       description: "NVIDIA Nemotron - cache-aware streaming ASR"
       # Settings
       model: nvidia/nemotron-speech-streaming-en-0.6b
@@ -139,8 +143,10 @@ tts:
       class: KokoroTTS
       location: local
       requires: []
-      hardware: apple_silicon
-      description: "Kokoro local TTS for Apple Silicon"
+      hardware: null
+      import_check: kokoro
+      install_extra: cascade_kokoro
+      description: "Kokoro local TTS - works on any PyTorch platform"
       # Settings
       voice: am_adam
       # No cost for local providers
