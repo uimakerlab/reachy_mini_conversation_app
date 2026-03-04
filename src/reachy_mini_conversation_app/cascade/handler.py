@@ -11,6 +11,7 @@ from reachy_mini_conversation_app.cascade.asr import ASRProvider, StreamingASRPr
 from reachy_mini_conversation_app.cascade.llm import LLMProvider
 from reachy_mini_conversation_app.cascade.tts import TTSProvider
 from reachy_mini_conversation_app.cascade.config import get_config
+from reachy_mini_conversation_app.cascade.pipeline import PipelineContext
 from reachy_mini_conversation_app.tools.core_tools import (
     ToolDependencies,
     get_tool_specs,
@@ -120,6 +121,11 @@ class CascadeHandler:
         """Reset transcript analysis between conversation turns."""
         self.transcript_manager.reset()
 
+    @property
+    def turn_results(self) -> list[TurnResult]:
+        """Completed conversation turns (read by UI poller)."""
+        return self._turn_results
+
     def _aggregate_cost(self, provider: Union[ASRProvider, LLMProvider, TTSProvider], provider_name: str) -> None:
         """Aggregate cost from a provider if it tracks costs."""
         if hasattr(provider, "last_cost") and provider.last_cost > 0:
@@ -156,11 +162,15 @@ class CascadeHandler:
         # LLM: Text → Response + Tool Calls
         logger.info("Generating LLM response...")
         tracker.mark("llm_start")
-        await pipeline.process_llm_response(
-            self.llm, self.conversation_history, self.tool_specs,
-            self.speech_output, self._current_turn_items, self._captured_frames,
-            self.deps, self._aggregate_cost, self.tts,
+        ctx = PipelineContext(
+            llm=self.llm, tts=self.tts, speech_output=self.speech_output,
+            conversation_history=self.conversation_history,
+            tool_specs=self.tool_specs,
+            current_turn_items=self._current_turn_items,
+            captured_frames=self._captured_frames,
+            deps=self.deps, aggregate_cost_fn=self._aggregate_cost,
         )
+        await pipeline.process_llm_response(ctx)
         tracker.mark("llm_complete")
 
         # Reset transcript analysis for next turn

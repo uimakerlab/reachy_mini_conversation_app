@@ -112,8 +112,14 @@ is_streaming_asr: bool            # Whether current ASR provider supports stream
 transcript_manager                # TranscriptAnalysisManager | NoOpTranscriptManager
 _captured_frames: list[bytes]     # Side-channel storage for see_image JPEG frames
 _current_turn_items: list[TurnItem]  # Per-turn accumulator for displayable items
-_turn_results: list[TurnResult]   # Completed turns (used by UI continuous-mode poller)
+_turn_results: list[TurnResult]   # Completed turns (private; use turn_results property)
 cumulative_cost: float            # Running cost total across all turns
+```
+
+**Key Properties:**
+```python
+turn_results -> list[TurnResult]
+    # Public read-only accessor for completed turns (used by UI poller)
 ```
 
 **Key Methods:**
@@ -161,18 +167,33 @@ convert_tool_specs_to_chat_format(specs) -> List[Dict]
 ### Pipeline (`pipeline.py`)
 
 Module-level async functions for LLM response processing and tool execution.
-Mutates conversation history, turn items, and captured frames in-place via list arguments.
+Mutates conversation history, turn items, and captured frames in-place via `PipelineContext`.
+
+**PipelineContext:**
+```python
+@dataclass
+class PipelineContext:
+    llm: LLMProvider
+    tts: TTSProvider
+    speech_output: SpeechOutput | None
+    conversation_history: list[dict[str, Any]]
+    tool_specs: list[dict[str, Any]]
+    current_turn_items: list[TurnItem]
+    captured_frames: list[bytes]
+    deps: ToolDependencies
+    aggregate_cost_fn: Callable
+```
+
+Built once in `handler._run_pipeline_after_transcription()` and threaded through all pipeline calls.
 
 **Key Functions:**
 ```python
-async process_llm_response(llm, conversation_history, tool_specs,
-                           speech_output, current_turn_items, captured_frames,
-                           deps, aggregate_cost_fn, tts) -> None
+async process_llm_response(ctx: PipelineContext) -> None
     # Stream LLM, collect text/tool calls, dispatch to execute_tool_calls
     # Auto-injects a synthetic speak tool call if the LLM returns text without
     # using the speak tool (fallback for models that skip the tool)
 
-async execute_tool_calls(tool_calls, llm, conversation_history, ...) -> None
+async execute_tool_calls(tool_calls, ctx: PipelineContext) -> None
     # Execute individual tools, handle camera/see_image/speak specially:
     #   speak → calls speech_output.speak() for TTS synthesis + playback
     #   see_image → stores JPEG in captured_frames, replaces b64 in history
@@ -208,7 +229,7 @@ class TurnResult:
 - `tool` — from `pipeline.execute_tool_calls()` for other tools (movements, etc.)
 - `assistant` — from `pipeline.process_llm_response()` when LLM returns text + tool calls but no speak
 
-The handler stores completed turns in `_turn_results: list[TurnResult]`, used by the UI's continuous-mode poller.
+The handler stores completed turns in `_turn_results` (exposed as `handler.turn_results` property), used by the UI's continuous-mode poller.
 
 ### UI Components (`ui/`)
 

@@ -178,7 +178,7 @@ class CascadeGradioUI:
                 status = state_messages.get(recorder.state, "Listening...")
 
                 # Rebuild chat from turn results
-                turns = self.handler._turn_results
+                turns = self.handler.turn_results
                 if not turns:
                     return chat_history, status
 

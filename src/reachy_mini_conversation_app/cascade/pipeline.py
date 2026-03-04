@@ -5,6 +5,7 @@ import json
 import base64
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Callable
+from dataclasses import dataclass
 
 from reachy_mini_conversation_app.cascade.llm import LLMProvider
 from reachy_mini_conversation_app.cascade.tts import TTSProvider
@@ -20,26 +21,31 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def process_llm_response(
-    llm: LLMProvider,
-    conversation_history: list[dict[str, Any]],
-    tool_specs: list[dict[str, Any]],
-    speech_output: SpeechOutput | None,
-    current_turn_items: list[TurnItem],
-    captured_frames: list[bytes],
-    deps: ToolDependencies,
-    aggregate_cost_fn: Callable,
-    tts: TTSProvider,
-) -> None:
+@dataclass
+class PipelineContext:
+    """Bundle of references passed through the LLM/tool pipeline."""
+
+    llm: LLMProvider
+    tts: TTSProvider
+    speech_output: SpeechOutput | None
+    conversation_history: list[dict[str, Any]]
+    tool_specs: list[dict[str, Any]]
+    current_turn_items: list[TurnItem]
+    captured_frames: list[bytes]
+    deps: ToolDependencies
+    aggregate_cost_fn: Callable
+
+
+async def process_llm_response(ctx: PipelineContext) -> None:
     """Process LLM response with streaming, tool calls, and TTS."""
     try:
         # Generate streaming response
         text_chunks: List[str] = []
         tool_calls: List[Dict[str, Any]] = []
 
-        async for chunk in llm.generate(
-            messages=conversation_history,
-            tools=tool_specs,
+        async for chunk in ctx.llm.generate(
+            messages=ctx.conversation_history,
+            tools=ctx.tool_specs,
             temperature=get_config().llm_temperature,
         ):
             if chunk.type == "text_delta" and chunk.content:
@@ -55,7 +61,7 @@ async def process_llm_response(
                 break
 
         # Aggregate LLM cost after generator completes
-        aggregate_cost_fn(llm, "LLM")
+        ctx.aggregate_cost_fn(ctx.llm, "LLM")
 
         # Create assistant message with text, tool calls...
         assistant_message: Dict[str, Any] = {"role": "assistant"}
@@ -71,8 +77,8 @@ async def process_llm_response(
         )
 
         if text_chunks or tool_calls:
-            conversation_history.append(assistant_message)
-            logger.debug(f"Added assistant message to history, history_len={len(conversation_history)}")
+            ctx.conversation_history.append(assistant_message)
+            logger.debug(f"Added assistant message to history, history_len={len(ctx.conversation_history)}")
 
         # Handle text-only responses: auto-inject speak tool call
         # This handles cases where LLM returns text without using the speak tool
@@ -86,22 +92,14 @@ async def process_llm_response(
                 "type": "function",
                 "function": {"name": "speak", "arguments": json.dumps({"message": full_text})},
             }
-            await execute_tool_calls(
-                [synthetic_tool_call], llm, conversation_history, tool_specs,
-                speech_output, current_turn_items, captured_frames, deps,
-                aggregate_cost_fn, tts,
-            )
+            await execute_tool_calls([synthetic_tool_call], ctx)
         elif tool_calls and not any(tc.get("function", {}).get("name") == "speak" for tc in tool_calls):
             # Tool calls but no speak — record assistant text if present
             if full_text:
-                current_turn_items.append(TurnItem(kind="assistant", text=full_text))
+                ctx.current_turn_items.append(TurnItem(kind="assistant", text=full_text))
         if tool_calls:
             # Process normal tool calls
-            await execute_tool_calls(
-                tool_calls, llm, conversation_history, tool_specs,
-                speech_output, current_turn_items, captured_frames, deps,
-                aggregate_cost_fn, tts,
-            )
+            await execute_tool_calls(tool_calls, ctx)
 
     except Exception as e:
         logger.exception(f"Error processing LLM response: {e}")
@@ -109,15 +107,7 @@ async def process_llm_response(
 
 async def execute_tool_calls(
     tool_calls: list[dict[str, Any]],
-    llm: LLMProvider,
-    conversation_history: list[dict[str, Any]],
-    tool_specs: list[dict[str, Any]],
-    speech_output: SpeechOutput | None,
-    current_turn_items: list[TurnItem],
-    captured_frames: list[bytes],
-    deps: ToolDependencies,
-    aggregate_cost_fn: Callable,
-    tts: TTSProvider,
+    ctx: PipelineContext,
 ) -> None:
     """Execute tool calls and handle camera/see_image and speak tool specially."""
     camera_image_bytes: bytes | None = None
@@ -129,7 +119,7 @@ async def execute_tool_calls(
         call_id = ""
         tool_name = "unknown"
         try:
-            call_id, tool_name, arguments = llm.parse_tool_call(tool_call)
+            call_id, tool_name, arguments = ctx.llm.parse_tool_call(tool_call)
 
             logger.info(f"Executing tool: {tool_name}({arguments})")
 
@@ -137,7 +127,7 @@ async def execute_tool_calls(
             result = await dispatch_tool_call(
                 tool_name,
                 json.dumps(arguments),
-                deps,
+                ctx.deps,
             )
 
             # Do not log full result if the tool returned base64 (huge)
@@ -147,7 +137,7 @@ async def execute_tool_calls(
                 logger.info(f"Tool result: {result}")
 
             # Add tool result to conversation
-            conversation_history.append(
+            ctx.conversation_history.append(
                 {
                     "role": "tool",
                     "tool_call_id": call_id,
@@ -156,7 +146,7 @@ async def execute_tool_calls(
                 }
             )
             logger.debug(
-                f"Added tool result to history: name={tool_name}, history_len={len(conversation_history)}"
+                f"Added tool result to history: name={tool_name}, history_len={len(ctx.conversation_history)}"
             )
 
             # Special handling for see_image tool - store frame, replace heavy b64
@@ -164,13 +154,13 @@ async def execute_tool_calls(
                 if "b64_im" in result:
                     b64_im = result["b64_im"]
                     camera_image_bytes = base64.b64decode(b64_im)
-                    frame_index = len(captured_frames)
-                    captured_frames.append(camera_image_bytes)
+                    frame_index = len(ctx.captured_frames)
+                    ctx.captured_frames.append(camera_image_bytes)
                     # Replace the heavy b64 blob in conversation history with a lightweight marker
-                    conversation_history[-1]["content"] = json.dumps(
+                    ctx.conversation_history[-1]["content"] = json.dumps(
                         {"status": "image_captured", "frame_index": frame_index}
                     )
-                    current_turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
+                    ctx.current_turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
                     logger.info("see_image: stored frame %d, will add image to conversation", frame_index)
                 else:
                     logger.warning(f"see_image returned error: {result}")
@@ -181,13 +171,13 @@ async def execute_tool_calls(
                     b64_im = result["b64_im"]
                     logger.info("Camera tool executed - will add image to conversation for LLM analysis")
                     camera_image_bytes = base64.b64decode(b64_im)
-                    frame_index = len(captured_frames)
-                    captured_frames.append(camera_image_bytes)
+                    frame_index = len(ctx.captured_frames)
+                    ctx.captured_frames.append(camera_image_bytes)
                     # Replace the heavy b64 blob in conversation history with a lightweight marker
-                    conversation_history[-1]["content"] = json.dumps(
+                    ctx.conversation_history[-1]["content"] = json.dumps(
                         {"status": "image_captured", "frame_index": frame_index}
                     )
-                    current_turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
+                    ctx.current_turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
                 else:
                     # Camera failed - error already in tool result, LLM will see it
                     logger.warning(f"Camera tool returned error: {result}")
@@ -196,15 +186,15 @@ async def execute_tool_calls(
             elif tool_name == "speak" and "message" in result:
                 message = result["message"]
                 logger.info(f"Speaking: {message}")
-                current_turn_items.append(TurnItem(kind="speak", text=message))
+                ctx.current_turn_items.append(TurnItem(kind="speak", text=message))
 
-                if speech_output:
-                    await speech_output.speak(message)
-                aggregate_cost_fn(tts, "TTS")
+                if ctx.speech_output:
+                    await ctx.speech_output.speak(message)
+                ctx.aggregate_cost_fn(ctx.tts, "TTS")
 
             # Other tools
             elif tool_name not in ("speak", "see_image", "camera"):
-                current_turn_items.append(
+                ctx.current_turn_items.append(
                     TurnItem(kind="tool", tool_name=tool_name, tool_content=json.dumps(result))
                 )
 
@@ -212,7 +202,7 @@ async def execute_tool_calls(
             logger.exception(f"Error executing tool {tool_name}: {e}")
 
             # Add error to conversation
-            conversation_history.append(
+            ctx.conversation_history.append(
                 {
                     "role": "tool",
                     "tool_call_id": call_id,
@@ -223,7 +213,7 @@ async def execute_tool_calls(
 
     # After all tool results are added, add camera image as user message and call LLM
     if camera_image_bytes is not None:
-        conversation_history.append(
+        ctx.conversation_history.append(
             {
                 "role": "user",
                 "content": [
@@ -235,7 +225,4 @@ async def execute_tool_calls(
             }
         )
         logger.info("Camera image added to conversation - calling LLM to analyze it")
-        await process_llm_response(
-            llm, conversation_history, tool_specs, speech_output,
-            current_turn_items, captured_frames, deps, aggregate_cost_fn, tts,
-        )
+        await process_llm_response(ctx)
