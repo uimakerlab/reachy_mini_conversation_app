@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, Any
 from pathlib import Path
 
 import numpy as np
-import numpy.typing as npt
 import sounddevice as sd
+import numpy.typing as npt
 
 from reachy_mini_conversation_app.cascade.timing import tracker
 from reachy_mini_conversation_app.cascade.speech_output import ConsoleSpeechOutput

@@ -14,8 +14,8 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import numpy.typing as npt
 import sounddevice as sd
+import numpy.typing as npt
 from scipy.signal import resample
 
 from reachy_mini_conversation_app.cascade.vad import SILERO_SAMPLE_RATE, SileroVAD

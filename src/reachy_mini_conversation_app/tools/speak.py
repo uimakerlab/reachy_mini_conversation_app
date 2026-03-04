@@ -1,6 +1,7 @@
 """Speak tool - allows the LLM to speak text through TTS."""
 
 from typing import Any, Dict
+
 from .core_tools import Tool, ToolDependencies
 
 

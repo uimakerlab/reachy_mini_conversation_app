@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any, Dict, List
 
 import cv2
 import numpy as np
-import numpy.typing as npt
 import gradio as gr
+import numpy.typing as npt
 
 from .audio_playback import AudioPlaybackSystem
 from .audio_recording import ContinuousState, ContinuousVADRecorder, StreamingASRCallbacks
