@@ -6433,6 +6433,7 @@ dependencies = [
     { name = "gradio" },
     { name = "gradio-client" },
     { name = "huggingface-hub" },
+    { name = "mlx-audio" },
     { name = "openai" },
     { name = "opencv-python" },
     { name = "python-dotenv" },
@@ -6499,6 +6500,9 @@ cascade-silero-vad = [
     { name = "torch" },
     { name = "torchaudio" },
 ]
+cascade-voxtral-mlx = [
+    { name = "mlx-audio" },
+]
 local-vision = [
     { name = "num2words" },
     { name = "torch" },
@@ -6546,7 +6550,9 @@ requires-dist = [
     { name = "librosa", marker = "extra == 'cascade'", specifier = ">=0.10.0" },
     { name = "mediapipe", marker = "extra == 'all-vision'", specifier = "==0.10.14" },
     { name = "mediapipe", marker = "extra == 'mediapipe-vision'", specifier = "==0.10.14" },
+    { name = "mlx-audio", specifier = ">=0.3.1" },
     { name = "mlx-audio", marker = "extra == 'cascade-parakeet-progressive'", specifier = ">=0.3.1" },
+    { name = "mlx-audio", marker = "extra == 'cascade-voxtral-mlx'", specifier = ">=0.3.1" },
     { name = "nemo-toolkit", extras = ["asr"], marker = "extra == 'cascade-nemotron'", specifier = ">=2.0" },
     { name = "num2words", marker = "extra == 'all-vision'" },
     { name = "num2words", marker = "extra == 'local-vision'" },
@@ -6566,6 +6572,7 @@ requires-dist = [
     { name = "reachy-mini-conversation-app", extras = ["cascade-parakeet"], marker = "extra == 'cascade-all'" },
     { name = "reachy-mini-conversation-app", extras = ["cascade-parakeet-progressive"], marker = "extra == 'cascade-all'" },
     { name = "reachy-mini-conversation-app", extras = ["cascade-silero-vad"], marker = "extra == 'cascade-all'" },
+    { name = "reachy-mini-conversation-app", extras = ["cascade-voxtral-mlx"], marker = "extra == 'cascade-all'" },
     { name = "reachy-mini-dances-library" },
     { name = "reachy-mini-toolbox" },
     { name = "sounddevice", marker = "extra == 'cascade'", specifier = ">=0.4.6" },
@@ -6580,7 +6587,7 @@ requires-dist = [
     { name = "ultralytics", marker = "extra == 'all-vision'" },
     { name = "ultralytics", marker = "extra == 'yolo-vision'" },
 ]
-provides-extras = ["reachy-mini-wireless", "local-vision", "yolo-vision", "mediapipe-vision", "all-vision", "cascade", "cascade-silero-vad", "cascade-parakeet", "cascade-parakeet-progressive", "cascade-nemotron", "cascade-kokoro", "cascade-elevenlabs", "cascade-gemini", "cascade-deepgram", "cascade-gliner", "cascade-all"]
+provides-extras = ["reachy-mini-wireless", "local-vision", "yolo-vision", "mediapipe-vision", "all-vision", "cascade", "cascade-silero-vad", "cascade-parakeet", "cascade-parakeet-progressive", "cascade-voxtral-mlx", "cascade-nemotron", "cascade-kokoro", "cascade-elevenlabs", "cascade-gemini", "cascade-deepgram", "cascade-gliner", "cascade-all"]
 
 [package.metadata.requires-dev]
 dev = [
