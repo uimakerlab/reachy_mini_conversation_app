@@ -41,7 +41,7 @@ def run_cascade_mode(
 
     if getattr(args, "test_file", None):
         # Test file mode — feed text utterances through the pipeline
-        from reachy_mini_conversation_app.cascade.test_stream import CascadeTestStream
+        from reachy_mini_conversation_app.cascade.autotest_stream import CascadeTestStream
 
         logger.info(f"Using test file mode: {args.test_file}")
         handler = CascadeHandler(deps)

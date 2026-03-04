@@ -37,7 +37,7 @@ cascade/
 ├── timing.py                          # Latency tracking & profiling
 ├── vad.py                             # Silero VAD for continuous mode
 ├── console.py                         # Console mode with VAD (CascadeLocalStream)
-├── test_stream.py                     # Test file mode (automated TTS→ASR→LLM→TTS testing)
+├── autotest_stream.py                     # Test file mode (automated TTS→ASR→LLM→TTS testing)
 │
 ├── ui/                                # Gradio interface components
 │   ├── __init__.py                    # Exports CascadeGradioUI
@@ -666,7 +666,7 @@ main.py
       │   ├─> vad.py (SileroVAD)
       │   └─> handler (reference)
       │
-      └─[--test-file]─> test_stream.py (CascadeTestStream)
+      └─[--test-file]─> autotest_stream.py (CascadeTestStream)
           ├─> speech_output.py (ConsoleSpeechOutput → sounddevice)
           └─> handler (reference)
 ```
@@ -693,7 +693,7 @@ main.py
 
 | Priority | Condition | Stream Manager | Source file | Handler lifecycle |
 |----------|-----------|----------------|-------------|-------------------|
-| 1 | `--test-file` | `CascadeTestStream` | `test_stream.py` | Synchronous (no `handler.start()`) |
+| 1 | `--test-file` | `CascadeTestStream` | `autotest_stream.py` | Synchronous (no `handler.start()`) |
 | 2 | `--gradio` | `CascadeGradioUI.create_interface()` | `ui/gradio_app.py` | Background event loop (`handler.start()` / `handler.stop()`) |
 | 3 | (default) | `CascadeLocalStream` | `console.py` | Synchronous (no `handler.start()`) |
 
@@ -953,7 +953,7 @@ openai_realtime_asr:
 
 ---
 
-## Test File Mode (`test_stream.py`)
+## Test File Mode (`autotest_stream.py`)
 
 Automated end-to-end testing of the cascade pipeline without human interaction. Reads text utterances from a file, synthesizes them to audio via TTS, and feeds the audio through the full pipeline (TTS→ASR→LLM→TTS→robot).
 
