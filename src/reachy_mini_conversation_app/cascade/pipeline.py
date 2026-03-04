@@ -3,6 +3,7 @@
 from __future__ import annotations
 import json
 import base64
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Callable
 from dataclasses import dataclass
@@ -37,72 +38,87 @@ class PipelineContext:
 
 
 async def process_llm_response(ctx: PipelineContext) -> None:
-    """Process LLM response with streaming, tool calls, and TTS."""
-    try:
-        # Generate streaming response
-        text_chunks: List[str] = []
-        tool_calls: List[Dict[str, Any]] = []
+    """Process LLM response with retry on failure."""
+    max_retries = 2
+    for attempt in range(1 + max_retries):
+        try:
+            await _process_llm_response_once(ctx)
+            return
+        except Exception as e:
+            if attempt < max_retries:
+                logger.warning("LLM failed (attempt %d), retrying: %s", attempt + 1, e)
+                if ctx.speech_output:
+                    await ctx.speech_output.speak("Give me a moment.")
+                await asyncio.sleep(2)
+            else:
+                logger.error("LLM failed after %d attempts: %s", max_retries + 1, e)
+                if ctx.speech_output:
+                    await ctx.speech_output.speak("Sorry, I'm having trouble responding right now.")
 
-        async for chunk in ctx.llm.generate(
-            messages=ctx.conversation_history,
-            tools=ctx.tool_specs,
-            temperature=get_config().llm_temperature,
-        ):
-            if chunk.type == "text_delta" and chunk.content:
-                text_chunks.append(chunk.content)
-                logger.debug(f"LLM text delta: {chunk.content}")
 
-            elif chunk.type == "tool_call" and chunk.tool_call:
-                tool_calls.append(chunk.tool_call)
-                logger.info(f"LLM tool call: {chunk.tool_call}")
+async def _process_llm_response_once(ctx: PipelineContext) -> None:
+    """Single attempt at processing LLM response with streaming, tool calls, and TTS."""
+    # Generate streaming response
+    text_chunks: List[str] = []
+    tool_calls: List[Dict[str, Any]] = []
 
-            elif chunk.type == "done":
-                logger.debug("LLM generation complete")
-                break
+    async for chunk in ctx.llm.generate(
+        messages=ctx.conversation_history,
+        tools=ctx.tool_specs,
+        temperature=get_config().llm_temperature,
+    ):
+        if chunk.type == "text_delta" and chunk.content:
+            text_chunks.append(chunk.content)
+            logger.debug(f"LLM text delta: {chunk.content}")
 
-        # Aggregate LLM cost after generator completes
-        ctx.aggregate_cost_fn(ctx.llm, "LLM")
+        elif chunk.type == "tool_call" and chunk.tool_call:
+            tool_calls.append(chunk.tool_call)
+            logger.info(f"LLM tool call: {chunk.tool_call}")
 
-        # Create assistant message with text, tool calls...
-        assistant_message: Dict[str, Any] = {"role": "assistant"}
-        full_text = ""
-        if text_chunks:
-            full_text = "".join(text_chunks)
-            assistant_message["content"] = full_text
-        if tool_calls:
-            assistant_message["tool_calls"] = tool_calls
+        elif chunk.type == "done":
+            logger.debug("LLM generation complete")
+            break
 
-        logger.debug(
-            f"process_llm_response: text_chunks={len(text_chunks)}, tool_calls={len(tool_calls)}, full_text_len={len(full_text)}"
-        )
+    # Aggregate LLM cost after generator completes
+    ctx.aggregate_cost_fn(ctx.llm, "LLM")
 
-        if text_chunks or tool_calls:
-            ctx.conversation_history.append(assistant_message)
-            logger.debug(f"Added assistant message to history, history_len={len(ctx.conversation_history)}")
+    # Create assistant message with text, tool calls...
+    assistant_message: Dict[str, Any] = {"role": "assistant"}
+    full_text = ""
+    if text_chunks:
+        full_text = "".join(text_chunks)
+        assistant_message["content"] = full_text
+    if tool_calls:
+        assistant_message["tool_calls"] = tool_calls
 
-        # Handle text-only responses: auto-inject speak tool call
-        # This handles cases where LLM returns text without using the speak tool
-        # In principle it should not happen thanks to the extra instructions.
-        # If it happens, we create a synthetic tool call for speaking
-        if full_text and not tool_calls:
-            logger.info("❓LLM returned text without speak tool - auto-injecting speak call")
+    logger.debug(
+        f"process_llm_response: text_chunks={len(text_chunks)}, tool_calls={len(tool_calls)}, full_text_len={len(full_text)}"
+    )
 
-            synthetic_tool_call = {
-                "id": "auto_speak",
-                "type": "function",
-                "function": {"name": "speak", "arguments": json.dumps({"message": full_text})},
-            }
-            await execute_tool_calls([synthetic_tool_call], ctx)
-        elif tool_calls and not any(tc.get("function", {}).get("name") == "speak" for tc in tool_calls):
-            # Tool calls but no speak — record assistant text if present
-            if full_text:
-                ctx.current_turn_items.append(TurnItem(kind="assistant", text=full_text))
-        if tool_calls:
-            # Process normal tool calls
-            await execute_tool_calls(tool_calls, ctx)
+    if text_chunks or tool_calls:
+        ctx.conversation_history.append(assistant_message)
+        logger.debug(f"Added assistant message to history, history_len={len(ctx.conversation_history)}")
 
-    except Exception as e:
-        logger.exception(f"Error processing LLM response: {e}")
+    # Handle text-only responses: auto-inject speak tool call
+    # This handles cases where LLM returns text without using the speak tool
+    # In principle it should not happen thanks to the extra instructions.
+    # If it happens, we create a synthetic tool call for speaking
+    if full_text and not tool_calls:
+        logger.info("❓LLM returned text without speak tool - auto-injecting speak call")
+
+        synthetic_tool_call = {
+            "id": "auto_speak",
+            "type": "function",
+            "function": {"name": "speak", "arguments": json.dumps({"message": full_text})},
+        }
+        await execute_tool_calls([synthetic_tool_call], ctx)
+    elif tool_calls and not any(tc.get("function", {}).get("name") == "speak" for tc in tool_calls):
+        # Tool calls but no speak — record assistant text if present
+        if full_text:
+            ctx.current_turn_items.append(TurnItem(kind="assistant", text=full_text))
+    if tool_calls:
+        # Process normal tool calls
+        await execute_tool_calls(tool_calls, ctx)
 
 
 async def execute_tool_calls(
