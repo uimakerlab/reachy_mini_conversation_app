@@ -68,6 +68,7 @@ def init_provider(provider_type: str, extra_kwargs: Dict[str, Any] | None = None
         "DEEPGRAM_API_KEY": config.DEEPGRAM_API_KEY,
         "GEMINI_API_KEY": config.GEMINI_API_KEY,
         "ELEVENLABS_API_KEY": config.ELEVENLABS_API_KEY,
+        "GRADIUM_API_KEY": config.GRADIUM_API_KEY,
     }
 
     # Get provider name, info, and settings using dynamic attribute access

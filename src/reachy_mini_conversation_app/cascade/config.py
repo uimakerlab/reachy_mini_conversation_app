@@ -59,6 +59,7 @@ class CascadeConfig:
         self.DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
         self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
         self.ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+        self.GRADIUM_API_KEY = os.getenv("GRADIUM_API_KEY")
 
         self._cascade = _load_cascade_config()
 
@@ -133,6 +134,7 @@ class CascadeConfig:
             "DEEPGRAM_API_KEY": self.DEEPGRAM_API_KEY,
             "GEMINI_API_KEY": self.GEMINI_API_KEY,
             "ELEVENLABS_API_KEY": self.ELEVENLABS_API_KEY,
+            "GRADIUM_API_KEY": self.GRADIUM_API_KEY,
         }
 
         for section, provider_name, providers_dict in [
