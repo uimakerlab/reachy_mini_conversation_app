@@ -39,13 +39,20 @@ def run_cascade_mode(
 
     stream_manager: Any = None
 
-    if getattr(args, "test_file", None):
-        # Test file mode — feed text utterances through the pipeline
+    if args.autotest:
+        # Autotest mode — feed text utterances through the pipeline
+        from pathlib import Path
+
         from reachy_mini_conversation_app.cascade.autotest_stream import CascadeTestStream
 
-        logger.info(f"Using test file mode: {args.test_file}")
+        if args.autotest == "__default__":
+            test_file = str(Path(__file__).parent / "autotest.txt")
+        else:
+            test_file = args.autotest
+
+        logger.info(f"Using autotest mode: {test_file}")
         handler = CascadeHandler(deps)
-        stream_manager = CascadeTestStream(handler, robot, args.test_file)
+        stream_manager = CascadeTestStream(handler, robot, test_file)
     elif args.gradio:
         # Gradio UI mode
         from reachy_mini_conversation_app.cascade.ui import CascadeGradioUI

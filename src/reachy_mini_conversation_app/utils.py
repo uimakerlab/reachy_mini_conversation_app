@@ -31,10 +31,11 @@ def parse_args() -> Tuple[argparse.Namespace, list]:  # type: ignore
         help="Use OpenAI realtime audio-to-audio API instead of the default cascade pipeline (ASR→LLM→TTS)",
     )
     parser.add_argument(
-        "--test-file",
-        type=str,
+        "--autotest",
+        nargs="?",
+        const="__default__",
         default=None,
-        help="Path to text file with test utterances (one per line). Uses cascade pipeline.",
+        help="Run autotest mode with text utterances. Optionally specify a file path (default: cascade/autotest.txt).",
     )
     parser.add_argument("--debug", default=False, action="store_true", help="Enable debug logging")
     parser.add_argument(

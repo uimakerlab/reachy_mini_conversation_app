@@ -94,7 +94,7 @@ def run(
     status = robot.client.get_status()
     is_simulation = status.get("simulation_enabled", False) or status.get("mockup_sim_enabled", False)
 
-    if is_simulation and not args.gradio and not getattr(args, "test_file", None):
+    if is_simulation and not args.gradio and not args.autotest:
         logger.info("Simulation mode detected. Automatically enabling gradio flag.")
         args.gradio = True
 
