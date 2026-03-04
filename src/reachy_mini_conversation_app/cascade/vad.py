@@ -54,6 +54,7 @@ class SileroVAD:
         self._speech_frames = 0
         self._silence_frames = 0
         self._is_speaking = False
+        self._prob_log_count = 0
 
         logger.info(f"Silero VAD initialized (threshold={threshold})")
 
@@ -117,7 +118,11 @@ class SileroVAD:
 
         """
         chunk_duration_ms = len(audio) / sample_rate * 1000
-        is_speech = self.is_speech(audio, sample_rate)
+        prob = self.get_speech_prob(audio, sample_rate)
+        self._prob_log_count += 1
+        if self._prob_log_count % 50 == 0:
+            logger.debug(f"VAD prob={prob:.3f} (threshold={self.threshold}, speaking={self._is_speaking})")
+        is_speech = prob >= self.threshold
 
         speech_started = False
         speech_ended = False
@@ -154,6 +159,7 @@ class SileroVAD:
         self._speech_frames = 0
         self._silence_frames = 0
         self._is_speaking = False
+        self._prob_log_count = 0
         self.model.reset_states()
         logger.debug("VAD state reset")
 

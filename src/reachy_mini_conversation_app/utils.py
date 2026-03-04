@@ -113,7 +113,7 @@ def setup_logger(debug: bool) -> logging.Logger:
 
     # Create formatter with time-only and filename (no full path)
     formatter = ColoredFormatter(
-        fmt="%(asctime)s %(levelname)s %(filename)s:%(lineno)d | %(message)s",
+        fmt="%(asctime)s.%(msecs)03.0f %(levelname)s %(filename)s:%(lineno)d | %(message)s",
         datefmt="%H:%M:%S",
     )
 

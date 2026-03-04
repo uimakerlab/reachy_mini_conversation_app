@@ -14,6 +14,7 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING
 
 import numpy as np
+import sounddevice as sd
 from scipy.signal import resample
 
 from reachy_mini_conversation_app.cascade.vad import SILERO_SAMPLE_RATE, SileroVAD
@@ -28,49 +29,6 @@ logger = logging.getLogger(__name__)
 
 # Minimum chunk size for Silero VAD (512 samples = 32ms at 16kHz)
 VAD_MIN_CHUNK_SIZE = 512
-
-
-def to_mono(audio: np.ndarray) -> np.ndarray:
-    """Convert stereo audio to mono by taking first channel."""
-    if audio.ndim == 1:
-        return audio
-    if audio.shape[0] > audio.shape[1]:
-        return audio[:, 0]  # (samples, channels)
-    return audio[0, :]  # (channels, samples)
-
-
-class AudioChunkBuffer:
-    """Accumulates audio samples and yields fixed-size chunks for VAD."""
-
-    def __init__(self, chunk_size: int, max_samples: int = 16000) -> None:
-        """Initialize buffer with given chunk size."""
-        self._buffer = np.zeros(max_samples, dtype=np.int16)
-        self._pos = 0
-        self._chunk_size = chunk_size
-
-    def add(self, samples: np.ndarray) -> None:
-        """Add samples to buffer, growing if needed."""
-        n = samples.size
-        if self._pos + n > self._buffer.size:
-            new_size = max(self._buffer.size * 2, self._pos + n)
-            new_buffer = np.zeros(new_size, dtype=np.int16)
-            new_buffer[: self._pos] = self._buffer[: self._pos]
-            self._buffer = new_buffer
-        self._buffer[self._pos : self._pos + n] = samples.flatten()
-        self._pos += n
-
-    def get_chunks(self) -> list[np.ndarray]:
-        """Return all complete chunks, keep remainder."""
-        chunks = []
-        while self._pos >= self._chunk_size:
-            chunks.append(self._buffer[: self._chunk_size].copy())
-            self._buffer[: self._pos - self._chunk_size] = self._buffer[self._chunk_size : self._pos]
-            self._pos -= self._chunk_size
-        return chunks
-
-    def clear(self) -> None:
-        """Reset buffer."""
-        self._pos = 0
 
 
 class VADState(Enum):
@@ -102,7 +60,6 @@ class CascadeLocalStream:
         self._tasks: list[asyncio.Task] = []
 
         # Audio buffers
-        self._vad_chunk_buffer = AudioChunkBuffer(VAD_MIN_CHUNK_SIZE)
         self._speech_chunks: list[np.ndarray] = []
         self._playback_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
@@ -124,10 +81,20 @@ class CascadeLocalStream:
         """Start the console stream and run the async processing loops."""
         self._stop_event.clear()
 
+        # start_recording() also starts the camera pipeline
         logger.info("Starting media recording and playback...")
         self._robot.media.start_recording()
         self._robot.media.start_playing()
         time.sleep(1)  # Give pipelines time to start
+
+        # Log which mic we'll use (system default, not robot USB device)
+        default_dev = sd.query_devices(kind="input")
+        logger.info(
+            f"Mic input: '{default_dev['name']}' (system default, "
+            f"{default_dev['default_samplerate']:.0f} Hz)"
+        )
+        output_sr = self._robot.media.get_output_audio_samplerate()
+        logger.info(f"Speaker output: {output_sr} Hz (robot)")
 
         logger.info("Console mode ready. Speak to interact with the robot. Press Ctrl+C to stop.")
         asyncio.run(self._main_loop())
@@ -144,29 +111,30 @@ class CascadeLocalStream:
             logger.info("Tasks cancelled during shutdown")
 
     async def _record_loop(self) -> None:
-        """Read mic frames and process through VAD state machine."""
-        input_sample_rate = self._robot.media.get_input_audio_samplerate()
-        logger.info(f"Audio recording at {input_sample_rate} Hz, listening...")
+        """Read mic audio from system default device and process through VAD."""
+        logger.info(f"Recording from system default mic at {SILERO_SAMPLE_RATE} Hz, listening...")
 
-        while not self._stop_event.is_set():
-            audio_frame = self._robot.media.get_audio_sample()
-            if audio_frame is None:
-                await asyncio.sleep(0.01)
-                continue
+        stream = sd.InputStream(
+            samplerate=SILERO_SAMPLE_RATE,
+            channels=1,
+            dtype="int16",
+            blocksize=VAD_MIN_CHUNK_SIZE,
+        )
+        stream.start()
 
-            # Resample to 16kHz if needed (VAD requires 16kHz)
-            if input_sample_rate != SILERO_SAMPLE_RATE:
-                num_samples = int(len(audio_frame) * SILERO_SAMPLE_RATE / input_sample_rate)
-                audio_frame = resample(audio_frame, num_samples).astype(np.float32)
+        try:
+            while not self._stop_event.is_set():
+                # Read exactly one VAD chunk (512 samples = 32ms at 16kHz)
+                audio_frame, overflowed = stream.read(VAD_MIN_CHUNK_SIZE)
+                if overflowed:
+                    logger.debug("Audio input overflowed")
 
-            audio_frame = to_mono(audio_frame)
-            audio_int16 = (audio_frame * 32767).astype(np.int16)
-
-            self._vad_chunk_buffer.add(audio_int16)
-            for vad_chunk in self._vad_chunk_buffer.get_chunks():
-                await self._process_vad(vad_chunk)
-
-            await asyncio.sleep(0)
+                audio_int16 = audio_frame[:, 0].astype(np.int16)  # (samples, 1) → (samples,)
+                await self._process_vad(audio_int16)
+                await asyncio.sleep(0)
+        finally:
+            stream.stop()
+            stream.close()
 
     async def _process_vad(self, audio_chunk: np.ndarray) -> None:
         """Process audio chunk through VAD state machine."""
@@ -216,7 +184,6 @@ class CascadeLocalStream:
                 # during processing (includes robot's own TTS echo)
                 self._speech_chunks = []
                 self._vad.reset()
-                self._vad_chunk_buffer.clear()
                 self._state = VADState.LISTENING
                 logger.info("Listening...")
 
