@@ -14,7 +14,7 @@ Cascade Mode implements a traditional **ASR → LLM → TTS** conversation pipel
 
 ### Current Scope
 
-- Gradio UI with push-to-talk and continuous VAD recording
+- Gradio UI with continuous VAD recording
 - Console mode with VAD-based speech detection
 - Test file mode for automated end-to-end testing (`--test-file`)
 - Optional streaming ASR support
@@ -42,7 +42,7 @@ cascade/
 ├── ui/                                # Gradio interface components
 │   ├── __init__.py                    # Exports CascadeGradioUI
 │   ├── audio_playback.py              # Pre-warmed audio output system
-│   ├── audio_recording.py             # Push-to-talk and VAD recording
+│   ├── audio_recording.py             # VAD-based continuous recording
 │   └── gradio_app.py                  # Main Gradio interface
 │
 ├── asr/                               # Automatic Speech Recognition
@@ -259,14 +259,6 @@ playback.close()               # Shutdown threads
 
 **StreamingASRCallbacks:** Dataclass for injecting ASR callbacks without coupling to handler.
 
-**PushToTalkRecorder:** Manual recording mode.
-```python
-recorder = PushToTalkRecorder(sample_rate, streaming_callbacks, event_loop)
-recorder.start()   # Start recording
-recorder.stop()    # Stop and get audio
-wav_bytes = recorder.get_wav_bytes()
-```
-
 **ContinuousVADRecorder:** VAD-based continuous recording.
 ```python
 recorder = ContinuousVADRecorder(
@@ -283,8 +275,8 @@ Main orchestrator that ties everything together.
 
 **Responsibilities:**
 - Build Gradio interface (chatbot, buttons, status)
-- Process audio pipeline (ASR → LLM → TTS)
-- Coordinate playback and recording subsystems
+- Coordinate audio pipeline (ASR → LLM → TTS)
+- Coordinate playback and VAD recording subsystems
 - Handle Gradio events and lifecycle
 
 **Key Attributes:**
@@ -417,17 +409,12 @@ class TTSProvider(ABC):
 
 ## Data Flow
 
-### Push-to-Talk Pipeline
+### VAD-Triggered Pipeline
 
 ```
-User clicks START
+VAD detects speech end
   │
-  ├─ Start audio recording thread
-  │   └─ Capture frames via sounddevice → audio_frames list
-  │
-User clicks STOP
-  │
-  ├─ Stop recording, concatenate frames to WAV
+  ├─ Concatenate captured frames to WAV
   │
   └─> handler.process_audio_manual(wav_bytes)
       │
@@ -691,7 +678,7 @@ main.py
   - Console: `ConsoleSpeechOutput` (rate-limited streaming → robot speaker)
   - Test: `ConsoleSpeechOutput` (rate-limited streaming → sounddevice callback)
 - AudioPlaybackSystem handles pre-warmed playback threads (Gradio mode only)
-- Recording classes encapsulate push-to-talk and VAD modes (Gradio mode only)
+- Recording classes encapsulate VAD-based continuous recording (Gradio mode only)
 - Transcript analysis runs in parallel with the main ASR → LLM → TTS pipeline
 
 ---
@@ -1072,7 +1059,7 @@ Since `CascadeTestStream` is its own stream manager, it bypasses several compone
 - **Microphone input / robot.media recording** — No `start_recording()` or `get_audio_sample()` calls. Audio comes from TTS, not hardware
 - **Gradio UI** — No web interface, no push-to-talk buttons, no chatbot display, no `AudioPlaybackSystem`
 - **Robot speaker output** — Response audio plays through computer speakers (`sounddevice`), not `robot.media.push_audio_sample()`
-- **ContinuousVADRecorder / PushToTalkRecorder** — These recording classes are not used
+- **ContinuousVADRecorder** — This recording class is not used
 - **Barge-in / interruption handling** — Utterances are sequential with fixed delays; there is no overlap between user speech and robot response
 - **Audio resampling for robot hardware** — The `_play_loop` resampling path in `CascadeLocalStream` (TTS rate → robot output rate) is not exercised
 - **Camera / vision pipeline** — Typically run with `--no-camera`; `describe_scene` tool calls would fail without it
