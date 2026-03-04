@@ -175,6 +175,19 @@ tts:
       # Pricing (Feb 2026)
       cost_per_1m_chars: 30.0
 
+    gradium:
+      module: gradium
+      class: GradiumTTS
+      location: cloud
+      requires: [GRADIUM_API_KEY]
+      import_check: gradium
+      install_extra: cascade_gradium
+      description: "Gradium TTS - low-latency streaming voice AI"
+      # Settings
+      voice_id: YTpq7expH9539ERJ  # Emma (US/Feminine)
+      model: default
+      cost_per_1m_chars: 0.0
+
 
 # Transcript analysis: real-time reactions to keywords/entities in user speech
 # Reactions are defined per-profile in profiles/<name>/reactions.yaml

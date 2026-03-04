@@ -66,6 +66,7 @@ cascade_kokoro = ["kokoro>=0.9.4"]
 cascade_elevenlabs = ["elevenlabs>=1.0.0"]
 cascade_gemini = ["google-genai>=0.6.0"]
 cascade_deepgram = ["deepgram-sdk>=3.0.0,<4.0.0"]
+cascade_gradium = ["gradium>=0.5.4; python_version>='3.12'"]
 cascade_gliner = ["gliner>=0.2.0"]
 cascade_all = [
   "reachy_mini_conversation_app[cascade]",
@@ -78,6 +79,7 @@ cascade_all = [
   "reachy_mini_conversation_app[cascade_gemini]",
   "reachy_mini_conversation_app[cascade_deepgram]"
 ]
+# Note: cascade_gradium excluded from cascade_all because gradium requires Python >=3.12
 
 [dependency-groups]
 dev = [
