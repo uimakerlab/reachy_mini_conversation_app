@@ -94,10 +94,6 @@ def run(
     status = robot.client.get_status()
     is_simulation = status.get("simulation_enabled", False) or status.get("mockup_sim_enabled", False)
 
-    # Auto-enable cascade when --test-file is used
-    if getattr(args, "test_file", None):
-        args.cascade = True
-
     if is_simulation and not args.gradio and not getattr(args, "test_file", None):
         logger.info("Simulation mode detected. Automatically enabling gradio flag.")
         args.gradio = True
@@ -119,8 +115,8 @@ def run(
         head_wobbler=head_wobbler,
     )
 
-    # Cascade mode: delegate to cascade entry point
-    if args.cascade:
+    # Default: cascade mode. Use --realtime to switch to OpenAI realtime API.
+    if not args.realtime:
         from reachy_mini_conversation_app.cascade.entry import run_cascade_mode
         run_cascade_mode(deps, robot, args, logger)
         return

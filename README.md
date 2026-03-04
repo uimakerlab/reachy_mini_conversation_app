@@ -29,7 +29,7 @@ Conversational app for the Reachy Mini robot combining OpenAI's realtime APIs, v
 - [License](#license)
 
 ## Overview
-- Real-time audio conversation loop powered by the OpenAI realtime API and `fastrtc` for low-latency streaming.
+- Default cascade pipeline (ASR→LLM→TTS) with configurable providers. Optional OpenAI realtime audio-to-audio API mode via `--realtime`.
 - Vision processing uses gpt-realtime by default (when camera tool is used), with optional local vision processing using SmolVLM2 model running on-device (CPU/GPU/MPS) via `--local-vision` flag.
 - Layered motion system queues primary moves (dances, emotions, goto poses, breathing) while blending speech-reactive wobble and head-tracking.
 - Async tool dispatch integrates robot motion, camera capture, and optional head-tracking capabilities through a Gradio web UI with live transcripts.
@@ -152,6 +152,7 @@ The app runs in console mode by default. Add `--gradio` to launch a web UI at ht
 | `--no-camera` | `False` | Run without camera capture or head tracking. |
 | `--local-vision` | `False` | Use local vision model (SmolVLM2) for periodic image processing instead of gpt-realtime vision. Requires `local_vision` extra to be installed. |
 | `--gradio` | `False` | Launch the Gradio web UI. Without this flag, runs in console mode. Required when running in simulation mode. |
+| `--realtime` | `False` | Use OpenAI realtime audio-to-audio API instead of the default cascade pipeline (ASR→LLM→TTS). |
 | `--robot-name` | `None` | Optional. Connect to a specific robot by name when running multiple daemons on the same subnet. See [Multiple robots on the same subnet](#advanced-features). |
 | `--debug` | `False` | Enable verbose logging for troubleshooting. |
 
@@ -284,13 +285,17 @@ uv sync --extra cascade_all                   # All cascade providers
 ```
 
 #### Running with cascade
-- Run with cascade pipeline and Gradio web UI (requires `cascade` extra):
+The cascade pipeline is the default mode. Run with Gradio web UI:
 
   ```bash
-  reachy-mini-conversation-app --cascade --gradio
+  reachy-mini-conversation-app --gradio
   ```
 
-Note: Cascade mode currently only supports Gradio UI. Console mode with VAD is planned for future.
+To use the OpenAI realtime audio-to-audio API instead, add `--realtime`:
+
+  ```bash
+  reachy-mini-conversation-app --realtime --gradio
+  ```
 
 **Environment variables:**
 

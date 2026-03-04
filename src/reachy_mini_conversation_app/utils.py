@@ -25,16 +25,16 @@ def parse_args() -> Tuple[argparse.Namespace, list]:  # type: ignore
     )
     parser.add_argument("--gradio", default=False, action="store_true", help="Open gradio interface")
     parser.add_argument(
-        "--cascade",
+        "--realtime",
         default=False,
         action="store_true",
-        help="Use cascade pipeline (ASR→LLM→TTS) instead of a realtime autio-to-audio API",
+        help="Use OpenAI realtime audio-to-audio API instead of the default cascade pipeline (ASR→LLM→TTS)",
     )
     parser.add_argument(
         "--test-file",
         type=str,
         default=None,
-        help="Path to text file with test utterances (one per line). Implies --cascade.",
+        help="Path to text file with test utterances (one per line). Uses cascade pipeline.",
     )
     parser.add_argument("--debug", default=False, action="store_true", help="Enable debug logging")
     parser.add_argument(

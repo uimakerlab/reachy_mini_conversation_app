@@ -702,7 +702,7 @@ All three share the same shutdown sequence: `stream_manager.close()` → stop se
 ### Command Line Usage
 
 ```bash
-reachy-mini-conversation-app --cascade --gradio --head-tracker yolo
+reachy-mini-conversation-app --gradio --head-tracker yolo
 ```
 
 ---
@@ -960,7 +960,7 @@ Automated end-to-end testing of the cascade pipeline without human interaction. 
 ### Usage
 
 ```bash
-# Implies --cascade automatically
+# Uses cascade pipeline (default)
 reachy-mini-conversation-app --test-file scripts/test_utterances.txt --no-camera
 ```
 
