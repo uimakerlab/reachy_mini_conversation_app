@@ -5,8 +5,10 @@ It works with 16kHz audio and returns speech probability for each chunk.
 """
 
 import logging
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import torch
 
 
@@ -43,7 +45,7 @@ class SileroVAD:
 
         # Load Silero VAD model
         logger.info("Loading Silero VAD model...")
-        self.model, _utils = torch.hub.load(
+        self.model, _utils = torch.hub.load(  # type: ignore[no-untyped-call]
             "snakers4/silero-vad",
             "silero_vad",
             trust_repo=True,
@@ -51,14 +53,14 @@ class SileroVAD:
         self.model.eval()
 
         # State tracking for streaming
-        self._speech_frames = 0
-        self._silence_frames = 0
+        self._speech_frames: float = 0
+        self._silence_frames: float = 0
         self._is_speaking = False
         self._prob_log_count = 0
 
         logger.info(f"Silero VAD initialized (threshold={threshold})")
 
-    def get_speech_prob(self, audio: np.ndarray, sample_rate: int = SILERO_SAMPLE_RATE) -> float:
+    def get_speech_prob(self, audio: npt.NDArray[Any], sample_rate: int = SILERO_SAMPLE_RATE) -> float:
         """Get speech probability for an audio chunk.
 
         Args:
@@ -86,9 +88,9 @@ class SileroVAD:
         with torch.no_grad():
             speech_prob = self.model(tensor, sample_rate).item()
 
-        return speech_prob
+        return speech_prob  # type: ignore[no-any-return]
 
-    def is_speech(self, audio: np.ndarray, sample_rate: int = SILERO_SAMPLE_RATE) -> bool:
+    def is_speech(self, audio: npt.NDArray[Any], sample_rate: int = SILERO_SAMPLE_RATE) -> bool:
         """Check if audio chunk contains speech above threshold.
 
         Args:
@@ -102,7 +104,7 @@ class SileroVAD:
         prob = self.get_speech_prob(audio, sample_rate)
         return prob >= self.threshold
 
-    def process_chunk(self, audio: np.ndarray, sample_rate: int = SILERO_SAMPLE_RATE) -> tuple[bool, bool]:
+    def process_chunk(self, audio: npt.NDArray[Any], sample_rate: int = SILERO_SAMPLE_RATE) -> tuple[bool, bool]:
         """Process audio chunk with hysteresis for robust speech detection.
 
         Implements state machine with minimum duration requirements:
@@ -156,8 +158,8 @@ class SileroVAD:
 
     def reset(self) -> None:
         """Reset VAD state between sessions."""
-        self._speech_frames = 0
-        self._silence_frames = 0
+        self._speech_frames = 0.0
+        self._silence_frames = 0.0
         self._is_speaking = False
         self._prob_log_count = 0
         self.model.reset_states()

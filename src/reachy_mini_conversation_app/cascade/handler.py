@@ -104,7 +104,7 @@ class CascadeHandler:
             stable = self.asr.get_stable_text()
             if stable and stable != partial:
                 logger.debug(f"📌 Using stable text for analysis: '{stable[:60]}...'")
-                return stable
+                return stable  # type: ignore[no-any-return]
         return partial
 
     async def _on_transcript_partial(self, text: str) -> None:

@@ -1,6 +1,7 @@
 """Shared utilities for TTS providers."""
 
 import logging
+from typing import overload
 
 import numpy as np
 import numpy.typing as npt
@@ -9,6 +10,28 @@ from reachy_mini_conversation_app.cascade.config import get_config
 
 
 logger = logging.getLogger(__name__)
+
+
+@overload
+def trim_leading_silence(
+    audio_array: npt.NDArray[np.int16],
+    sample_rate: int = ...,
+    threshold_int16: int = ...,
+    threshold_float: float = ...,
+    min_silence_ms: int = ...,
+    provider_name: str = ...,
+) -> npt.NDArray[np.int16]: ...
+
+
+@overload
+def trim_leading_silence(
+    audio_array: npt.NDArray[np.float32],
+    sample_rate: int = ...,
+    threshold_int16: int = ...,
+    threshold_float: float = ...,
+    min_silence_ms: int = ...,
+    provider_name: str = ...,
+) -> npt.NDArray[np.float32]: ...
 
 
 def trim_leading_silence(
@@ -34,6 +57,7 @@ def trim_leading_silence(
 
     """
     # Select threshold based on dtype
+    threshold: int | float
     if audio_array.dtype == np.int16:
         threshold = threshold_int16
     else:

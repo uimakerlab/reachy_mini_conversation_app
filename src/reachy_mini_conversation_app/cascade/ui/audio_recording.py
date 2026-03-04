@@ -204,6 +204,7 @@ class ContinuousVADRecorder:
                         vad_audio = data.flatten()
 
                     # Process through VAD
+                    assert self._vad is not None
                     speech_started, speech_ended = self._vad.process_chunk(vad_audio, SILERO_SAMPLE_RATE)
 
                     if self._state == ContinuousState.LISTENING:
@@ -264,6 +265,7 @@ class ContinuousVADRecorder:
 
                             # Reset for next utterance
                             self._audio_frames = []
+                            assert self._vad is not None
                             self._vad.reset()
                             self._state = ContinuousState.LISTENING
                             logger.info("VAD: Ready for next utterance")

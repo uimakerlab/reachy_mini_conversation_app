@@ -33,7 +33,7 @@ class PipelineContext:
     current_turn_items: list[TurnItem]
     captured_frames: list[bytes]
     deps: ToolDependencies
-    aggregate_cost_fn: Callable
+    aggregate_cost_fn: Callable[..., None]
 
 
 async def process_llm_response(ctx: PipelineContext) -> None:

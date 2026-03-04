@@ -177,7 +177,7 @@ class GradioSpeechOutput:
             return sentence_chunks
 
         # Generate sentences with intelligent overlap
-        tasks: list[asyncio.Task] = []
+        tasks: list[asyncio.Task[list[npt.NDArray[np.int16]]]] = []
         for idx, sentence in enumerate(sentences):
             if idx == 0:
                 task = asyncio.create_task(generate_and_queue_sentence(idx, sentence))

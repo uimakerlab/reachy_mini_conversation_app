@@ -87,6 +87,7 @@ dev = [
   "mypy==1.18.2",
   "pre-commit",
   "types-requests",
+  "types-PyYAML",
   "python-semantic-release>=10.5.3",
 ]
 
@@ -155,3 +156,18 @@ ignore_missing_imports = true
 strict = true
 show_error_codes = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = [
+    "tests.*",
+    "tests.audio.*",
+    "tests.cascade.*",
+    "tests.tools.*",
+    "tests.vision.*",
+    "tests.rmscript_adapters.*",
+]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disallow_any_generics = false
+warn_unused_ignores = false

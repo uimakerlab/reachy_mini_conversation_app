@@ -83,7 +83,7 @@ class KokoroTTS(TTSProvider):
         queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         loop = asyncio.get_running_loop()
 
-        def _producer():
+        def _producer() -> None:
             """Iterate KPipeline in a thread, push sub-chunks to the async queue."""
             tracker.mark("tts_model_generation_start")
             generation_start = time.perf_counter()

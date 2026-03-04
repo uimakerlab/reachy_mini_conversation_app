@@ -130,19 +130,21 @@ class TranscriptAnalysisManager:
             # Process keyword results
             keyword_matches: dict[str, list[str]] = {}
             if self.keyword_analyzer:
-                if isinstance(results[idx], Exception):
-                    logger.warning(f"Keyword analyzer error: {results[idx]}")
+                kw_result = results[idx]
+                if isinstance(kw_result, BaseException):
+                    logger.warning(f"Keyword analyzer error: {kw_result}")
                 else:
-                    keyword_matches = results[idx]
+                    keyword_matches = kw_result
                 idx += 1
 
             # Process entity results
             entity_matches: list[EntityMatch] = []
             if self.entity_analyzer:
-                if isinstance(results[idx], Exception):
-                    logger.warning(f"Entity analyzer error: {results[idx]}")
+                ent_result = results[idx]
+                if isinstance(ent_result, BaseException):
+                    logger.warning(f"Entity analyzer error: {ent_result}")
                 else:
-                    entity_matches = results[idx]
+                    entity_matches = ent_result
 
             # Evaluate boolean `all` triggers: merge synthetic groups into real reactions
             for real_name, group_names in self._all_reaction_groups.items():

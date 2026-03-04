@@ -127,7 +127,7 @@ class OpenAITTS(TTSProvider):
                 tracker.mark("tts_first_chunk_ready")
                 logger.info("TTS: First chunk ready (can start playback now!)")
                 for i in range(0, len(leading_buffer), 1024):
-                    sub = leading_buffer[i : i + 1024]
+                    sub = bytes(leading_buffer[i : i + 1024])
                     if sub:
                         chunk_count += 1
                         yield sub

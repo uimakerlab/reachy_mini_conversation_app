@@ -141,7 +141,7 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
         self._last_partial = None
 
         logger.info(f"Progressive ASR final: '{transcript}'")
-        return transcript
+        return transcript  # type: ignore[no-any-return]
 
     async def transcribe(self, audio_bytes: bytes, language: Optional[str] = None) -> str:
         """Batch fallback: decode_chunk on entire audio (no temp files)."""
@@ -150,7 +150,7 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
             return ""
         audio_mx = mx.array(audio_np, dtype=mx.float32)
         result = self._model.decode_chunk(audio_mx, verbose=False)
-        return result.text.strip()
+        return result.text.strip()  # type: ignore[no-any-return]
 
     # -- Core sliding window logic (ported from s2s SmartProgressiveStreamingHandler) --
 

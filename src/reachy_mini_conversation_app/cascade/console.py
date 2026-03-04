@@ -11,9 +11,10 @@ import wave
 import asyncio
 import logging
 from enum import Enum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import numpy.typing as npt
 import sounddevice as sd
 from scipy.signal import resample
 
@@ -57,10 +58,10 @@ class CascadeLocalStream:
         # State
         self._state = VADState.LISTENING
         self._stop_event = asyncio.Event()
-        self._tasks: list[asyncio.Task] = []
+        self._tasks: list[asyncio.Task[Any]] = []
 
         # Audio buffers
-        self._speech_chunks: list[np.ndarray] = []
+        self._speech_chunks: list[npt.NDArray[np.int16]] = []
         self._playback_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
         # Wire speech output so handler plays audio through robot speaker
@@ -136,7 +137,7 @@ class CascadeLocalStream:
             stream.stop()
             stream.close()
 
-    async def _process_vad(self, audio_chunk: np.ndarray) -> None:
+    async def _process_vad(self, audio_chunk: npt.NDArray[np.int16]) -> None:
         """Process audio chunk through VAD state machine."""
         streaming = self.handler.is_streaming_asr
 
@@ -211,7 +212,7 @@ class CascadeLocalStream:
         # Print latency summary for this turn
         tracker.print_summary()
 
-    def _audio_to_wav(self, audio: np.ndarray, sample_rate: int) -> bytes:
+    def _audio_to_wav(self, audio: npt.NDArray[np.int16], sample_rate: int) -> bytes:
         """Convert int16 audio array to WAV bytes."""
         buffer = io.BytesIO()
         with wave.open(buffer, "wb") as wf:

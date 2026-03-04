@@ -66,7 +66,7 @@ class GeminiLLM(LLMProvider):
             # Send request (this establishes the connection)
             _ = await self.client.aio.models.generate_content(
                 model=self.model,
-                contents=gemini_contents,  # type: ignore
+                contents=gemini_contents,  # type: ignore[arg-type]
                 config=config,
             )
 
@@ -130,7 +130,7 @@ class GeminiLLM(LLMProvider):
 
             stream = await self.client.aio.models.generate_content_stream(
                 model=self.model,
-                contents=gemini_contents,  # type: ignore
+                contents=gemini_contents,  # type: ignore[arg-type]
                 config=config,
             )
 

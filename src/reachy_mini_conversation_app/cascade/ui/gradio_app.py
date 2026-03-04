@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, List
 
 import cv2
 import numpy as np
+import numpy.typing as npt
 import gradio as gr
 
 from .audio_playback import AudioPlaybackSystem
@@ -71,6 +72,7 @@ class CascadeGradioUI:
             return None
 
         def on_start() -> None:
+            assert self.handler.loop is not None
             future = asyncio.run_coroutine_threadsafe(self.handler.process_audio_streaming_start(), self.handler.loop)
             try:
                 future.result(timeout=5.0)
@@ -78,6 +80,7 @@ class CascadeGradioUI:
                 logger.error(f"Failed to start streaming ASR: {e}")
 
         def on_chunk(chunk_wav: bytes) -> None:
+            assert self.handler.loop is not None
             asyncio.run_coroutine_threadsafe(self.handler.process_audio_streaming_chunk(chunk_wav), self.handler.loop)
 
         return StreamingASRCallbacks(on_start=on_start, on_chunk=on_chunk)
@@ -95,6 +98,7 @@ class CascadeGradioUI:
     def _on_vad_speech_captured(self, wav_bytes: bytes) -> None:
         """Handle speech captured by VAD recorder."""
         try:
+            assert self.handler.loop is not None
             future = asyncio.run_coroutine_threadsafe(self._process_audio_async(wav_bytes), self.handler.loop)
             result = future.result(timeout=60)
 
@@ -273,7 +277,7 @@ class CascadeGradioUI:
         return messages
 
     @staticmethod
-    def _decode_jpeg_to_rgb(jpeg_bytes: bytes) -> np.ndarray | None:
+    def _decode_jpeg_to_rgb(jpeg_bytes: bytes) -> npt.NDArray[Any] | None:
         """Decode JPEG bytes to RGB numpy array, or None on failure."""
         try:
             np_arr = np.frombuffer(jpeg_bytes, np.uint8)

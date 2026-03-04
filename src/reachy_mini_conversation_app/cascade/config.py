@@ -1,13 +1,13 @@
 """Cascade-specific configuration, loaded only when cascade mode is active."""
 
-import importlib
 import os
 import logging
 import platform
+import importlib
 from typing import Any, Dict
 from pathlib import Path
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ class CascadeConfig:
         if provider_name not in self.asr_providers:
             available = ", ".join(self.asr_providers.keys())
             raise ValueError(f"Unknown ASR provider: {provider_name}. Available: {available}")
-        return self.asr_providers[provider_name]
+        return self.asr_providers[provider_name]  # type: ignore[no-any-return]
 
     def get_asr_settings(self, name: str | None = None) -> Dict[str, Any]:
         """Get provider settings (excludes metadata like module, class, streaming, etc.)."""
@@ -98,7 +98,7 @@ class CascadeConfig:
 
     def is_asr_streaming(self, name: str | None = None) -> bool:
         """Check if provider supports streaming."""
-        return self.get_asr_provider_info(name)["streaming"]
+        return self.get_asr_provider_info(name)["streaming"]  # type: ignore[no-any-return]
 
     def get_llm_provider_info(self, name: str | None = None) -> Dict[str, Any]:
         """Get full LLM provider info from cascade.yaml."""
@@ -106,7 +106,7 @@ class CascadeConfig:
         if provider_name not in self.llm_providers:
             available = ", ".join(self.llm_providers.keys())
             raise ValueError(f"Unknown LLM provider: {provider_name}. Available: {available}")
-        return self.llm_providers[provider_name]
+        return self.llm_providers[provider_name]  # type: ignore[no-any-return]
 
     def get_llm_settings(self, name: str | None = None) -> Dict[str, Any]:
         """Get LLM provider settings (excludes metadata)."""
@@ -119,7 +119,7 @@ class CascadeConfig:
         if provider_name not in self.tts_providers:
             available = ", ".join(self.tts_providers.keys())
             raise ValueError(f"Unknown TTS provider: {provider_name}. Available: {available}")
-        return self.tts_providers[provider_name]
+        return self.tts_providers[provider_name]  # type: ignore[no-any-return]
 
     def get_tts_settings(self, name: str | None = None) -> Dict[str, Any]:
         """Get TTS provider settings (excludes metadata)."""

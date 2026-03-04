@@ -99,18 +99,18 @@ def init_provider(provider_type: str, extra_kwargs: Dict[str, Any] | None = None
 
 def init_asr_provider() -> ASRProvider:
     """Initialize ASR provider from cascade.yaml config."""
-    return init_provider("asr")
+    return init_provider("asr")  # type: ignore[no-any-return]
 
 
 def init_llm_provider() -> LLMProvider:
     """Initialize LLM provider from cascade.yaml config."""
     cascade_instructions = get_session_instructions() + CASCADE_EXTRA_INSTRUCTIONS
-    return init_provider("llm", {"system_instructions": cascade_instructions})
+    return init_provider("llm", {"system_instructions": cascade_instructions})  # type: ignore[no-any-return]
 
 
 def init_tts_provider() -> TTSProvider:
     """Initialize TTS provider from cascade.yaml config."""
-    return init_provider("tts")
+    return init_provider("tts")  # type: ignore[no-any-return]
 
 
 def init_transcript_analysis(deps: ToolDependencies) -> TranscriptAnalysisManager | NoOpTranscriptManager:

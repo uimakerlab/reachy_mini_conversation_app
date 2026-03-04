@@ -5,7 +5,7 @@ import os
 import time
 import signal
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 
 if TYPE_CHECKING:
@@ -37,6 +37,8 @@ def run_cascade_mode(
 
     logger.info("Using cascade pipeline mode (ASR→LLM→TTS)")
 
+    stream_manager: Any = None
+
     if getattr(args, "test_file", None):
         # Test file mode — feed text utterances through the pipeline
         from reachy_mini_conversation_app.cascade.test_stream import CascadeTestStream
@@ -61,8 +63,10 @@ def run_cascade_mode(
         stream_manager = CascadeLocalStream(handler, robot)
 
     # Start services
-    deps.movement_manager.start()
-    deps.head_wobbler.start()
+    if deps.movement_manager:
+        deps.movement_manager.start()
+    if deps.head_wobbler:
+        deps.head_wobbler.start()
 
     # For console mode: CascadeLocalStream.launch() handles media start
     # For Gradio mode: audio recording is handled by ContinuousVADRecorder,
@@ -96,8 +100,10 @@ def run_cascade_mode(
             handler.stop()
 
         # Stop other services
-        deps.movement_manager.stop()
-        deps.head_wobbler.stop()
+        if deps.movement_manager:
+            deps.movement_manager.stop()
+        if deps.head_wobbler:
+            deps.head_wobbler.stop()
         if deps.camera_worker:
             deps.camera_worker.stop()
         if deps.vision_manager:

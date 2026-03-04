@@ -10,10 +10,11 @@ import wave
 import asyncio
 import logging
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import sounddevice as sd
 
 from reachy_mini_conversation_app.cascade.timing import tracker
@@ -75,7 +76,7 @@ class CascadeTestStream:
         logger.info(f"CascadeTestStream initialized (file={self._test_file}, rate={sample_rate}Hz)")
 
     def _audio_callback(
-        self, outdata: np.ndarray, frames: int, time_info: object, status: sd.CallbackFlags
+        self, outdata: npt.NDArray[Any], frames: int, time_info: object, status: sd.CallbackFlags
     ) -> None:
         """Sounddevice callback — fills output buffer from our audio buffer."""
         bytes_needed = frames * 2  # int16 = 2 bytes per frame

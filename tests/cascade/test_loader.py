@@ -51,7 +51,7 @@ def test_import_callback_success(monkeypatch):
         pass
 
     fake_module = types.ModuleType("fake")
-    fake_module.my_callback = fake_fn
+    setattr(fake_module, "my_callback", fake_fn)
 
     monkeypatch.setattr("importlib.import_module", lambda path: fake_module)
     result = loader_mod._import_callback("test_profile", "my_callback")

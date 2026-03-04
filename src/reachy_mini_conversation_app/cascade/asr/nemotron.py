@@ -8,9 +8,10 @@ Uses nvidia/nemotron-speech-streaming-en-0.6b model with:
 
 from __future__ import annotations
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
+import numpy.typing as npt
 
 from .audio_utils import wav_to_float32
 from .base_streaming import StreamingASRProvider
@@ -48,12 +49,12 @@ class NemotronASR(StreamingASRProvider):
         self.chunk_size_samples = int(sample_rate * chunk_size_ms / 1000)
 
         # Model and cache state (lazy loaded)
-        self._model = None
-        self._cache = None
+        self._model: Any = None
+        self._cache: Any = None
         self._is_initialized = False
 
         # Streaming state
-        self._audio_buffer: list[np.ndarray] = []
+        self._audio_buffer: list[npt.NDArray[Any]] = []
         self._partial_transcript = ""
         self._final_transcript = ""
 
@@ -114,6 +115,8 @@ class NemotronASR(StreamingASRProvider):
         self._audio_buffer = []
         self._partial_transcript = ""
         self._final_transcript = ""
+
+        assert self._model is not None
 
         # Reset cache for new streaming session
         if hasattr(self._model, "reset_cache"):
@@ -200,7 +203,7 @@ class NemotronASR(StreamingASRProvider):
         if offset < len(audio):
             self._audio_buffer.append(audio[offset:])
 
-    async def _process_chunk(self, audio_chunk: np.ndarray) -> None:
+    async def _process_chunk(self, audio_chunk: npt.NDArray[Any]) -> None:
         """Process a single audio chunk through the model.
 
         Args:
@@ -243,7 +246,7 @@ class NemotronASR(StreamingASRProvider):
         except Exception as e:
             logger.warning(f"Error processing chunk: {e}")
 
-    async def _process_audio_final(self, audio: np.ndarray) -> None:
+    async def _process_audio_final(self, audio: npt.NDArray[Any]) -> None:
         """Process final audio with cache flush.
 
         Args:

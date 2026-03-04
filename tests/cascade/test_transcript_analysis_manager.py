@@ -53,6 +53,12 @@ def _make_reaction(
     )
 
 
+def _cb(r: ReactionConfig) -> AsyncMock:
+    """Extract the AsyncMock callback for test assertions."""
+    assert isinstance(r.callback, AsyncMock)
+    return r.callback
+
+
 def _make_manager(reactions: list[ReactionConfig], **kwargs) -> TranscriptAnalysisManager:
     """Build a manager with a mock deps and no entity analyzer."""
     deps = MagicMock()
@@ -73,8 +79,8 @@ async def test_keyword_fires_callback():
     await mgr.analyze_final("I love guitar")
     await asyncio.sleep(0)
 
-    r.callback.assert_called_once()
-    _, match = r.callback.call_args.args[0], r.callback.call_args.args[1]
+    _cb(r).assert_called_once()
+    _, match = _cb(r).call_args.args[0], _cb(r).call_args.args[1]
     assert isinstance(match, TriggerMatch)
     assert "guitar" in match.words
 
@@ -87,8 +93,8 @@ async def test_callback_receives_params():
     await mgr.analyze_final("let's wave")
     await asyncio.sleep(0)
 
-    r.callback.assert_called_once()
-    call_kwargs = r.callback.call_args.kwargs
+    _cb(r).assert_called_once()
+    call_kwargs = _cb(r).call_args.kwargs
     assert call_kwargs["direction"] == "left"
 
 
@@ -105,7 +111,7 @@ async def test_non_repeatable_fires_once():
     await mgr.analyze_final("guitar solo")
     await asyncio.sleep(0)
 
-    assert r.callback.call_count == 1
+    assert _cb(r).call_count == 1
 
 
 @pytest.mark.asyncio
@@ -118,7 +124,7 @@ async def test_repeatable_keyword_fires_every_time():
     await mgr.analyze_final("guitar solo")
     await asyncio.sleep(0)
 
-    assert r.callback.call_count == 2
+    assert _cb(r).call_count == 2
 
 
 @pytest.mark.asyncio
@@ -128,12 +134,12 @@ async def test_reset_clears_dedup():
     mgr = _make_manager([r])
     await mgr.analyze_final("I love guitar")
     await asyncio.sleep(0)
-    assert r.callback.call_count == 1
+    assert _cb(r).call_count == 1
 
     mgr.reset()
     await mgr.analyze_final("guitar again")
     await asyncio.sleep(0)
-    assert r.callback.call_count == 2
+    assert _cb(r).call_count == 2
 
 
 # --- Boolean `all` triggers ---
@@ -147,7 +153,7 @@ async def test_all_trigger_fires_when_all_match():
     await mgr.analyze_final("I was dancing to a grooving beat")
     await asyncio.sleep(0)
 
-    r.callback.assert_called_once()
+    _cb(r).assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -158,7 +164,7 @@ async def test_all_trigger_no_fire_on_partial():
     await mgr.analyze_final("I was dancing all night")
     await asyncio.sleep(0)
 
-    r.callback.assert_not_called()
+    _cb(r).assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -169,7 +175,7 @@ async def test_all_trigger_merged_words():
     await mgr.analyze_final("dancing to grooving beats")
     await asyncio.sleep(0)
 
-    match = r.callback.call_args.args[1]
+    match = _cb(r).call_args.args[1]
     assert "dancing" in match.words
     assert "grooving" in match.words
 
@@ -195,8 +201,8 @@ async def test_entity_dispatch():
     await mgr.analyze_final("I met Alice today")
     await asyncio.sleep(0)
 
-    r.callback.assert_called_once()
-    match = r.callback.call_args.args[1]
+    _cb(r).assert_called_once()
+    match = _cb(r).call_args.args[1]
     assert len(match.entities) == 1
     assert match.entities[0].text == "Alice"
 
@@ -222,13 +228,13 @@ async def test_entity_repeatable_dedup_by_text():
     # Same entity text again — should be deduped
     await mgr.analyze_final("Alice is here")
     await asyncio.sleep(0)
-    assert r.callback.call_count == 1
+    assert _cb(r).call_count == 1
 
     # Different entity text — should fire
     mock_analyzer.analyze = AsyncMock(side_effect=fake_analyze_bob)
     await mgr.analyze_final("Bob arrived")
     await asyncio.sleep(0)
-    assert r.callback.call_count == 2
+    assert _cb(r).call_count == 2
 
 
 @pytest.mark.asyncio
@@ -248,7 +254,7 @@ async def test_non_repeatable_entity_fires_once():
     await mgr.analyze_final("Bob is here")
     await asyncio.sleep(0)
 
-    assert r.callback.call_count == 1
+    assert _cb(r).call_count == 1
 
 
 # --- Partial analysis debouncing ---
@@ -266,7 +272,7 @@ async def test_analyze_partial_debounces():
     await mgr.analyze_partial("guitar riff 3")
     await asyncio.sleep(0.1)  # let tasks complete
 
-    assert r.callback.call_count == 1
+    assert _cb(r).call_count == 1
 
 
 # --- Multiple independent reactions ---
@@ -281,5 +287,5 @@ async def test_multiple_reactions_independent():
     await mgr.analyze_final("I play guitar while dancing")
     await asyncio.sleep(0)
 
-    r1.callback.assert_called_once()
-    r2.callback.assert_called_once()
+    _cb(r1).assert_called_once()
+    _cb(r2).assert_called_once()
