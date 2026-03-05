@@ -12,6 +12,7 @@ import numpy as np
 import gradio as gr
 from openai import AsyncOpenAI
 from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_to_int16
+from openai.resources.realtime.realtime import AsyncRealtimeConnection
 from numpy.typing import NDArray
 from scipy.signal import resample
 from websockets.exceptions import ConnectionClosedError
@@ -74,7 +75,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         self.output_sample_rate = OPEN_AI_OUTPUT_SAMPLE_RATE
         self.input_sample_rate = OPEN_AI_INPUT_SAMPLE_RATE
 
-        self.connection: Any = None
+        self.connection: AsyncRealtimeConnection | None = None
         self.output_queue: "asyncio.Queue[Tuple[int, NDArray[np.int16]] | AdditionalOutputs]" = asyncio.Queue()
 
         self.last_activity_time = asyncio.get_event_loop().time()
@@ -321,9 +322,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     logger.debug("User speech stopped - server will auto-commit with VAD")
 
                 if event.type in (
-                    "response.audio.done",  # GA
-                    "response.output_audio.done",  # GA alias
-                    "response.audio.completed",  # legacy (for safety)
+                    "response.output_audio.done",  # GA
                     "response.completed",  # text-only completion
                 ):
                     logger.debug("response completed")
@@ -347,25 +346,27 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         logger.warning("No usage data available for cost tracking")
 
                 # Handle partial transcription (user speaking in real-time)
-                if event.type == "conversation.item.input_audio_transcription.partial":
-                    logger.debug(f"User partial transcript: {event.transcript}")
+                if event.type == "conversation.item.input_audio_transcription.delta":
+                    logger.debug(f"User partial transcript: {event.delta}")
 
-                    # Increment sequence
-                    self.partial_transcript_sequence += 1
-                    current_sequence = self.partial_transcript_sequence
+                    if event.delta is not None:
 
-                    # Cancel previous debounce task if it exists
-                    if self.partial_transcript_task and not self.partial_transcript_task.done():
-                        self.partial_transcript_task.cancel()
-                        try:
-                            await self.partial_transcript_task
-                        except asyncio.CancelledError:
-                            pass
+                        # Increment sequence
+                        self.partial_transcript_sequence += 1
+                        current_sequence = self.partial_transcript_sequence
 
-                    # Start new debounce timer with sequence number
-                    self.partial_transcript_task = asyncio.create_task(
-                        self._emit_debounced_partial(event.transcript, current_sequence)
-                    )
+                        # Cancel previous debounce task if it exists
+                        if self.partial_transcript_task and not self.partial_transcript_task.done():
+                            self.partial_transcript_task.cancel()
+                            try:
+                                await self.partial_transcript_task
+                            except asyncio.CancelledError:
+                                pass
+
+                        # Start new debounce timer with sequence number
+                        self.partial_transcript_task = asyncio.create_task(
+                            self._emit_debounced_partial(event.delta, current_sequence)
+                        )
 
                 # Handle completed transcription (user finished speaking)
                 if event.type == "conversation.item.input_audio_transcription.completed":
@@ -382,12 +383,12 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     await self.output_queue.put(AdditionalOutputs({"role": "user", "content": event.transcript}))
 
                 # Handle assistant transcription
-                if event.type in ("response.audio_transcript.done", "response.output_audio_transcript.done"):
+                if event.type == "response.output_audio_transcript.done":
                     logger.debug(f"Assistant transcript: {event.transcript}")
                     await self.output_queue.put(AdditionalOutputs({"role": "assistant", "content": event.transcript}))
 
                 # Handle audio delta
-                if event.type in ("response.audio.delta", "response.output_audio.delta"):
+                if event.type == "response.output_audio.delta":
                     if self.deps.head_wobbler is not None:
                         self.deps.head_wobbler.feed(event.delta)
                     self.last_activity_time = asyncio.get_event_loop().time()
