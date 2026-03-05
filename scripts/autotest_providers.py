@@ -31,13 +31,35 @@ from reachy_mini_conversation_app.cascade.provider_factory import init_provider 
 
 logging.basicConfig(level=logging.WARNING)
 
+# ---------------------------------------------------------------------------
+# Terminal colours
+# ---------------------------------------------------------------------------
+
+_USE_COLOR = sys.stdout.isatty()
+
+
+def _c(code: str, text: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if _USE_COLOR else text
+
+
+def _pass(label: str) -> str:
+    return f"  {_c('32', '✔ PASS')}  {label}"
+
+
+def _fail(label: str, reason: str) -> str:
+    return f"  {_c('31', '✘ FAIL')}  {label}  — {reason}"
+
+
+def _skip(label: str, reason: str) -> str:
+    return f"  {_c('33', '⊘ SKIP')}  {label}  ({reason})"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
-HELLO_WORLD_WAV = FIXTURES_DIR / "hello_world.wav"
+THE_TIME_HAS_COME_WAV = FIXTURES_DIR / "the_time_has_come.wav"
 # Minimum duration in seconds for TTS output to be considered valid
 MIN_TTS_DURATION_S = 0.3
 
@@ -48,8 +70,8 @@ def _has_key(env_var: str) -> bool:
 
 
 def _load_speech_wav() -> bytes:
-    """Load the bundled 'hello world' WAV fixture."""
-    return HELLO_WORLD_WAV.read_bytes()
+    """Load the bundled 'the time has come' WAV fixture."""
+    return THE_TIME_HAS_COME_WAV.read_bytes()
 
 
 def _load_config() -> CascadeConfig:
@@ -96,12 +118,12 @@ def _check_skip(info: dict[str, Any]) -> str | None:
 # ---------------------------------------------------------------------------
 
 async def _test_asr(cfg: CascadeConfig, provider: str, wav: bytes) -> None:
-    """Transcribe 'hello world' WAV and check the transcript contains 'hello'."""
+    """Transcribe 'the time has come' WAV and check the transcript contains 'time'."""
     cfg.asr_provider = provider
     asr = init_provider("asr")
     result = await asr.transcribe(wav)
     assert isinstance(result, str), f"Expected str, got {type(result)}"
-    assert "hello" in result.lower(), f"Expected 'hello' in transcript, got: '{result}'"
+    assert "time" in result.lower(), "Expected 'time' in transcript"
 
 
 async def _test_llm(cfg: CascadeConfig, provider: str) -> None:
@@ -153,13 +175,14 @@ async def main() -> int:
     skipped = 0
 
     for ptype in ("asr", "llm", "tts"):
+        print(f"\n  {_c('1', ptype.upper())}")
         providers = cascade_yaml[ptype]["providers"]
         for name, info in providers.items():
             label = f"{ptype.upper():<4} {name}"
 
             skip_reason = _check_skip(info)
             if skip_reason:
-                print(f"  SKIP  {label}  ({skip_reason})")
+                print(_skip(label, skip_reason))
                 skipped += 1
                 continue
 
@@ -169,17 +192,25 @@ async def main() -> int:
                     await runner(cfg, name, wav)
                 else:
                     await runner(cfg, name)
-                print(f"  PASS  {label}")
+                print(_pass(label))
                 passed += 1
             except Exception as e:
-                print(f"  FAIL  {label}  — {e}")
+                print(_fail(label, str(e)))
                 failed += 1
 
     set_config(None)
 
-    print(f"\n{passed} passed, {failed} failed, {skipped} skipped")
+    parts = [
+        _c("32", f"{passed} passed") if passed else f"{passed} passed",
+        _c("31", f"{failed} failed") if failed else f"{failed} failed",
+        _c("33", f"{skipped} skipped") if skipped else f"{skipped} skipped",
+    ]
+    print(f"\n{', '.join(parts)}")
     return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    rc = asyncio.run(main())
+    # os._exit avoids segfault during interpreter shutdown caused by
+    # conflicting native libs (cv2/av dylib duplicates, MLX, torch).
+    os._exit(rc)

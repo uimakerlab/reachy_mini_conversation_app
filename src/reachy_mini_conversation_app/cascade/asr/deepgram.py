@@ -1,12 +1,12 @@
 """Deepgram ASR provider (cloud streaming)."""
 
 from __future__ import annotations
-import io
-import wave
+
 import asyncio
 import logging
 from typing import Any, Optional
 
+from .audio_utils import wav_to_pcm_int16
 from .base_streaming import StreamingASRProvider
 
 
@@ -122,14 +122,33 @@ class DeepgramASR(StreamingASRProvider):
             return
 
         try:
-            # Convert WAV to raw PCM if needed
-            pcm_data = self._wav_to_pcm(audio_chunk)
+            # Convert WAV to raw PCM at 16 kHz (resamples if needed)
+            pcm_data = wav_to_pcm_int16(audio_chunk, target_sr=16000)
 
             # Send to Deepgram
             await self.connection.send(pcm_data)
 
         except Exception as e:
             logger.warning(f"Failed to send audio chunk to Deepgram: {e}")
+
+    async def transcribe(self, audio_bytes: bytes, language: Optional[str] = None) -> str:
+        """Batch transcription that streams audio in small chunks.
+
+        Deepgram's streaming API expects audio to arrive progressively,
+        not as a single large blob.
+        """
+        CHUNK_DURATION_S = 0.032  # 32ms chunks, matching real-time streaming
+        pcm = wav_to_pcm_int16(audio_bytes, target_sr=16000)
+        chunk_size = int(16000 * 2 * CHUNK_DURATION_S)  # 2 bytes per sample (int16)
+
+        await self.start_stream()
+        assert self.connection is not None
+
+        for offset in range(0, len(pcm), chunk_size):
+            await self.connection.send(pcm[offset : offset + chunk_size])
+            await asyncio.sleep(CHUNK_DURATION_S)
+
+        return await self.end_stream()
 
     async def get_partial_transcript(self) -> Optional[str]:
         """Get current partial transcript.
@@ -152,12 +171,12 @@ class DeepgramASR(StreamingASRProvider):
                 # For streaming ASR, prioritize low latency over final confirmation
                 # Wait only briefly for final transcript, then use partial
                 WAITING_TIME_SEC = 0.4
-                if self.partial_transcript and not self.is_final_received:
-                    logger.debug("Have partial transcript, waiting briefly for final...")
+                if not self.is_final_received:
+                    logger.debug("Waiting briefly for final transcript...")
                     try:
                         await asyncio.wait_for(
                             self._wait_for_final(),
-                            timeout=WAITING_TIME_SEC,  # Very short wait - latency is key!
+                            timeout=WAITING_TIME_SEC,
                         )
                         logger.debug("Received final transcript")
                     except asyncio.TimeoutError:
@@ -235,22 +254,3 @@ class DeepgramASR(StreamingASRProvider):
         error = kwargs.get("error") or (args[1] if len(args) > 1 else args[0])
         logger.error(f"Deepgram error: {error}")
 
-    def _wav_to_pcm(self, audio_bytes: bytes) -> bytes:
-        """Convert WAV audio to raw PCM int16.
-
-        Args:
-            audio_bytes: WAV file bytes
-
-        Returns:
-            Raw PCM audio data (int16)
-
-        """
-        try:
-            # Try to parse as WAV
-            with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
-                # Read frames (this is raw PCM)
-                pcm_data = wav_file.readframes(wav_file.getnframes())
-                return pcm_data
-        except Exception:
-            # Assume it's already raw PCM
-            return audio_bytes
