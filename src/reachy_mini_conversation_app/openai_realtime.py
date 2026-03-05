@@ -18,7 +18,7 @@ from scipy.signal import resample
 from websockets.exceptions import ConnectionClosedError
 
 from reachy_mini_conversation_app.config import config
-from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
+from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions, get_auto_start_message
 from reachy_mini_conversation_app.tools.core_tools import (
     ToolDependencies,
     get_tool_specs,
@@ -502,6 +502,14 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     self._response_sender_loop(), name="response-sender"
                 )
 
+                # Auto-start: trigger the model to speak first if the profile has auto_start.txt
+                auto_start_msg = get_auto_start_message()
+                if auto_start_msg:
+                    logger.info("Auto-start: triggering first response: %s", auto_start_msg)
+                    await conn.response.create(
+                        response={"instructions": auto_start_msg}
+                    )
+
                 async for event in self.connection:
                     logger.debug(f"OpenAI event: {event.type}")
                     if event.type == "input_audio_buffer.speech_started":
@@ -723,16 +731,16 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # sends to the stream the stuff put in the output queue by the openai event handler
         # This is called periodically by the fastrtc Stream
 
-        # Handle idle
-        idle_duration = asyncio.get_event_loop().time() - self.last_activity_time
-        if idle_duration > 15.0 and self.deps.movement_manager.is_idle():
-            try:
-                await self.send_idle_signal(idle_duration)
-            except Exception as e:
-                logger.warning("Idle signal skipped (connection closed?): %s", e)
-                return None
-
-            self.last_activity_time = asyncio.get_event_loop().time()  # avoid repeated resets
+        # Handle idle -- disabled for Physical CI POC (causes random movements)
+        # idle_duration = asyncio.get_event_loop().time() - self.last_activity_time
+        # if idle_duration > 15.0 and self.deps.movement_manager.is_idle():
+        #     try:
+        #         await self.send_idle_signal(idle_duration)
+        #     except Exception as e:
+        #         logger.warning("Idle signal skipped (connection closed?): %s", e)
+        #         return None
+        #
+        #     self.last_activity_time = asyncio.get_event_loop().time()  # avoid repeated resets
 
         return await wait_for_item(self.output_queue)  # type: ignore[no-any-return]
 

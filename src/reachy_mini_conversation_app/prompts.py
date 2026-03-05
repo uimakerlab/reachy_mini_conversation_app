@@ -91,6 +91,24 @@ def get_session_instructions() -> str:
         sys.exit(1)
 
 
+AUTO_START_FILENAME = "auto_start.txt"
+
+
+def get_auto_start_message() -> str | None:
+    """Return the auto-start message for the current profile, or None."""
+    profile = config.REACHY_MINI_CUSTOM_PROFILE
+    if not profile:
+        return None
+    try:
+        auto_start_file = config.PROFILES_DIRECTORY / profile / AUTO_START_FILENAME
+        if auto_start_file.exists():
+            msg = auto_start_file.read_text(encoding="utf-8").strip()
+            return msg or None
+    except Exception:
+        pass
+    return None
+
+
 def get_session_voice(default: str = "cedar") -> str:
     """Resolve the voice to use for the session.
 
