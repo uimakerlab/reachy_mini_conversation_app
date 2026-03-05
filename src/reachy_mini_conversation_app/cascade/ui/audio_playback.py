@@ -115,10 +115,11 @@ class AudioPlaybackSystem:
         # 1. Robot hardware is available (not simulation)
         # 2. Default output device is a robot speaker (reSpeaker, etc.)
 
+        status = self.robot.client.get_status() if self.robot is not None else None
         robot_available = (
             self.robot is not None
             and hasattr(self.robot, "media")
-            and not self.robot.client.get_status().get("simulation_enabled", False)
+            and not getattr(status, "simulation_enabled", False)
         )
 
         # Check if default output is a robot speaker

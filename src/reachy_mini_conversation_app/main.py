@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import asyncio
+import platform
 import argparse
 import threading
 from typing import Any, Dict, List, Optional
@@ -20,6 +21,13 @@ from reachy_mini_conversation_app.utils import (
     handle_vision_stuff,
     log_connection_troubleshooting,
 )
+
+
+def _select_media_backend(args: argparse.Namespace) -> str:
+    """Pick the right media backend based on platform and flags."""
+    if platform.system() == "Darwin":
+        return "sounddevice_no_video" if args.no_camera else "sounddevice_opencv"
+    return "gstreamer_no_video" if args.no_camera else "gstreamer"
 
 
 def update_chatbot(chatbot: List[Dict[str, Any]], response: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -64,8 +72,9 @@ def run(
             if args.robot_name is not None:
                 robot_kwargs["robot_name"] = args.robot_name
 
-            logger.info("Initializing ReachyMini (SDK will auto-detect appropriate backend)")
-            robot = ReachyMini(**robot_kwargs)
+            media_backend = _select_media_backend(args)
+            logger.info(f"Initializing ReachyMini with media_backend={media_backend!r}")
+            robot = ReachyMini(media_backend=media_backend, **robot_kwargs)
 
         except TimeoutError as e:
             logger.error(
@@ -92,7 +101,7 @@ def run(
 
     # Auto-enable Gradio in simulation mode (both MuJoCo for deamon and mockup-sim for desktop app)
     status = robot.client.get_status()
-    is_simulation = status.get("simulation_enabled", False) or status.get("mockup_sim_enabled", False)
+    is_simulation = getattr(status, "simulation_enabled", False) or getattr(status, "mockup_sim_enabled", False)
 
     if is_simulation and not args.gradio and not args.autotest:
         logger.info("Simulation mode detected. Automatically enabling gradio flag.")

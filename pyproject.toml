@@ -29,6 +29,9 @@ dependencies = [
     "mlx-audio>=0.3.1",
 ]
 
+[tool.uv.sources]
+reachy-mini = { path = "../reachy_mini", editable = true }
+
 [project.optional-dependencies]
 reachy_mini_wireless = [
   "PyGObject>=3.42.2,<=3.46.0; sys_platform == 'linux'",
@@ -100,6 +103,11 @@ reachy-mini-conversation-app = "reachy_mini_conversation_app.main:main"
 reachy_mini_conversation_app = "reachy_mini_conversation_app.main:ReachyMiniConversationApp"
 
 [tool.uv]
+dependency-metadata = [
+    # Upstream metadata currently marks `gstreamer-msvc-runtime` as unconditional.
+    # It should only be required on Windows.
+    { name = "gstreamer-libs", version = "1.28.1", requires-dist = ["gstreamer-msvc-runtime; sys_platform == 'win32'", "setuptools"] },
+]
 required-environments = [
   "sys_platform == 'darwin'",
   "sys_platform == 'linux'",

@@ -36,9 +36,8 @@ async def react_to_food_entity(deps: ToolDependencies, match: TriggerMatch, **kw
             # Determine playback mode based on system's default audio output device
             import sounddevice as sd
 
-            robot_available = hasattr(deps.reachy_mini, "media") and not deps.reachy_mini.client.get_status().get(
-                "simulation_enabled", False
-            )
+            status = deps.reachy_mini.client.get_status()
+            robot_available = hasattr(deps.reachy_mini, "media") and not getattr(status, "simulation_enabled", False)
 
             # Check if default output is a robot speaker
             use_robot_media = False
