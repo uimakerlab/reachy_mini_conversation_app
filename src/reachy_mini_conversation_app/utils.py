@@ -44,6 +44,9 @@ def parse_args() -> Tuple[argparse.Namespace, list]:  # type: ignore
         default=None,
         help="[Optional] Robot name/prefix for Zenoh topics (must match daemon's --robot-name). Only needed for development with multiple robots.",
     )
+    parser.add_argument("--asr-provider", default=None, help="Override ASR provider from cascade.yaml")
+    parser.add_argument("--llm-provider", default=None, help="Override LLM provider from cascade.yaml")
+    parser.add_argument("--tts-provider", default=None, help="Override TTS provider from cascade.yaml")
     return parser.parse_known_args()
 
 

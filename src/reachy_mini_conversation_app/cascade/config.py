@@ -64,16 +64,16 @@ class CascadeConfig:
         self._cascade = _load_cascade_config()
 
         # ASR config
-        self.asr_provider = self._cascade["asr"]["provider"]
+        self.asr_provider = os.getenv("CASCADE_ASR_PROVIDER") or self._cascade["asr"]["provider"]
         self.asr_providers = self._cascade["asr"]["providers"]
 
         # LLM config
-        self.llm_provider = self._cascade["llm"]["provider"]
+        self.llm_provider = os.getenv("CASCADE_LLM_PROVIDER") or self._cascade["llm"]["provider"]
         self.llm_providers = self._cascade["llm"]["providers"]
         self.llm_temperature: float = self._cascade["llm"].get("temperature", 1.0)
 
         # TTS config
-        self.tts_provider = self._cascade["tts"]["provider"]
+        self.tts_provider = os.getenv("CASCADE_TTS_PROVIDER") or self._cascade["tts"]["provider"]
         self.tts_providers = self._cascade["tts"]["providers"]
         self.tts_trim_silence = self._cascade["tts"].get("trim_silence", True)
 

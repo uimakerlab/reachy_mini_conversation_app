@@ -33,6 +33,14 @@ def run_cascade_mode(
         logger: Logger instance
 
     """
+    # Set env vars from CLI overrides BEFORE any config/handler import
+    if getattr(args, "asr_provider", None):
+        os.environ["CASCADE_ASR_PROVIDER"] = args.asr_provider
+    if getattr(args, "llm_provider", None):
+        os.environ["CASCADE_LLM_PROVIDER"] = args.llm_provider
+    if getattr(args, "tts_provider", None):
+        os.environ["CASCADE_TTS_PROVIDER"] = args.tts_provider
+
     from reachy_mini_conversation_app.cascade.handler import CascadeHandler
 
     logger.info("Using cascade pipeline mode (ASR→LLM→TTS)")
