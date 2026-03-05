@@ -133,11 +133,11 @@ class BackgroundToolManager(BaseModel):
     """internal lifecycle tasks (notification listener, periodic cleanup)"""
     _lifecycle_tasks: list[asyncio.Task[None]] = PrivateAttr(default_factory=list)
 
-    """the maximum duration of a tool execution in seconds (default: 1 hour)"""
-    _max_tool_duration_seconds: float = PrivateAttr(default=3600)
+    """the maximum duration of a tool execution in seconds (default: 1 day)"""
+    _max_tool_duration_seconds: float = PrivateAttr(default=86400)
 
-    """the maximum time to keep a completed/failed/cancelled tool in memory (default: 1 day)"""
-    _max_tool_memory_seconds: float = PrivateAttr(default=86400)
+    """the maximum time to keep a completed/failed/cancelled tool in memory (default: 1 hour)"""
+    _max_tool_memory_seconds: float = PrivateAttr(default=3600)
 
     def set_loop(
         self,
