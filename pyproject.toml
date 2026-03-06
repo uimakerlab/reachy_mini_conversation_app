@@ -29,9 +29,6 @@ dependencies = [
     "mlx-audio>=0.3.1",
 ]
 
-[tool.uv.sources]
-reachy-mini = { path = "../reachy_mini", editable = true }
-
 [project.optional-dependencies]
 local_vision = [
   "torch>=2.1",
