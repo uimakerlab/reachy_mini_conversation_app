@@ -3,9 +3,9 @@
 from __future__ import annotations
 import logging
 import importlib
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-from reachy_mini_conversation_app.prompts import get_session_instructions
+from reachy_mini_conversation_app.prompts import CASCADE_EXTRA_INSTRUCTIONS, get_session_instructions
 from reachy_mini_conversation_app.cascade.asr import ASRProvider
 from reachy_mini_conversation_app.cascade.llm import LLMProvider
 from reachy_mini_conversation_app.cascade.tts import TTSProvider
@@ -18,35 +18,6 @@ from reachy_mini_conversation_app.cascade.transcript_analysis import (
 
 
 logger = logging.getLogger(__name__)
-
-
-CASCADE_EXTRA_INSTRUCTIONS = """\n\n**IMPORTANT:**
-## SPEAKING TO THE USER
-- To talk to the user, you *MUST* use the 'speak' tool, there is no other way to generate speech.
-- When you want to say something, always use the 'speak' tool, even for short acknowledgments like "OK" or "Sure".
-
-## ISSUING SEVERAL TOOLS IN ONE RESPONSE
-- You can always issue several tools in one response if needed.
-- You can combine the 'speak' tool with other tools in the same response.
-- Do not hesitate to use multiple tools if the situation requires it, especially for complex tasks.
-"""
-
-
-def convert_tool_specs_to_chat_format(realtime_specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Convert tool specs from Realtime API format to Chat Completions API format."""
-    chat_specs = []
-    for spec in realtime_specs:
-        if spec["type"] == "function":
-            chat_spec = {
-                "type": "function",
-                "function": {
-                    "name": spec["name"],
-                    "description": spec["description"],
-                    "parameters": spec["parameters"],
-                },
-            }
-            chat_specs.append(chat_spec)
-    return chat_specs
 
 
 def init_provider(provider_type: str, extra_kwargs: Dict[str, Any] | None = None) -> Any:

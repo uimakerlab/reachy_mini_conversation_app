@@ -48,6 +48,17 @@ def wav_to_float32(wav_bytes: bytes, target_sr: int) -> npt.NDArray[np.float32]:
     return audio
 
 
+def pcm_to_wav(pcm_data: bytes, sample_rate: int) -> bytes:
+    """Wrap raw PCM int16 mono bytes in a WAV container."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_data)
+    return buf.getvalue()
+
+
 def wav_to_pcm_int16(wav_bytes: bytes, target_sr: int) -> bytes:
     """Parse WAV bytes and return raw PCM int16 at *target_sr*."""
     sr, channels, sw, pcm = _read_wav(wav_bytes)

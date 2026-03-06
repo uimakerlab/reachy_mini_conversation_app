@@ -1,8 +1,6 @@
 """Audio recording for VAD-based continuous recording."""
 
 from __future__ import annotations
-import io
-import wave
 import logging
 import threading
 from enum import Enum
@@ -13,23 +11,13 @@ import numpy as np
 import sounddevice as sd
 
 from reachy_mini_conversation_app.cascade.vad import VADEvent, VADStateMachine
+from reachy_mini_conversation_app.cascade.asr.audio_utils import pcm_to_wav
 
 
 if TYPE_CHECKING:
     from reachy_mini_conversation_app.cascade.vad import SileroVAD
 
 logger = logging.getLogger(__name__)
-
-
-def _audio_to_wav(data: bytes, sample_rate: int) -> bytes:
-    """Encode raw PCM int16 data as WAV bytes."""
-    wav_buffer = io.BytesIO()
-    with wave.open(wav_buffer, "wb") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)  # 16-bit
-        wav_file.setframerate(sample_rate)
-        wav_file.writeframes(data)
-    return wav_buffer.getvalue()
 
 
 class ContinuousState(Enum):
@@ -213,7 +201,7 @@ class ContinuousVADRecorder:
                             # Send pre-roll + current chunk so ASR sees speech onset
                             for frame in self._vad_sm.speech_chunks:
                                 self.streaming_callbacks.on_chunk(
-                                    _audio_to_wav(frame.tobytes(), self.sample_rate)
+                                    pcm_to_wav(frame.tobytes(), self.sample_rate)
                                 )
 
                     elif event == VADEvent.SPEECH_ENDED:
@@ -224,7 +212,7 @@ class ContinuousVADRecorder:
                         logger.info(f"VAD: Captured {duration:.2f}s of speech")
                         tracker.mark("recording_captured", {"duration_s": round(duration, 2)})
 
-                        wav_bytes = _audio_to_wav(audio_data.tobytes(), self.sample_rate)
+                        wav_bytes = pcm_to_wav(audio_data.tobytes(), self.sample_rate)
                         if self.on_speech_captured:
                             self.on_speech_captured(wav_bytes)
 
@@ -235,7 +223,7 @@ class ContinuousVADRecorder:
                         # Mid-recording: stream current chunk to ASR
                         if self.streaming_callbacks:
                             self.streaming_callbacks.on_chunk(
-                                _audio_to_wav(data.tobytes(), self.sample_rate)
+                                pcm_to_wav(data.tobytes(), self.sample_rate)
                             )
 
         except Exception as e:

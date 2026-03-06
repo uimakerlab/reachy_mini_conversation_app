@@ -58,6 +58,18 @@ def _expand_prompt_includes(content: str) -> str:
     return '\n'.join(expanded_lines)
 
 
+CASCADE_EXTRA_INSTRUCTIONS = """\n\n**IMPORTANT:**
+## SPEAKING TO THE USER
+- To talk to the user, you *MUST* use the 'speak' tool, there is no other way to generate speech.
+- When you want to say something, always use the 'speak' tool, even for short acknowledgments like "OK" or "Sure".
+
+## ISSUING SEVERAL TOOLS IN ONE RESPONSE
+- You can always issue several tools in one response if needed.
+- You can combine the 'speak' tool with other tools in the same response.
+- Do not hesitate to use multiple tools if the situation requires it, especially for complex tasks.
+"""
+
+
 def get_session_instructions() -> str:
     """Get session instructions, loading from REACHY_MINI_CUSTOM_PROFILE if set."""
     profile = config.REACHY_MINI_CUSTOM_PROFILE

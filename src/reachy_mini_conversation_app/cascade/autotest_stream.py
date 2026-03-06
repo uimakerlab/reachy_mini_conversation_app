@@ -5,8 +5,6 @@ the audio through the full cascade pipeline without human interaction.
 """
 
 from __future__ import annotations
-import io
-import wave
 import asyncio
 import logging
 import threading
@@ -19,6 +17,7 @@ import numpy.typing as npt
 
 from reachy_mini_conversation_app.cascade.timing import tracker
 from reachy_mini_conversation_app.cascade.speech_output import ConsoleSpeechOutput
+from reachy_mini_conversation_app.cascade.asr.audio_utils import pcm_to_wav
 from reachy_mini_conversation_app.cascade.provider_factory import init_tts_provider
 
 
@@ -168,16 +167,6 @@ class CascadeTestStream:
             pcm_chunks.append(chunk)
         return b"".join(pcm_chunks)
 
-    def _pcm_to_wav(self, pcm_data: bytes, sample_rate: int) -> bytes:
-        """Wrap raw PCM int16 bytes in a WAV container."""
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            wf.writeframes(pcm_data)
-        return buf.getvalue()
-
     async def _play_and_wait(self, pcm_data: bytes) -> None:
         """Queue PCM for speaker playback and wait for it to finish."""
         with self._buffer_lock:
@@ -194,7 +183,7 @@ class CascadeTestStream:
         tracker.reset("vad_speech_end")
         tracker.mark("vad_speech_end")
         tracker.mark("recording_captured", {"duration_s": round(duration, 2)})
-        wav_bytes = self._pcm_to_wav(pcm_data, self._input_tts.sample_rate)
+        wav_bytes = pcm_to_wav(pcm_data, self._input_tts.sample_rate)
         return await self.handler.process_audio_manual(wav_bytes)
 
     async def _process_streaming(self, pcm_data: bytes) -> TurnResult:
@@ -222,7 +211,7 @@ class CascadeTestStream:
         offset = 0
         while offset < len(audio_16k):
             chunk = audio_16k[offset : offset + STREAM_CHUNK_SAMPLES]
-            wav_chunk = self._pcm_to_wav(chunk.tobytes(), STREAM_SAMPLE_RATE)
+            wav_chunk = pcm_to_wav(chunk.tobytes(), STREAM_SAMPLE_RATE)
             await self.handler.process_audio_streaming_chunk(wav_chunk)
             offset += STREAM_CHUNK_SAMPLES
             await asyncio.sleep(chunk_duration)

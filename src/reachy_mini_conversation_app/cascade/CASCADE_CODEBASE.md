@@ -158,7 +158,6 @@ init_asr_provider() -> ASRProvider
 init_llm_provider() -> LLMProvider
 init_tts_provider() -> TTSProvider
 init_transcript_analysis(deps) -> TranscriptAnalysisManager | NoOpTranscriptManager
-convert_tool_specs_to_chat_format(specs) -> List[Dict]
 ```
 
 ### Pipeline (`pipeline.py`)

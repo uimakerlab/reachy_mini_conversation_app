@@ -5,9 +5,7 @@ without requiring Gradio UI. It uses Silero VAD for automatic speech detection.
 """
 
 from __future__ import annotations
-import io
 import time
-import wave
 import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
@@ -26,6 +24,7 @@ from reachy_mini_conversation_app.cascade.vad import (
     VADStateMachine,
 )
 from reachy_mini_conversation_app.cascade.timing import tracker
+from reachy_mini_conversation_app.cascade.asr.audio_utils import pcm_to_wav
 
 
 if TYPE_CHECKING:
@@ -138,7 +137,7 @@ class CascadeLocalStream:
             if streaming:
                 await self.handler.process_audio_streaming_start()
                 for chunk in self._vad_sm.speech_chunks:
-                    wav_bytes = self._audio_to_wav(chunk, SILERO_SAMPLE_RATE)
+                    wav_bytes = pcm_to_wav(chunk.tobytes(), SILERO_SAMPLE_RATE)
                     await self.handler.process_audio_streaming_chunk(wav_bytes)
 
         elif event == VADEvent.SPEECH_ENDED:
@@ -165,7 +164,7 @@ class CascadeLocalStream:
 
         elif self._vad_sm.state == VADState.RECORDING and streaming:
             # Mid-recording: stream current chunk to ASR
-            wav_bytes = self._audio_to_wav(audio_chunk, SILERO_SAMPLE_RATE)
+            wav_bytes = pcm_to_wav(audio_chunk.tobytes(), SILERO_SAMPLE_RATE)
             await self.handler.process_audio_streaming_chunk(wav_bytes)
 
     async def _process_recorded_audio(self) -> None:
@@ -179,7 +178,7 @@ class CascadeLocalStream:
         logger.info(f"Processing {len(audio_data)} samples ({duration:.2f}s)")
         tracker.mark("recording_captured", {"duration_s": round(duration, 2)})
 
-        wav_bytes = self._audio_to_wav(audio_data, SILERO_SAMPLE_RATE)
+        wav_bytes = pcm_to_wav(audio_data.tobytes(), SILERO_SAMPLE_RATE)
         logger.info("Transcribing...")
 
         turn = await self.handler.process_audio_manual(wav_bytes)
@@ -191,16 +190,6 @@ class CascadeLocalStream:
 
         # Print latency summary for this turn
         tracker.print_summary()
-
-    def _audio_to_wav(self, audio: npt.NDArray[np.int16], sample_rate: int) -> bytes:
-        """Convert int16 audio array to WAV bytes."""
-        buffer = io.BytesIO()
-        with wave.open(buffer, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            wf.writeframes(audio.tobytes())
-        return buffer.getvalue()
 
     async def _play_loop(self) -> None:
         """Pull audio from playback queue and push to robot speaker."""

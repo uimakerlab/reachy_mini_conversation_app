@@ -22,7 +22,6 @@ from reachy_mini_conversation_app.cascade.provider_factory import (
     init_llm_provider,
     init_tts_provider,
     init_transcript_analysis,
-    convert_tool_specs_to_chat_format,
 )
 from reachy_mini_conversation_app.cascade.transcript_analysis import (
     NoOpTranscriptManager,
@@ -35,6 +34,23 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+def convert_tool_specs_to_chat_format(realtime_specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert tool specs from Realtime API format to Chat Completions API format."""
+    chat_specs = []
+    for spec in realtime_specs:
+        if spec["type"] == "function":
+            chat_spec = {
+                "type": "function",
+                "function": {
+                    "name": spec["name"],
+                    "description": spec["description"],
+                    "parameters": spec["parameters"],
+                },
+            }
+            chat_specs.append(chat_spec)
+    return chat_specs
 
 
 class CascadeHandler:
