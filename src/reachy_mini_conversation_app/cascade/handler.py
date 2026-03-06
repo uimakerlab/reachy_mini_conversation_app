@@ -16,7 +16,7 @@ from reachy_mini_conversation_app.tools.core_tools import (
     ToolDependencies,
     get_tool_specs,
 )
-from reachy_mini_conversation_app.cascade.turn_result import TurnItem, TurnResult
+from reachy_mini_conversation_app.cascade.turn_result import TurnItem, TurnResult, PipelineResult
 from reachy_mini_conversation_app.cascade.provider_factory import (
     init_asr_provider,
     init_llm_provider,
@@ -166,12 +166,17 @@ class CascadeHandler:
             llm=self.llm, tts=self.tts, speech_output=self.speech_output,
             conversation_history=self.conversation_history,
             tool_specs=self.tool_specs,
-            current_turn_items=self._current_turn_items,
-            captured_frames=self._captured_frames,
-            deps=self.deps, aggregate_cost_fn=self._aggregate_cost,
+            deps=self.deps,
+            result=PipelineResult(),
         )
-        await pipeline.process_llm_response(ctx)
+        result = await pipeline.process_llm_response(ctx)
         tracker.mark("llm_complete")
+
+        # Apply pipeline outputs to handler state
+        self._current_turn_items.extend(result.turn_items)
+        self._captured_frames.extend(result.captured_frames)
+        self._turn_cost += result.cost
+        self.cumulative_cost += result.cost
 
         # Reset transcript analysis for next turn
         self._on_turn_complete()

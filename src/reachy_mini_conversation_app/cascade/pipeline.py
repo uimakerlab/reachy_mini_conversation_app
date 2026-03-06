@@ -5,14 +5,14 @@ import json
 import base64
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Callable
+from typing import TYPE_CHECKING, Any, Dict, List
 from dataclasses import dataclass
 
 from reachy_mini_conversation_app.cascade.llm import LLMProvider
 from reachy_mini_conversation_app.cascade.tts import TTSProvider
 from reachy_mini_conversation_app.cascade.config import get_config
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies, dispatch_tool_call
-from reachy_mini_conversation_app.cascade.turn_result import TurnItem
+from reachy_mini_conversation_app.cascade.turn_result import TurnItem, PipelineResult
 
 
 if TYPE_CHECKING:
@@ -31,19 +31,24 @@ class PipelineContext:
     speech_output: SpeechOutput | None
     conversation_history: list[dict[str, Any]]
     tool_specs: list[dict[str, Any]]
-    current_turn_items: list[TurnItem]
-    captured_frames: list[bytes]
     deps: ToolDependencies
-    aggregate_cost_fn: Callable[..., None]
+    result: PipelineResult
 
 
-async def process_llm_response(ctx: PipelineContext) -> None:
+def _track_cost(ctx: PipelineContext, provider: Any) -> None:
+    """Accumulate provider cost into the pipeline result."""
+    if hasattr(provider, "last_cost") and provider.last_cost > 0:
+        ctx.result.cost += provider.last_cost
+        provider.last_cost = 0.0
+
+
+async def process_llm_response(ctx: PipelineContext) -> PipelineResult:
     """Process LLM response with retry on failure."""
     max_retries = 2
     for attempt in range(1 + max_retries):
         try:
             await _process_llm_response_once(ctx)
-            return
+            return ctx.result
         except Exception as e:
             if attempt < max_retries:
                 logger.warning("LLM failed (attempt %d), retrying: %s", attempt + 1, e)
@@ -54,6 +59,7 @@ async def process_llm_response(ctx: PipelineContext) -> None:
                 logger.error("LLM failed after %d attempts: %s", max_retries + 1, e)
                 if ctx.speech_output:
                     await ctx.speech_output.speak("Sorry, I'm having trouble responding right now.")
+    return ctx.result
 
 
 async def _process_llm_response_once(ctx: PipelineContext) -> None:
@@ -80,7 +86,7 @@ async def _process_llm_response_once(ctx: PipelineContext) -> None:
             break
 
     # Aggregate LLM cost after generator completes
-    ctx.aggregate_cost_fn(ctx.llm, "LLM")
+    _track_cost(ctx, ctx.llm)
 
     # Create assistant message with text, tool calls...
     assistant_message: Dict[str, Any] = {"role": "assistant"}
@@ -115,7 +121,7 @@ async def _process_llm_response_once(ctx: PipelineContext) -> None:
     elif tool_calls and not any(tc.get("function", {}).get("name") == "speak" for tc in tool_calls):
         # Tool calls but no speak — record assistant text if present
         if full_text:
-            ctx.current_turn_items.append(TurnItem(kind="assistant", text=full_text))
+            ctx.result.turn_items.append(TurnItem(kind="assistant", text=full_text))
     if tool_calls:
         # Process normal tool calls
         await execute_tool_calls(tool_calls, ctx)
@@ -170,13 +176,13 @@ async def execute_tool_calls(
                 if "b64_im" in result:
                     b64_im = result["b64_im"]
                     camera_image_bytes = base64.b64decode(b64_im)
-                    frame_index = len(ctx.captured_frames)
-                    ctx.captured_frames.append(camera_image_bytes)
+                    frame_index = len(ctx.result.captured_frames)
+                    ctx.result.captured_frames.append(camera_image_bytes)
                     # Replace the heavy b64 blob in conversation history with a lightweight marker
                     ctx.conversation_history[-1]["content"] = json.dumps(
                         {"status": "image_captured", "frame_index": frame_index}
                     )
-                    ctx.current_turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
+                    ctx.result.turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
                     logger.info("see_image: stored frame %d, will add image to conversation", frame_index)
                 else:
                     logger.warning(f"see_image returned error: {result}")
@@ -187,13 +193,13 @@ async def execute_tool_calls(
                     b64_im = result["b64_im"]
                     logger.info("Camera tool executed - will add image to conversation for LLM analysis")
                     camera_image_bytes = base64.b64decode(b64_im)
-                    frame_index = len(ctx.captured_frames)
-                    ctx.captured_frames.append(camera_image_bytes)
+                    frame_index = len(ctx.result.captured_frames)
+                    ctx.result.captured_frames.append(camera_image_bytes)
                     # Replace the heavy b64 blob in conversation history with a lightweight marker
                     ctx.conversation_history[-1]["content"] = json.dumps(
                         {"status": "image_captured", "frame_index": frame_index}
                     )
-                    ctx.current_turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
+                    ctx.result.turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
                 else:
                     # Camera failed - error already in tool result, LLM will see it
                     logger.warning(f"Camera tool returned error: {result}")
@@ -202,15 +208,15 @@ async def execute_tool_calls(
             elif tool_name == "speak" and "message" in result:
                 message = result["message"]
                 logger.info(f"Speaking: {message}")
-                ctx.current_turn_items.append(TurnItem(kind="speak", text=message))
+                ctx.result.turn_items.append(TurnItem(kind="speak", text=message))
 
                 if ctx.speech_output:
                     await ctx.speech_output.speak(message)
-                ctx.aggregate_cost_fn(ctx.tts, "TTS")
+                _track_cost(ctx, ctx.tts)
 
             # Other tools
             elif tool_name not in ("speak", "see_image", "camera"):
-                ctx.current_turn_items.append(
+                ctx.result.turn_items.append(
                     TurnItem(kind="tool", tool_name=tool_name, tool_content=json.dumps(result))
                 )
 

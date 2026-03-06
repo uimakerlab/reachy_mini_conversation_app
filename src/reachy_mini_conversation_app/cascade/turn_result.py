@@ -19,6 +19,15 @@ class TurnItem:
 
 
 @dataclass
+class PipelineResult:
+    """Accumulated outputs from one pipeline run."""
+
+    turn_items: list[TurnItem] = field(default_factory=list)
+    captured_frames: list[bytes] = field(default_factory=list)
+    cost: float = 0.0
+
+
+@dataclass
 class TurnResult:
     """Everything the UI needs to render one conversation turn."""
 
