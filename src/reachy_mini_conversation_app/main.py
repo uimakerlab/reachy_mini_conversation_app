@@ -4,8 +4,8 @@ import os
 import sys
 import time
 import asyncio
-import platform
 import argparse
+import platform
 import threading
 from typing import Any, Dict, List, Optional
 
