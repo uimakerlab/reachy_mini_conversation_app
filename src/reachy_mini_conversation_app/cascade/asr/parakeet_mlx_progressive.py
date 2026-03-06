@@ -101,9 +101,10 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
         full_audio = np.concatenate(self._audio_buffer)
         fixed_text, active_text = self._transcribe_incremental(full_audio)
 
-        # Build partial
+        # Build partial (only update if non-empty to avoid overwriting good value)
         parts = [p for p in (fixed_text, active_text) if p]
-        self._last_partial = " ".join(parts) or None
+        if parts:
+            self._last_partial = " ".join(parts)
 
     async def get_partial_transcript(self) -> Optional[str]:
         """Return latest partial transcript."""
