@@ -8,7 +8,7 @@ from dotenv import find_dotenv, load_dotenv
 
 # Locked profile: set to a profile name (e.g., "astronomer") to lock the app
 # to that profile and disable all profile switching. Leave as None for normal behavior.
-LOCKED_PROFILE: str | None = "gliner_demo"
+LOCKED_PROFILE: str | None = None
 DEFAULT_PROFILES_DIRECTORY = Path(__file__).parent / "profiles"
 
 logger = logging.getLogger(__name__)

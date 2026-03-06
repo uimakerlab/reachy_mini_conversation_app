@@ -1,5 +1,14 @@
 # Greetings
 Hello, what is your name?
-Ok so your name is Richie, is this correct?
-I've heard that you love music. What is your favorite genre? Or maybe your favorite instrument?
-Also it seems you love pizza and also sushis, is that right, because I'm hungry right now.
+
+# Test tool calling
+Can you show me when you're sad?
+
+# Test camera
+Can you tell me what you see?
+
+# Test live reactions
+I've heard that you love music. What is your favorite genre? Also do you like to eat sushis or do your prefer pizza?
+
+# Test live tool calling
+Can you dance for me, maybe something groovy, or funky if you can?
