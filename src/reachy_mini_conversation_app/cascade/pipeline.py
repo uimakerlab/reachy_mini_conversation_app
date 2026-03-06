@@ -8,11 +8,75 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, List
 from dataclasses import dataclass
 
+from pathlib import Path
+
 from reachy_mini_conversation_app.cascade.llm import LLMProvider
 from reachy_mini_conversation_app.cascade.tts import TTSProvider
 from reachy_mini_conversation_app.cascade.config import get_config
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies, dispatch_tool_call
 from reachy_mini_conversation_app.cascade.turn_result import TurnItem, PipelineResult
+
+PROMPT_LOG = Path("prompt.log")
+
+
+def _log_prompt(messages: list[dict[str, Any]], tools: list[dict[str, Any]], system: str | None, depth: int) -> None:
+    """Append a human-readable snapshot of the LLM request to prompt.log."""
+    import datetime
+
+    lines: list[str] = []
+    lines.append(f"\n{'='*80}")
+    lines.append(f"LLM REQUEST  depth={depth}  {datetime.datetime.now().isoformat(timespec='milliseconds')}")
+    lines.append(f"{'='*80}")
+
+    # System instructions
+    if system:
+        lines.append(f"\n--- SYSTEM ({len(system)} chars) ---")
+        lines.append(system)
+
+    # Tools
+    lines.append(f"\n--- TOOLS ({len(tools)}) ---")
+    for t in tools:
+        fn = t.get("function", t)
+        lines.append(f"  - {fn.get('name', '?')}: {fn.get('description', '')[:120]}")
+
+    # Messages
+    lines.append(f"\n--- MESSAGES ({len(messages)}) ---")
+    for i, msg in enumerate(messages):
+        role = msg.get("role", "?")
+        # Tool result message
+        if role == "tool":
+            content = msg.get("content", "")
+            if len(content) > 300:
+                content = content[:300] + "..."
+            lines.append(f"[{i}] {role} ({msg.get('name','?')}): {content}")
+        # Assistant with tool calls
+        elif "tool_calls" in msg:
+            text = msg.get("content", "") or ""
+            tc_summary = ", ".join(
+                tc.get("function", {}).get("name", "?") for tc in msg["tool_calls"]
+            )
+            lines.append(f"[{i}] {role}: {text[:200]}  [tool_calls: {tc_summary}]")
+        # User with image
+        elif isinstance(msg.get("content"), list):
+            parts = []
+            for p in msg["content"]:
+                if isinstance(p, dict) and p.get("type") == "image":
+                    parts.append("<image>")
+                elif isinstance(p, dict) and p.get("type") == "text":
+                    parts.append(p.get("text", "")[:200])
+                else:
+                    parts.append(str(p)[:200])
+            lines.append(f"[{i}] {role}: {' | '.join(parts)}")
+        else:
+            content = str(msg.get("content", ""))
+            if len(content) > 500:
+                content = content[:500] + "..."
+            lines.append(f"[{i}] {role}: {content}")
+
+    lines.append("")
+
+    with PROMPT_LOG.open("a", encoding="utf-8") as f:
+        f.write("\n".join(lines))
 
 
 if TYPE_CHECKING:
@@ -62,8 +126,12 @@ async def process_llm_response(ctx: PipelineContext) -> PipelineResult:
     return ctx.result
 
 
-async def _process_llm_response_once(ctx: PipelineContext) -> None:
+async def _process_llm_response_once(ctx: PipelineContext, _depth: int = 0) -> None:
     """Single attempt at processing LLM response with streaming, tool calls, and TTS."""
+    # Log the full prompt for debugging
+    system = getattr(ctx.llm, "system_instructions", None)
+    _log_prompt(ctx.conversation_history, ctx.tool_specs, system, _depth)
+
     # Generate streaming response
     text_chunks: List[str] = []
     tool_calls: List[Dict[str, Any]] = []
@@ -125,6 +193,12 @@ async def _process_llm_response_once(ctx: PipelineContext) -> None:
     if tool_calls:
         # Process normal tool calls
         await execute_tool_calls(tool_calls, ctx)
+
+        # If no speak tool was called, re-invoke LLM so it can react to tool results
+        has_speak = any(tc.get("function", {}).get("name") == "speak" for tc in tool_calls)
+        if not has_speak and _depth < 5:
+            logger.info("No speak in tool calls — re-invoking LLM to react to tool results")
+            await _process_llm_response_once(ctx, _depth=_depth + 1)
 
 
 async def execute_tool_calls(

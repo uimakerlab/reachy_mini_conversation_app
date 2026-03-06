@@ -6,6 +6,9 @@ see_image_through_camera
 describe_camera_image
 task_cancel
 task_status
+turn_left
+turn_right
+center_position
 #do_nothing
 #head_tracking
 #move_head

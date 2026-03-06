@@ -69,6 +69,7 @@ class BreathingMove(Move):  # type: ignore
         interpolation_start_pose: NDArray[np.float32],
         interpolation_start_antennas: Tuple[float, float],
         interpolation_duration: float = 1.0,
+        interpolation_start_body_yaw: float = 0.0,
     ):
         """Initialize breathing move.
 
@@ -76,10 +77,12 @@ class BreathingMove(Move):  # type: ignore
             interpolation_start_pose: 4x4 matrix of current head pose to interpolate from
             interpolation_start_antennas: Current antenna positions to interpolate from
             interpolation_duration: Duration of interpolation to neutral (seconds)
+            interpolation_start_body_yaw: Current body yaw to interpolate from
 
         """
         self.interpolation_start_pose = interpolation_start_pose
         self.interpolation_start_antennas = np.array(interpolation_start_antennas)
+        self.interpolation_start_body_yaw = interpolation_start_body_yaw
         self.interpolation_duration = interpolation_duration
 
         # Neutral positions for breathing base
@@ -114,6 +117,9 @@ class BreathingMove(Move):  # type: ignore
             ) * self.interpolation_start_antennas + interpolation_t * self.neutral_antennas
             antennas = antennas_interp.astype(np.float64)
 
+            # Interpolate body_yaw toward 0
+            body_yaw = self.interpolation_start_body_yaw * (1 - interpolation_t)
+
         else:
             # Phase 2: Breathing patterns from neutral base
             breathing_time = t - self.interpolation_duration
@@ -126,8 +132,10 @@ class BreathingMove(Move):  # type: ignore
             antenna_sway = self.antenna_sway_amplitude * np.sin(2 * np.pi * self.antenna_frequency * breathing_time)
             antennas = np.array([antenna_sway, -antenna_sway], dtype=np.float64)
 
+            body_yaw = 0.0
+
         # Return in official Move interface format: (head_pose, antennas_array, body_yaw)
-        return (head_pose, antennas, 0.0)
+        return (head_pose, antennas, body_yaw)
 
 
 def combine_full_body(primary_pose: FullBodyPose, secondary_pose: FullBodyPose) -> FullBodyPose:
@@ -513,8 +521,9 @@ class MovementManager:
                 try:
                     # These 2 functions return the latest available sensor data from the robot, but don't perform I/O synchronously.
                     # Therefore, we accept calling them inside the control loop.
-                    _, current_antennas = self.current_robot.get_current_joint_positions()
+                    head_joints, current_antennas = self.current_robot.get_current_joint_positions()
                     current_head_pose = self.current_robot.get_current_head_pose()
+                    current_body_yaw = head_joints[0]
 
                     self._breathing_active = True
                     self.state.update_activity()
@@ -523,6 +532,7 @@ class MovementManager:
                         interpolation_start_pose=current_head_pose,
                         interpolation_start_antennas=current_antennas,
                         interpolation_duration=1.0,
+                        interpolation_start_body_yaw=current_body_yaw,
                     )
                     self.move_queue.append(breathing_move)
                     logger.debug("Started breathing after %.1fs of inactivity", idle_for)

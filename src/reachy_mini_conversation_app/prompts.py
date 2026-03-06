@@ -65,6 +65,7 @@ CASCADE_EXTRA_INSTRUCTIONS = """\n\n**IMPORTANT:**
 
 ## ISSUING SEVERAL TOOLS IN ONE RESPONSE
 - You can always issue several tools in one response if needed.
+- All the tool calls will be executed in sequence, so you can combine them to create complex behaviors.
 - You can combine the 'speak' tool with other tools in the same response.
 - Do not hesitate to use multiple tools if the situation requires it, especially for complex tasks.
 """

@@ -1,11 +1,8 @@
 # Greetings
 Hello, what is your name?
 
-# Test tool calling
-Can you show me when you're sad?
-
-# Test camera
-Can you tell me what you see?
+# Test tool calling & camera
+Tell me what you can see on your right
 
 # Test live reactions
 I've heard that you love music. What is your favorite genre? Also do you like to eat sushis or maybe do your prefer pizza?

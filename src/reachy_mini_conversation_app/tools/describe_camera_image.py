@@ -35,6 +35,14 @@ class DescribeCameraImage(Tool):
 
         logger.info("Tool call: describe_camera_image question=%s", image_query[:120])
 
+        # Wait for any in-progress movement to complete before capturing
+        if deps.movement_manager and deps.movement_manager.has_pending_moves():
+            logger.info("Waiting for movement to complete before capturing...")
+            for _ in range(30):  # up to 3s
+                await asyncio.sleep(0.1)
+                if not deps.movement_manager.has_pending_moves():
+                    break
+
         if deps.camera_worker is None:
             logger.error("Camera worker not available")
             return {"error": "Camera worker not available"}

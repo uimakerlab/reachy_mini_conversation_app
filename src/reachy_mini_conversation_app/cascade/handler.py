@@ -7,6 +7,7 @@ import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 from reachy_mini_conversation_app.cascade import pipeline
+from reachy_mini_conversation_app.cascade.pipeline import PROMPT_LOG
 from reachy_mini_conversation_app.cascade.asr import ASRProvider, StreamingASRProvider
 from reachy_mini_conversation_app.cascade.llm import LLMProvider
 from reachy_mini_conversation_app.cascade.tts import TTSProvider
@@ -356,6 +357,9 @@ class CascadeHandler:
 
         logger.info("Starting cascade handler (Gradio mode)...")
         self.running = True
+
+        # Reset prompt log for this run
+        PROMPT_LOG.write_text("", encoding="utf-8")
 
         # Start event loop in background thread for async operations
         loop_ready = threading.Event()

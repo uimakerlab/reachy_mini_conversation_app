@@ -65,3 +65,6 @@ async def turn_to_direction(
         start_body_yaw=current_body_yaw + angle,
         duration=TURN_DURATION,
     ))
+
+    total_duration = TURN_DURATION + HOLD_DURATION + TURN_DURATION
+    deps.movement_manager.set_moving_state(total_duration)
