@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_DELAY_BETWEEN_TURNS = 2.0
+MOVE_WAIT_POLL_INTERVAL = 0.1
+MOVE_WAIT_TIMEOUT = 30.0
 INPUT_VOICE = "af_heart"
 
 # Chunk size for simulated real-time streaming (512 samples @ 16kHz = 32ms,
@@ -136,11 +138,28 @@ class CascadeTestStream:
 
             tracker.print_summary()
 
-            # Delay between turns to let movements complete
-            logger.info(f"Waiting {self._delay}s before next utterance...")
+            # Wait for any queued movements to finish before next utterance
+            await self._wait_for_moves()
+
+            # Small delay between turns for natural pacing
             await asyncio.sleep(self._delay)
 
         logger.info(f"\nAll {len(utterances)} utterances processed.")
+
+    async def _wait_for_moves(self) -> None:
+        """Wait for the robot to finish queued movements (with timeout)."""
+        mm = self.handler.deps.movement_manager
+        if mm is None or not mm.has_pending_moves():
+            return
+        logger.info("Waiting for movements to complete...")
+        elapsed = 0.0
+        while mm.has_pending_moves() and elapsed < MOVE_WAIT_TIMEOUT:
+            await asyncio.sleep(MOVE_WAIT_POLL_INTERVAL)
+            elapsed += MOVE_WAIT_POLL_INTERVAL
+        if elapsed >= MOVE_WAIT_TIMEOUT:
+            logger.warning("Timed out waiting for movements after %.0fs", MOVE_WAIT_TIMEOUT)
+        else:
+            logger.info("Movements completed (waited %.1fs)", elapsed)
 
     async def _synthesize_pcm(self, text: str) -> bytes:
         """Synthesize text to raw PCM bytes."""

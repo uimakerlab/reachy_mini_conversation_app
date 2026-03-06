@@ -131,7 +131,7 @@ async def execute_tool_calls(
     tool_calls: list[dict[str, Any]],
     ctx: PipelineContext,
 ) -> None:
-    """Execute tool calls and handle camera/see_image and speak tool specially."""
+    """Execute tool calls and handle see_image_through_camera and speak specially."""
     camera_image_bytes: bytes | None = None
 
     # First pass: execute all tools and add ALL tool results to conversation
@@ -153,7 +153,7 @@ async def execute_tool_calls(
             )
 
             # Do not log full result if the tool returned base64 (huge)
-            if tool_name in ("camera", "see_image") and "b64_im" in result:
+            if "b64_im" in result:
                 logger.info("Tool result: [image in base64, not shown]")
             else:
                 logger.info(f"Tool result: {result}")
@@ -171,8 +171,8 @@ async def execute_tool_calls(
                 f"Added tool result to history: name={tool_name}, history_len={len(ctx.conversation_history)}"
             )
 
-            # Special handling for see_image tool - store frame, replace heavy b64
-            if tool_name == "see_image":
+            # Special handling for see_image_through_camera - store frame, replace heavy b64
+            if tool_name == "see_image_through_camera":
                 if "b64_im" in result:
                     b64_im = result["b64_im"]
                     camera_image_bytes = base64.b64decode(b64_im)
@@ -183,26 +183,9 @@ async def execute_tool_calls(
                         {"status": "image_captured", "frame_index": frame_index}
                     )
                     ctx.result.turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
-                    logger.info("see_image: stored frame %d, will add image to conversation", frame_index)
+                    logger.info("see_image_through_camera: stored frame %d, will add image to conversation", frame_index)
                 else:
-                    logger.warning(f"see_image returned error: {result}")
-
-            # Special handling for camera tool (backward compat) - store image for later
-            elif tool_name == "camera":
-                if "b64_im" in result:
-                    b64_im = result["b64_im"]
-                    logger.info("Camera tool executed - will add image to conversation for LLM analysis")
-                    camera_image_bytes = base64.b64decode(b64_im)
-                    frame_index = len(ctx.result.captured_frames)
-                    ctx.result.captured_frames.append(camera_image_bytes)
-                    # Replace the heavy b64 blob in conversation history with a lightweight marker
-                    ctx.conversation_history[-1]["content"] = json.dumps(
-                        {"status": "image_captured", "frame_index": frame_index}
-                    )
-                    ctx.result.turn_items.append(TurnItem(kind="image", image_jpeg=camera_image_bytes))
-                else:
-                    # Camera failed - error already in tool result, LLM will see it
-                    logger.warning(f"Camera tool returned error: {result}")
+                    logger.warning(f"see_image_through_camera returned error: {result}")
 
             # Special handling for speak tool
             elif tool_name == "speak" and "message" in result:
@@ -215,7 +198,7 @@ async def execute_tool_calls(
                 _track_cost(ctx, ctx.tts)
 
             # Other tools
-            elif tool_name not in ("speak", "see_image", "camera"):
+            elif tool_name not in ("speak", "see_image_through_camera"):
                 ctx.result.turn_items.append(
                     TurnItem(kind="tool", tool_name=tool_name, tool_content=json.dumps(result))
                 )

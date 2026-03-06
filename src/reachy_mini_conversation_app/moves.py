@@ -309,6 +309,7 @@ class MovementManager:
         self._shared_state_lock = threading.Lock()
         self._shared_last_activity_time = self.state.last_activity_time
         self._shared_is_listening = self._is_listening
+        self._shared_has_moves = False
         self._status_lock = threading.Lock()
         self._freq_stats = LoopFrequencyStats()
         self._freq_snapshot = LoopFrequencyStats()
@@ -356,6 +357,11 @@ class MovementManager:
             return False
 
         return self._now() - last_activity >= self.idle_inactivity_delay
+
+    def has_pending_moves(self) -> bool:
+        """Return True when non-breathing moves are active or queued. Thread-safe."""
+        with self._shared_state_lock:
+            return self._shared_has_moves
 
     def set_listening(self, listening: bool) -> None:
         """Enable or disable listening mode without touching shared state directly.
@@ -469,9 +475,14 @@ class MovementManager:
 
     def _publish_shared_state(self) -> None:
         """Expose idle-related state for external threads."""
+        has_moves = (
+            self.state.current_move is not None
+            and not isinstance(self.state.current_move, BreathingMove)
+        ) or any(not isinstance(m, BreathingMove) for m in self.move_queue)
         with self._shared_state_lock:
             self._shared_last_activity_time = self.state.last_activity_time
             self._shared_is_listening = self._is_listening
+            self._shared_has_moves = has_moves
 
     def _manage_move_queue(self, current_time: float) -> None:
         """Manage the primary move queue (sequential execution)."""

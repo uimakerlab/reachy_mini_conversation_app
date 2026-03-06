@@ -70,13 +70,13 @@ class CascadeHandler:
         # Dynamic tool gating based on available capabilities
         exclusion_list: list[str] = []
         if deps.vision_manager is None:
-            exclusion_list.append("describe_scene")
+            exclusion_list.append("describe_camera_image")
 
         # Get tool specs and convert to Chat Completions format
         # Note : get_tool_specs() returns Realtime API format, so we need Chat Completions format
         self.tool_specs = convert_tool_specs_to_chat_format(get_tool_specs(exclusion_list=exclusion_list))
 
-        # Side-channel storage for see_image frames (JPEG bytes, indexed)
+        # Side-channel storage for see_image_through_camera frames (JPEG bytes, indexed)
         self._captured_frames: list[bytes] = []
 
         # Transcript analysis (NoOp if no reactions configured)

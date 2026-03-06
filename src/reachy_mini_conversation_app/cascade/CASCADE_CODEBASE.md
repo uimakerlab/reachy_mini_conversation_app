@@ -107,7 +107,7 @@ processing_lock: asyncio.Lock     # Prevent concurrent audio processing
 tool_specs: List[Dict]            # Tools in Chat Completions format
 is_streaming_asr: bool            # Whether current ASR provider supports streaming
 transcript_manager                # TranscriptAnalysisManager | NoOpTranscriptManager
-_captured_frames: list[bytes]     # Side-channel storage for see_image JPEG frames
+_captured_frames: list[bytes]     # Side-channel storage for see_image_through_camera JPEG frames
 _current_turn_items: list[TurnItem]  # Per-turn accumulator for displayable items
 _turn_results: list[TurnResult]   # Completed turns (private; use turn_results property)
 cumulative_cost: float            # Running cost total across all turns
@@ -191,10 +191,9 @@ async process_llm_response(ctx: PipelineContext) -> None
     # using the speak tool (fallback for models that skip the tool)
 
 async execute_tool_calls(tool_calls, ctx: PipelineContext) -> None
-    # Execute individual tools, handle camera/see_image/speak specially:
+    # Execute individual tools, handle see_image_through_camera/speak specially:
     #   speak → calls speech_output.speak() for TTS synthesis + playback
-    #   see_image → stores JPEG in captured_frames, replaces b64 in history
-    #   camera → stores image, re-calls process_llm_response for analysis
+    #   see_image_through_camera → stores JPEG in captured_frames, replaces b64 in history, re-calls LLM for analysis
 ```
 
 ### TurnResult (`turn_result.py`)
@@ -222,7 +221,7 @@ class TurnResult:
 
 **How items are populated:**
 - `speak` — from `pipeline.execute_tool_calls()` when speak tool is called
-- `image` — from `pipeline.execute_tool_calls()` when see_image or camera tool returns JPEG
+- `image` — from `pipeline.execute_tool_calls()` when see_image_through_camera tool returns JPEG
 - `tool` — from `pipeline.execute_tool_calls()` for other tools (movements, etc.)
 - `assistant` — from `pipeline.process_llm_response()` when LLM returns text + tool calls but no speak
 
@@ -428,8 +427,7 @@ VAD detects speech end
       │       └─ Special handling:
       │           • speak: call speech_output.speak(message)
       │             └─ TTS synthesis + playback happens HERE
-      │           • see_image: store JPEG, replace b64 in history
-      │           • camera: store image, re-call LLM for analysis
+      │           • see_image_through_camera: store JPEG, replace b64 in history, re-call LLM for analysis
       │
       └─> Return TurnResult to UI
           (transcript, items=[speak/image/tool/assistant], cost)
@@ -1029,7 +1027,7 @@ Since `CascadeTestStream` is its own stream manager, it bypasses several compone
 - **ContinuousVADRecorder** — This recording class is not used
 - **Barge-in / interruption handling** — Utterances are sequential with fixed delays; there is no overlap between user speech and robot response
 - **Audio resampling for robot hardware** — The `_play_loop` resampling path in `CascadeLocalStream` (TTS rate → robot output rate) is not exercised
-- **Camera / vision pipeline** — Typically run with `--no-camera`; `describe_scene` tool calls would fail without it
+- **Camera / vision pipeline** — Typically run with `--no-camera`; `describe_camera_image` tool calls would fail without it
 
 ### Latency Tracking
 

@@ -69,6 +69,7 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
         self._fixed_end_time = 0.0
         self._last_transcribed_length = 0
         self._last_partial: str | None = None
+        self._best_partial: str = ""  # longest partial seen during stream
         self._min_new_samples = int(SAMPLE_RATE * 0.25)  # 250ms between transcriptions
 
     # -- StreamingASRProvider interface --
@@ -81,6 +82,7 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
         self._fixed_end_time = 0.0
         self._last_transcribed_length = 0
         self._last_partial = None
+        self._best_partial = ""
         logger.info("Progressive ASR stream started")
 
     async def send_audio_chunk(self, audio_chunk: bytes) -> None:
@@ -105,6 +107,8 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
         parts = [p for p in (fixed_text, active_text) if p]
         if parts:
             self._last_partial = " ".join(parts)
+            if len(self._last_partial) > len(self._best_partial):
+                self._best_partial = self._last_partial
 
     async def get_partial_transcript(self) -> Optional[str]:
         """Return latest partial transcript."""
@@ -115,7 +119,7 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
         if self._total_samples == 0:
             return ""
 
-        last_partial = self._last_partial or ""
+        best_partial = self._best_partial
 
         # Always transcribe the full audio for the final result (only runs once).
         # Progressive partials use the sliding window, but the final LLM input
@@ -125,13 +129,13 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
         result = self._model.decode_chunk(audio_mx, verbose=False)
         transcript = result.text.strip()
 
-        # Fall back to last partial if re-transcription returns empty
-        if not transcript and last_partial:
+        # Fall back to best partial if final is empty or much shorter
+        if best_partial and len(transcript) < len(best_partial) * 0.5:
             logger.warning(
-                f"Full re-transcription returned empty ({self._total_samples} samples), "
-                f"falling back to last partial: '{last_partial}'"
+                f"Final transcript '{transcript}' is worse than best partial '{best_partial}', "
+                f"using best partial"
             )
-            transcript = last_partial
+            transcript = best_partial
 
         # Reset
         self._audio_buffer = []
@@ -140,6 +144,7 @@ class ParakeetMLXProgressiveASR(StreamingASRProvider):
         self._fixed_end_time = 0.0
         self._last_transcribed_length = 0
         self._last_partial = None
+        self._best_partial = ""
 
         logger.info(f"Progressive ASR final: '{transcript}'")
         return transcript  # type: ignore[no-any-return]

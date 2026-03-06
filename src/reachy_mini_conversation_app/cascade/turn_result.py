@@ -17,6 +17,19 @@ class TurnItem:
     tool_name: str = ""
     tool_content: str = ""
 
+    def __repr__(self) -> str:
+        """Avoid dumping raw JPEG bytes in logs."""
+        parts = [f"kind={self.kind!r}"]
+        if self.text:
+            parts.append(f"text={self.text!r}")
+        if self.image_jpeg:
+            parts.append(f"image_jpeg=<{len(self.image_jpeg)} bytes>")
+        if self.tool_name:
+            parts.append(f"tool_name={self.tool_name!r}")
+        if self.tool_content:
+            parts.append(f"tool_content={self.tool_content!r}")
+        return f"TurnItem({', '.join(parts)})"
+
 
 @dataclass
 class PipelineResult:
