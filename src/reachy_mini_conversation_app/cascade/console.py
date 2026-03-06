@@ -62,7 +62,11 @@ class CascadeLocalStream:
 
         # Audio buffers
         self._speech_chunks: list[npt.NDArray[np.int16]] = []
+        self._preroll_chunks: list[npt.NDArray[np.int16]] = []
         self._playback_queue: asyncio.Queue[bytes] = asyncio.Queue()
+
+        # Pre-roll: keep ~500ms of audio before speech detection triggers
+        self._max_preroll = int(0.5 * SILERO_SAMPLE_RATE / VAD_MIN_CHUNK_SIZE)
 
         # Wire speech output so handler plays audio through robot speaker
         from reachy_mini_conversation_app.cascade.speech_output import ConsoleSpeechOutput
@@ -143,14 +147,23 @@ class CascadeLocalStream:
 
         if self._state == VADState.LISTENING:
             speech_started, _ = self._vad.process_chunk(audio_chunk, SILERO_SAMPLE_RATE)
+
+            # Always buffer audio for pre-roll (keeps last ~500ms)
+            self._preroll_chunks.append(audio_chunk)
+            if len(self._preroll_chunks) > self._max_preroll:
+                self._preroll_chunks = self._preroll_chunks[-self._max_preroll :]
+
             if speech_started:
                 self._state = VADState.RECORDING
-                self._speech_chunks = [audio_chunk]
+                # Include pre-roll so speech onset is not clipped
+                self._speech_chunks = list(self._preroll_chunks)
+                self._preroll_chunks = []
                 logger.info("Speech detected, recording...")
                 if streaming:
                     await self.handler.process_audio_streaming_start()
-                    wav_bytes = self._audio_to_wav(audio_chunk, SILERO_SAMPLE_RATE)
-                    await self.handler.process_audio_streaming_chunk(wav_bytes)
+                    for chunk in self._speech_chunks:
+                        wav_bytes = self._audio_to_wav(chunk, SILERO_SAMPLE_RATE)
+                        await self.handler.process_audio_streaming_chunk(wav_bytes)
 
         elif self._state == VADState.RECORDING:
             self._speech_chunks.append(audio_chunk)
@@ -184,6 +197,7 @@ class CascadeLocalStream:
                 # Reset for next utterance — flush stale mic audio accumulated
                 # during processing (includes robot's own TTS echo)
                 self._speech_chunks = []
+                self._preroll_chunks = []
                 self._vad.reset()
                 self._state = VADState.LISTENING
                 logger.info("Listening...")
