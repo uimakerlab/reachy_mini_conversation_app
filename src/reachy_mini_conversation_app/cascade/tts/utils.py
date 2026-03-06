@@ -77,7 +77,7 @@ def trim_leading_silence(
         return audio_array
 
     cfg = get_config()
-    logger.warning(
+    logger.info(
         f"{provider_name}: {silence_duration_ms:.0f}ms of leading silence detected (trim_silence={cfg.tts_trim_silence})"
     )
 

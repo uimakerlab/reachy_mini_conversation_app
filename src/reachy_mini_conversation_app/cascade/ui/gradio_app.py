@@ -126,41 +126,41 @@ class CascadeGradioUI:
             status_box = gr.Textbox(
                 label="Status",
                 interactive=False,
-                value="Ready. Toggle 'Listening' to start.",
+                value="Ready. Click 'Start Listening' to begin.",
             )
 
             # Controls
             with gr.Row():
-                listening_checkbox = gr.Checkbox(
-                    label="Listening",
-                    value=False,
+                listen_btn = gr.Button(
+                    "Start Listening",
+                    variant="primary",
                     scale=1,
-                    info="Toggle microphone on/off",
                 )
                 clear_btn = gr.Button("Clear History", scale=1)
 
             # Listening toggle handler
             def toggle_listening(
-                enabled: bool, chat_history: List[Dict[str, Any]]
-            ) -> tuple[str, List[Dict[str, Any]], bool, gr.Timer]:
+                chat_history: List[Dict[str, Any]],
+            ) -> tuple[str, List[Dict[str, Any]], gr.Button, gr.Timer]:
                 """Toggle continuous VAD listening on/off."""
-                if enabled:
-                    recorder = self._get_vad_recorder()
+                recorder = self._get_vad_recorder()
+                if not self.continuous_mode:
                     status = recorder.start()
                     self.continuous_mode = True
-                    return status, chat_history, True, gr.Timer(active=True)
+                    btn = gr.Button("Stop Listening", variant="stop")
+                    return status, chat_history, btn, gr.Timer(active=True)
                 else:
-                    recorder = self._get_vad_recorder()
                     status = recorder.stop()
                     self.continuous_mode = False
-                    return status, chat_history, False, gr.Timer(active=False)
+                    btn = gr.Button("Start Listening", variant="primary")
+                    return status, chat_history, btn, gr.Timer(active=False)
 
             poll_timer = gr.Timer(0.5, active=False)
 
-            listening_checkbox.change(
+            listen_btn.click(
                 fn=toggle_listening,
-                inputs=[listening_checkbox, chatbot],
-                outputs=[status_box, chatbot, listening_checkbox, poll_timer],
+                inputs=[chatbot],
+                outputs=[status_box, chatbot, listen_btn, poll_timer],
             )
 
             # Polling for continuous mode updates (updates chat when VAD detects speech)

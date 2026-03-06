@@ -159,6 +159,13 @@ class ContinuousVADRecorder:
 
         assert self._vad_sm is not None
 
+        # Log which mic we'll use (system default)
+        default_dev = sd.query_devices(kind="input")
+        logger.info(
+            f"Mic input: '{default_dev['name']}' (system default, "
+            f"{default_dev['default_samplerate']:.0f} Hz)"
+        )
+
         logger.info("Continuous mode started - listening for speech...")
 
         # VAD processes 16kHz audio, but we record at self.sample_rate
