@@ -35,7 +35,7 @@ cascade/
 ├── turn_result.py                     # TurnResult + TurnItem dataclasses
 ├── config.py                          # Configuration loader (cascade.yaml)
 ├── timing.py                          # Latency tracking & profiling
-├── vad.py                             # Silero VAD for continuous mode
+├── vad.py                             # Silero VAD + VADStateMachine (shared by console & Gradio)
 ├── console.py                         # Console mode with VAD (CascadeLocalStream)
 ├── autotest_stream.py                     # Test file mode (automated TTS→ASR→LLM→TTS testing)
 │
@@ -251,18 +251,18 @@ playback.close()               # Shutdown threads
 
 #### Recording Classes (`ui/audio_recording.py`)
 
-**ContinuousState:** Enum for VAD state machine (IDLE → LISTENING → RECORDING → PROCESSING)
+**ContinuousState:** Enum for Gradio VAD lifecycle (IDLE → LISTENING → RECORDING → PROCESSING). IDLE is Gradio-specific; LISTENING/RECORDING/PROCESSING map to `VADState` values.
 
 **StreamingASRCallbacks:** Dataclass for injecting ASR callbacks without coupling to handler.
 
-**ContinuousVADRecorder:** VAD-based continuous recording.
+**ContinuousVADRecorder:** VAD-based continuous recording, backed by `VADStateMachine`.
 ```python
 recorder = ContinuousVADRecorder(
-    sample_rate, streaming_callbacks, on_speech_captured, event_loop
+    sample_rate, streaming_callbacks, on_speech_captured
 )
-recorder.start()   # Start VAD loop
+recorder.start()   # Start VAD loop (creates VADStateMachine)
 recorder.stop()    # Stop VAD loop
-recorder.state     # Current ContinuousState
+recorder.state     # Current ContinuousState (maps from VADStateMachine.state)
 ```
 
 #### CascadeGradioUI (`ui/gradio_app.py`)
@@ -309,16 +309,33 @@ class SpeechOutput(Protocol):
 
 **`split_into_sentences(text, min_length=8)`** — Splits on `.!?,;—`, keeps punctuation attached, merges short segments under `min_length` characters.
 
+### VAD State Machine (`vad.py`)
+
+`VADStateMachine` extracts the shared pre-roll → speech-start → speech-end logic used by both console and Gradio modes. Callers feed audio chunks via `process_chunk()` and react to returned `VADEvent`s.
+
+```python
+vad_sm = VADStateMachine(vad)
+event = vad_sm.process_chunk(audio_chunk)
+
+if event == VADEvent.SPEECH_STARTED:
+    # Pre-roll + current chunk available in vad_sm.speech_chunks
+elif event == VADEvent.SPEECH_ENDED:
+    # All speech frames in vad_sm.speech_chunks
+    vad_sm.finish_processing()  # Reset to LISTENING
+elif vad_sm.state == VADState.RECORDING:
+    # Mid-recording: stream current chunk
+```
+
+**States:** `LISTENING` → `RECORDING` → `PROCESSING` → (finish_processing) → `LISTENING`
+
 ### Console Mode (`console.py`)
 
-VAD-based console interface for the cascade pipeline, used when neither `--gradio` nor `--test-file` is specified. Records from `robot.media`, detects speech with Silero VAD, and plays responses through the robot speaker.
+VAD-based console interface for the cascade pipeline, used when neither `--gradio` nor `--test-file` is specified. Records from system mic, detects speech via `VADStateMachine`, and plays responses through the robot speaker.
 
 **Key Classes:**
 
-- `AudioChunkBuffer` — Accumulates audio samples and yields fixed-size chunks for VAD
-- `VADState` — Enum: LISTENING → RECORDING → PROCESSING
 - `CascadeLocalStream` — Stream manager that runs two concurrent async loops:
-  - `_record_loop()` — reads mic frames, resamples to 16kHz, processes through VAD state machine
+  - `_record_loop()` — reads mic frames, processes through `VADStateMachine`
   - `_play_loop()` — pulls audio from playback queue, resamples to output rate, pushes to `robot.media`
 
 ```python

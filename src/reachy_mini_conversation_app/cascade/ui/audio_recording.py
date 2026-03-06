@@ -6,12 +6,13 @@ import wave
 import logging
 import threading
 from enum import Enum
-from typing import TYPE_CHECKING, List, Callable
+from typing import TYPE_CHECKING, Callable
 from dataclasses import dataclass
 
 import numpy as np
 import sounddevice as sd
-import numpy.typing as npt
+
+from reachy_mini_conversation_app.cascade.vad import VADEvent, VADStateMachine
 
 
 if TYPE_CHECKING:
@@ -89,15 +90,18 @@ class ContinuousVADRecorder:
         self.min_silence_duration_ms = min_silence_duration_ms
 
         self._active = False
-        self._state = ContinuousState.IDLE
-        self._audio_frames: List[npt.NDArray[np.int16]] = []
+        self._vad_sm: VADStateMachine | None = None
         self._continuous_thread: threading.Thread | None = None
         self._vad: SileroVAD | None = None
 
     @property
     def state(self) -> ContinuousState:
         """Current VAD state."""
-        return self._state
+        if not self._active:
+            return ContinuousState.IDLE
+        if self._vad_sm is None:
+            return ContinuousState.IDLE
+        return ContinuousState(self._vad_sm.state.value)
 
     @property
     def is_active(self) -> bool:
@@ -125,8 +129,8 @@ class ContinuousVADRecorder:
                 min_silence_duration_ms=self.min_silence_duration_ms,
             )
 
+        self._vad_sm = VADStateMachine(self._vad)
         self._active = True
-        self._audio_frames = []
 
         # Start continuous recording thread
         self._continuous_thread = threading.Thread(target=self._continuous_record_loop, daemon=True)
@@ -155,26 +159,22 @@ class ContinuousVADRecorder:
         # Reset VAD state
         if self._vad:
             self._vad.reset()
+        self._vad_sm = None
 
-        self._state = ContinuousState.IDLE
         logger.info("Continuous mode stopped")
         return "Continuous mode stopped"
 
     def _continuous_record_loop(self) -> None:
-        """Continuous recording loop with VAD-based speech detection.
-
-        State machine: IDLE -> LISTENING -> RECORDING -> PROCESSING -> LISTENING
-        """
-        from reachy_mini_conversation_app.cascade.vad import SILERO_SAMPLE_RATE
+        """Continuous recording loop with VAD-based speech detection."""
+        from reachy_mini_conversation_app.cascade.vad import VAD_CHUNK_SIZE, SILERO_SAMPLE_RATE
         from reachy_mini_conversation_app.cascade.timing import tracker
 
+        assert self._vad_sm is not None
+
         logger.info("Continuous mode started - listening for speech...")
-        self._state = ContinuousState.LISTENING
 
         # VAD processes 16kHz audio, but we record at self.sample_rate
-        # Silero VAD works best with chunks of 512-1536 samples at 16kHz
-        vad_chunk_samples = 512  # 32ms at 16kHz
-        record_chunk_samples = int(vad_chunk_samples * self.sample_rate / SILERO_SAMPLE_RATE)
+        record_chunk_samples = int(VAD_CHUNK_SIZE * self.sample_rate / SILERO_SAMPLE_RATE)
 
         try:
             with sd.InputStream(
@@ -184,7 +184,6 @@ class ContinuousVADRecorder:
                 blocksize=record_chunk_samples,
             ) as stream:
                 while self._active:
-                    # Read audio chunk
                     data, overflowed = stream.read(record_chunk_samples)
                     if overflowed:
                         logger.warning("Audio buffer overflowed in continuous mode")
@@ -203,76 +202,43 @@ class ContinuousVADRecorder:
                     else:
                         vad_audio = data.flatten()
 
-                    # Process through VAD
-                    assert self._vad is not None
-                    speech_started, speech_ended = self._vad.process_chunk(vad_audio, SILERO_SAMPLE_RATE)
+                    event = self._vad_sm.process_chunk(vad_audio)
 
-                    if self._state == ContinuousState.LISTENING:
-                        # Waiting for speech to start
-                        if speech_started:
-                            logger.info("VAD: Speech started - recording")
-                            self._state = ContinuousState.RECORDING
-                            # Keep pre-roll frames (don't reset _audio_frames)
-                            tracker.reset("user_conversation_turn")
-                            tracker.mark("vad_speech_start")
+                    if event == VADEvent.SPEECH_STARTED:
+                        tracker.reset("user_conversation_turn")
+                        tracker.mark("vad_speech_start")
 
-                            # Initialize streaming ASR if callbacks provided
-                            if self.streaming_callbacks:
-                                self.streaming_callbacks.on_start()
-                                # Send pre-roll frames so the ASR sees the speech onset
-                                for frame in self._audio_frames:
-                                    self.streaming_callbacks.on_chunk(
-                                        _audio_to_wav(frame.tobytes(), self.sample_rate)
-                                    )
-                                # Also send the current chunk (won't enter RECORDING branch this iteration)
+                        if self.streaming_callbacks:
+                            self.streaming_callbacks.on_start()
+                            # Send pre-roll + current chunk so ASR sees speech onset
+                            for frame in self._vad_sm.speech_chunks:
                                 self.streaming_callbacks.on_chunk(
-                                    _audio_to_wav(data.tobytes(), self.sample_rate)
+                                    _audio_to_wav(frame.tobytes(), self.sample_rate)
                                 )
 
-                        # Always collect audio (we might need pre-roll)
-                        self._audio_frames.append(data.copy())
-                        # Keep only last ~500ms of audio as pre-roll buffer
-                        max_preroll_chunks = int(0.5 * self.sample_rate / record_chunk_samples)
-                        if len(self._audio_frames) > max_preroll_chunks:
-                            self._audio_frames = self._audio_frames[-max_preroll_chunks:]
+                    elif event == VADEvent.SPEECH_ENDED:
+                        tracker.mark("vad_speech_end")
 
-                    elif self._state == ContinuousState.RECORDING:
-                        # Recording speech
-                        self._audio_frames.append(data.copy())
+                        audio_data = np.concatenate(self._vad_sm.speech_chunks)
+                        duration = len(audio_data) / self.sample_rate
+                        logger.info(f"VAD: Captured {duration:.2f}s of speech")
+                        tracker.mark("recording_captured", {"duration_s": round(duration, 2)})
 
-                        # Send chunk to streaming ASR if callbacks provided
+                        wav_bytes = _audio_to_wav(audio_data.tobytes(), self.sample_rate)
+                        if self.on_speech_captured:
+                            self.on_speech_captured(wav_bytes)
+
+                        self._vad_sm.finish_processing()
+                        logger.info("VAD: Ready for next utterance")
+
+                    elif self._vad_sm.state.value == ContinuousState.RECORDING.value:
+                        # Mid-recording: stream current chunk to ASR
                         if self.streaming_callbacks:
-                            self.streaming_callbacks.on_chunk(_audio_to_wav(data.tobytes(), self.sample_rate))
-
-                        if speech_ended:
-                            logger.info("VAD: Speech ended - processing")
-                            tracker.mark("vad_speech_end")
-                            self._state = ContinuousState.PROCESSING
-
-                            # Process the recorded audio
-                            if self._audio_frames:
-                                audio_data = np.concatenate(self._audio_frames)
-                                duration = len(audio_data) / self.sample_rate
-                                logger.info(f"VAD: Captured {duration:.2f}s of speech")
-                                tracker.mark("recording_captured", {"duration_s": round(duration, 2)})
-
-                                # Convert to WAV and call callback
-                                wav_bytes = _audio_to_wav(audio_data.tobytes(), self.sample_rate)
-
-                                # Call speech captured callback
-                                if self.on_speech_captured:
-                                    self.on_speech_captured(wav_bytes)
-
-                            # Reset for next utterance
-                            self._audio_frames = []
-                            assert self._vad is not None
-                            self._vad.reset()
-                            self._state = ContinuousState.LISTENING
-                            logger.info("VAD: Ready for next utterance")
-
+                            self.streaming_callbacks.on_chunk(
+                                _audio_to_wav(data.tobytes(), self.sample_rate)
+                            )
 
         except Exception as e:
             logger.exception(f"Error in continuous recording loop: {e}")
         finally:
-            self._state = ContinuousState.IDLE
             logger.info("Continuous mode stopped")

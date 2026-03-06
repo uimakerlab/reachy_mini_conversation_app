@@ -10,7 +10,6 @@ import time
 import wave
 import asyncio
 import logging
-from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -18,7 +17,14 @@ import sounddevice as sd
 import numpy.typing as npt
 from scipy.signal import resample
 
-from reachy_mini_conversation_app.cascade.vad import SILERO_SAMPLE_RATE, SileroVAD
+from reachy_mini_conversation_app.cascade.vad import (
+    VAD_CHUNK_SIZE,
+    SILERO_SAMPLE_RATE,
+    VADEvent,
+    VADState,
+    SileroVAD,
+    VADStateMachine,
+)
 from reachy_mini_conversation_app.cascade.timing import tracker
 
 
@@ -27,17 +33,6 @@ if TYPE_CHECKING:
     from reachy_mini_conversation_app.cascade.handler import CascadeHandler
 
 logger = logging.getLogger(__name__)
-
-# Minimum chunk size for Silero VAD (512 samples = 32ms at 16kHz)
-VAD_MIN_CHUNK_SIZE = 512
-
-
-class VADState(Enum):
-    """VAD state machine states."""
-
-    LISTENING = auto()
-    RECORDING = auto()
-    PROCESSING = auto()
 
 
 class CascadeLocalStream:
@@ -48,25 +43,18 @@ class CascadeLocalStream:
         self.handler = handler
         self._robot = robot
 
-        # VAD for speech detection
-        self._vad = SileroVAD(
+        # VAD state machine
+        vad = SileroVAD(
             threshold=0.5,
             min_speech_duration_ms=250,
             min_silence_duration_ms=700,
         )
+        self._vad_sm = VADStateMachine(vad)
 
         # State
-        self._state = VADState.LISTENING
         self._stop_event = asyncio.Event()
         self._tasks: list[asyncio.Task[Any]] = []
-
-        # Audio buffers
-        self._speech_chunks: list[npt.NDArray[np.int16]] = []
-        self._preroll_chunks: list[npt.NDArray[np.int16]] = []
         self._playback_queue: asyncio.Queue[bytes] = asyncio.Queue()
-
-        # Pre-roll: keep ~500ms of audio before speech detection triggers
-        self._max_preroll = int(0.5 * SILERO_SAMPLE_RATE / VAD_MIN_CHUNK_SIZE)
 
         # Wire speech output so handler plays audio through robot speaker
         from reachy_mini_conversation_app.cascade.speech_output import ConsoleSpeechOutput
@@ -123,14 +111,14 @@ class CascadeLocalStream:
             samplerate=SILERO_SAMPLE_RATE,
             channels=1,
             dtype="int16",
-            blocksize=VAD_MIN_CHUNK_SIZE,
+            blocksize=VAD_CHUNK_SIZE,
         )
         stream.start()
 
         try:
             while not self._stop_event.is_set():
                 # Read exactly one VAD chunk (512 samples = 32ms at 16kHz)
-                audio_frame, overflowed = stream.read(VAD_MIN_CHUNK_SIZE)
+                audio_frame, overflowed = stream.read(VAD_CHUNK_SIZE)
                 if overflowed:
                     logger.debug("Audio input overflowed")
 
@@ -144,71 +132,49 @@ class CascadeLocalStream:
     async def _process_vad(self, audio_chunk: npt.NDArray[np.int16]) -> None:
         """Process audio chunk through VAD state machine."""
         streaming = self.handler.is_streaming_asr
+        event = self._vad_sm.process_chunk(audio_chunk)
 
-        if self._state == VADState.LISTENING:
-            speech_started, _ = self._vad.process_chunk(audio_chunk, SILERO_SAMPLE_RATE)
-
-            # Always buffer audio for pre-roll (keeps last ~500ms)
-            self._preroll_chunks.append(audio_chunk)
-            if len(self._preroll_chunks) > self._max_preroll:
-                self._preroll_chunks = self._preroll_chunks[-self._max_preroll :]
-
-            if speech_started:
-                self._state = VADState.RECORDING
-                # Include pre-roll so speech onset is not clipped
-                self._speech_chunks = list(self._preroll_chunks)
-                self._preroll_chunks = []
-                logger.info("Speech detected, recording...")
-                if streaming:
-                    await self.handler.process_audio_streaming_start()
-                    for chunk in self._speech_chunks:
-                        wav_bytes = self._audio_to_wav(chunk, SILERO_SAMPLE_RATE)
-                        await self.handler.process_audio_streaming_chunk(wav_bytes)
-
-        elif self._state == VADState.RECORDING:
-            self._speech_chunks.append(audio_chunk)
+        if event == VADEvent.SPEECH_STARTED:
             if streaming:
-                wav_bytes = self._audio_to_wav(audio_chunk, SILERO_SAMPLE_RATE)
-                await self.handler.process_audio_streaming_chunk(wav_bytes)
-            _, speech_ended = self._vad.process_chunk(audio_chunk, SILERO_SAMPLE_RATE)
-            if speech_ended:
-                self._state = VADState.PROCESSING
-                logger.info(f"Speech ended, {len(self._speech_chunks)} chunks")
-                # Start latency tracking from speech end
-                tracker.reset("vad_speech_end")
-                tracker.mark("vad_speech_end")
+                await self.handler.process_audio_streaming_start()
+                for chunk in self._vad_sm.speech_chunks:
+                    wav_bytes = self._audio_to_wav(chunk, SILERO_SAMPLE_RATE)
+                    await self.handler.process_audio_streaming_chunk(wav_bytes)
 
-                if streaming:
-                    # Mark recording_captured before ASR finalization
-                    # (audio was already streamed, so capture is instant)
-                    audio_data = np.concatenate(self._speech_chunks)
-                    duration = len(audio_data) / SILERO_SAMPLE_RATE
-                    tracker.mark("recording_captured", {"duration_s": round(duration, 2)})
-                    turn = await self.handler.process_audio_streaming_end()
-                    transcript = turn.transcript
-                    if transcript:
-                        logger.info(f"User: {transcript}")
-                    else:
-                        logger.info("No speech detected")
-                    tracker.print_summary()
+        elif event == VADEvent.SPEECH_ENDED:
+            # Start latency tracking from speech end
+            tracker.reset("vad_speech_end")
+            tracker.mark("vad_speech_end")
+
+            if streaming:
+                audio_data = np.concatenate(self._vad_sm.speech_chunks)
+                duration = len(audio_data) / SILERO_SAMPLE_RATE
+                tracker.mark("recording_captured", {"duration_s": round(duration, 2)})
+                turn = await self.handler.process_audio_streaming_end()
+                transcript = turn.transcript
+                if transcript:
+                    logger.info(f"User: {transcript}")
                 else:
-                    await self._process_recorded_audio()
+                    logger.info("No speech detected")
+                tracker.print_summary()
+            else:
+                await self._process_recorded_audio()
 
-                # Reset for next utterance — flush stale mic audio accumulated
-                # during processing (includes robot's own TTS echo)
-                self._speech_chunks = []
-                self._preroll_chunks = []
-                self._vad.reset()
-                self._state = VADState.LISTENING
-                logger.info("Listening...")
+            self._vad_sm.finish_processing()
+            logger.info("Listening...")
+
+        elif self._vad_sm.state == VADState.RECORDING and streaming:
+            # Mid-recording: stream current chunk to ASR
+            wav_bytes = self._audio_to_wav(audio_chunk, SILERO_SAMPLE_RATE)
+            await self.handler.process_audio_streaming_chunk(wav_bytes)
 
     async def _process_recorded_audio(self) -> None:
         """Process recorded audio through the cascade pipeline."""
-        if not self._speech_chunks:
+        if not self._vad_sm.speech_chunks:
             logger.warning("Empty audio buffer, skipping")
             return
 
-        audio_data = np.concatenate(self._speech_chunks)
+        audio_data = np.concatenate(self._vad_sm.speech_chunks)
         duration = len(audio_data) / SILERO_SAMPLE_RATE
         logger.info(f"Processing {len(audio_data)} samples ({duration:.2f}s)")
         tracker.mark("recording_captured", {"duration_s": round(duration, 2)})

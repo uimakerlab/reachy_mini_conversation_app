@@ -5,6 +5,7 @@ It works with 16kHz audio and returns speech probability for each chunk.
 """
 
 import logging
+from enum import Enum, auto
 from typing import Any
 
 import numpy as np
@@ -16,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 # Silero VAD requires specific sample rates and chunk sizes
 SILERO_SAMPLE_RATE = 16000
+
+# Minimum chunk size for Silero VAD (512 samples = 32ms at 16kHz)
+VAD_CHUNK_SIZE = 512
 
 
 class SileroVAD:
@@ -164,4 +168,90 @@ class SileroVAD:
         self._prob_log_count = 0
         self.model.reset_states()
         logger.debug("VAD state reset")
+
+
+class VADEvent(Enum):
+    """Events returned by VADStateMachine.process_chunk()."""
+
+    NOTHING = auto()
+    SPEECH_STARTED = auto()
+    SPEECH_ENDED = auto()
+
+
+class VADState(Enum):
+    """States of the VAD state machine."""
+
+    LISTENING = "listening"
+    RECORDING = "recording"
+    PROCESSING = "processing"
+
+
+class VADStateMachine:
+    """Shared VAD state machine for pre-roll buffering and speech detection.
+
+    Callers feed audio chunks and react to returned events.
+    Does NOT own audio sources, callbacks, or async/threading.
+    """
+
+    def __init__(
+        self,
+        vad: SileroVAD,
+        chunk_size: int = VAD_CHUNK_SIZE,
+        preroll_duration_s: float = 0.5,
+    ) -> None:
+        """Initialize the VAD state machine."""
+        self._vad = vad
+        self._state = VADState.LISTENING
+        self._chunk_size = chunk_size
+
+        # Pre-roll buffer: keep ~preroll_duration_s of audio before speech triggers
+        self._max_preroll = int(preroll_duration_s * SILERO_SAMPLE_RATE / chunk_size)
+        self._preroll_chunks: list[npt.NDArray[np.int16]] = []
+
+        # All speech frames including pre-roll (readable after SPEECH_STARTED/ENDED)
+        self.speech_chunks: list[npt.NDArray[np.int16]] = []
+
+    @property
+    def state(self) -> VADState:
+        """Current state of the VAD state machine."""
+        return self._state
+
+    def process_chunk(self, audio_chunk: npt.NDArray[np.int16]) -> VADEvent:
+        """Feed one audio chunk and get back an event."""
+        if self._state == VADState.PROCESSING:
+            return VADEvent.NOTHING
+
+        if self._state == VADState.LISTENING:
+            speech_started, _ = self._vad.process_chunk(audio_chunk, SILERO_SAMPLE_RATE)
+
+            # Always buffer for pre-roll
+            self._preroll_chunks.append(audio_chunk)
+            if len(self._preroll_chunks) > self._max_preroll:
+                self._preroll_chunks = self._preroll_chunks[-self._max_preroll :]
+
+            if speech_started:
+                self._state = VADState.RECORDING
+                self.speech_chunks = list(self._preroll_chunks)
+                self._preroll_chunks = []
+                logger.info("Speech detected, recording...")
+                return VADEvent.SPEECH_STARTED
+
+            return VADEvent.NOTHING
+
+        # RECORDING
+        self.speech_chunks.append(audio_chunk)
+        _, speech_ended = self._vad.process_chunk(audio_chunk, SILERO_SAMPLE_RATE)
+        if speech_ended:
+            self._state = VADState.PROCESSING
+            logger.info(f"Speech ended, {len(self.speech_chunks)} chunks")
+            return VADEvent.SPEECH_ENDED
+
+        return VADEvent.NOTHING
+
+    def finish_processing(self) -> None:
+        """Reset buffers and transition back to LISTENING."""
+        self.speech_chunks = []
+        self._preroll_chunks = []
+        self._vad.reset()
+        self._state = VADState.LISTENING
 
