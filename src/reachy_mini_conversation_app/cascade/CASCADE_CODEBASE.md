@@ -50,8 +50,10 @@ cascade/
 │   ├── base.py                        # ASRProvider abstract base
 │   ├── base_streaming.py              # StreamingASRProvider abstract base
 │   ├── audio_utils.py                 # Shared WAV parsing & resampling (librosa)
+│   ├── progressive_base.py            # ProgressiveASRBase — shared sliding window logic + DecodeResult/SentenceSegment
 │   ├── whisper_openai.py              # OpenAI Whisper implementation
-│   ├── parakeet_mlx_progressive.py    # Parakeet MLX progressive (sentence-aware sliding window)
+│   ├── parakeet_mlx_progressive.py    # Parakeet MLX progressive (Apple Silicon, inherits ProgressiveASRBase)
+│   ├── parakeet_nemo_progressive.py   # Parakeet NeMo progressive (CUDA, inherits ProgressiveASRBase)
 │   ├── deepgram.py                    # Deepgram streaming implementation
 │   ├── nemotron.py                    # Nemotron ASR implementation
 │   └── openai_realtime_asr.py         # OpenAI Realtime streaming implementation
@@ -370,10 +372,20 @@ class StreamingASRProvider(ASRProvider):
 | Provider | Type | Description |
 |----------|------|-------------|
 | `WhisperOpenAIASR` | Batch | OpenAI Whisper API |
-| `ParakeetMLXProgressiveASR` | Streaming | Local progressive with sentence-aware sliding window (mlx-audio) |
+| `ParakeetMLXProgressiveASR` | Streaming | Local progressive with sliding window via mlx-audio (Apple Silicon) |
+| `ParakeetNeMoProgressiveASR` | Streaming | Local progressive with sliding window via NeMo (CUDA) |
 | `DeepgramASR` | Streaming | Deepgram Nova via WebSocket |
 | `NemotronASR` | Streaming | NVIDIA Nemotron ASR |
 | `OpenAIRealtimeASR` | Streaming | OpenAI Realtime API via WebSocket |
+
+**Progressive ASR Base** (`progressive_base.py`):
+
+Both Parakeet providers inherit from `ProgressiveASRBase`, which contains the sentence-aware sliding window logic (~150 lines). Subclasses only implement three methods:
+- `_decode(audio_np) -> DecodeResult` — run inference, return text + sentence segments
+- `_decode_full(audio_np) -> str` — full-context decode for final transcription
+- `_warmup()` — model warmup (e.g. transcribe silence)
+
+`DecodeResult` and `SentenceSegment` are shared dataclasses defined in `progressive_base.py`.
 
 ### LLM Providers (`llm/`)
 
@@ -491,7 +503,7 @@ Each section has a `provider:` key selecting the active provider and a `provider
 | Tag | Validation | Used by |
 |---|---|---|
 | `apple_silicon` | Hard error if not arm64 + Darwin | parakeet_mlx_progressive |
-| `cuda` | Hard error if `torch.cuda.is_available()` is False | nemotron |
+| `cuda` | Hard error if `torch.cuda.is_available()` is False | parakeet_nemo_progressive, nemotron |
 | `null` | No check | kokoro, cloud providers |
 
 #### Dependency Checks

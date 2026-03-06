@@ -27,7 +27,7 @@ dependencies = [
     "gradio_client>=1.13.3",
     "gstreamer-bundle==1.28.1; sys_platform != 'linux'",
     "PyGObject>=3.42.2,<=3.46.0; sys_platform == 'linux'",
-    "mlx-audio>=0.3.1",
+    "mlx-audio>=0.3.1; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]

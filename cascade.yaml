@@ -79,6 +79,21 @@ asr:
       transcription_delay_ms: 480
 
     # ========== LOCAL PROVIDERS (CUDA) ==========
+    parakeet_nemo_progressive:
+      module: parakeet_nemo_progressive
+      class: ParakeetNeMoProgressiveASR
+      streaming: true
+      location: local
+      requires: []
+      hardware: cuda
+      import_check: nemo.collections
+      install_extra: cascade_nemotron
+      description: "Parakeet TDT via NeMo - progressive ASR with sliding window (CUDA)"
+      # Settings
+      model: nvidia/parakeet-tdt-0.6b-v2
+      max_window_size: 15.0
+      sentence_buffer: 2.0
+
     nemotron:
       module: nemotron
       class: NemotronASR
@@ -95,7 +110,7 @@ asr:
 
 
 llm:
-  provider: gemini-3.1-flash-lite  # openai_gpt,gemini-2.5-flash-lite,gemini-3.1-flash-lite
+  provider: gemini-2.5-flash-lite  # openai_gpt,gemini-2.5-flash-lite,gemini-3.1-flash-lite
   temperature: 1.0
 
   providers:
