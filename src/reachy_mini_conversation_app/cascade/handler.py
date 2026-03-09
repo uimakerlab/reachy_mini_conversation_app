@@ -7,12 +7,11 @@ import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 from reachy_mini_conversation_app.cascade import pipeline
-from reachy_mini_conversation_app.cascade.pipeline import PROMPT_LOG
 from reachy_mini_conversation_app.cascade.asr import ASRProvider, StreamingASRProvider
 from reachy_mini_conversation_app.cascade.llm import LLMProvider
 from reachy_mini_conversation_app.cascade.tts import TTSProvider
 from reachy_mini_conversation_app.cascade.config import get_config
-from reachy_mini_conversation_app.cascade.pipeline import PipelineContext
+from reachy_mini_conversation_app.cascade.pipeline import PROMPT_LOG, PipelineContext
 from reachy_mini_conversation_app.tools.core_tools import (
     ToolDependencies,
     get_tool_specs,

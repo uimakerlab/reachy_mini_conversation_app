@@ -6,15 +6,15 @@ import base64
 import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List
-from dataclasses import dataclass
-
 from pathlib import Path
+from dataclasses import dataclass
 
 from reachy_mini_conversation_app.cascade.llm import LLMProvider
 from reachy_mini_conversation_app.cascade.tts import TTSProvider
 from reachy_mini_conversation_app.cascade.config import get_config
 from reachy_mini_conversation_app.tools.core_tools import ToolDependencies, dispatch_tool_call
 from reachy_mini_conversation_app.cascade.turn_result import TurnItem, PipelineResult
+
 
 PROMPT_LOG = Path("prompt.log")
 

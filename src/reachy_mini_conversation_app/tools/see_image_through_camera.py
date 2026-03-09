@@ -1,7 +1,7 @@
 """Tool: see_image_through_camera — capture a frame and return raw JPEG for LLM vision."""
 
-import asyncio
 import base64
+import asyncio
 import logging
 from typing import Any, Dict
 

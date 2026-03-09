@@ -155,7 +155,6 @@ async def _test_tts(cfg: CascadeConfig, provider: str) -> None:
     assert duration_s >= MIN_TTS_DURATION_S, f"Audio too short: {duration_s:.2f}s (expected >= {MIN_TTS_DURATION_S}s)"
 
 
-RUNNERS = {"asr": _test_asr, "llm": _test_llm, "tts": _test_tts}
 
 
 # ---------------------------------------------------------------------------
@@ -187,11 +186,12 @@ async def main() -> int:
                 continue
 
             try:
-                runner = RUNNERS[ptype]
                 if ptype == "asr":
-                    await runner(cfg, name, wav)
+                    await _test_asr(cfg, name, wav)
+                elif ptype == "llm":
+                    await _test_llm(cfg, name)
                 else:
-                    await runner(cfg, name)
+                    await _test_tts(cfg, name)
                 print(_pass(label))
                 passed += 1
             except Exception as e:
