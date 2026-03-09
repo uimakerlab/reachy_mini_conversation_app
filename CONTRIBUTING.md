@@ -39,6 +39,31 @@ This project is mirrored to a Hugging Face Space.
 - This sync is handled by a GitHub Action and requires no manual steps.
 - Contributors do not need to interact with the Space on Hugging Face hub directly.
 
+#### Manual Push to Hugging Face Space
+
+If you need to push manually (e.g. from a different branch), Hugging Face requires [Xet storage](https://huggingface.co/docs/hub/xet) for binary files. Because this repo's history contains binary blobs committed before Git LFS tracking was set up, a regular push will be rejected by HF's pre-receive hook.
+
+The workaround is to push a **single orphan commit** (no history) so old binary blobs are not included:
+
+```bash
+# Install git-xet if not already installed (needed for binary file uploads)
+brew install git-xet && git xet install
+
+# Create an orphan branch with a single commit containing the current tree
+git checkout --orphan temp-deploy
+git commit -m "Deploy reachy-mini-chatbox"
+
+# Force-push to the Space (assuming "space" remote points to hf.co)
+git push space temp-deploy:main --force
+
+# Clean up
+git checkout cascade-release   # or whatever branch you were on
+git branch -d temp-deploy
+```
+
+> [!NOTE]
+> This is only needed for manual pushes. The GitHub Action handles the regular sync automatically.
+
 ### 1. Create an Issue
 
 Open an issue first describing the bug fix, feature, or improvement you plan to work on.
