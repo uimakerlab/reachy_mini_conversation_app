@@ -4,7 +4,7 @@
 <head>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
-	<title>Reachy Mini Conversation App</title>
+	<title>Reachy Mini ChatBox</title>
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet">
@@ -18,24 +18,24 @@
 				<span class="logo">🤖</span>
 				<span class="brand-name">Reachy Mini</span>
 			</div>
-			<div class="pill">Realtime voice · Vision aware · Expressive motion</div>
+			<div class="pill">Cascade pipeline · Swappable providers · Profiles & reactions</div>
 		</div>
 		<div class="hero-grid">
 			<div class="hero-copy">
-				<p class="eyebrow">Conversation App</p>
-				<h1>Talk, see, and move together.</h1>
+				<p class="eyebrow">ChatBox</p>
+				<h1>Modular voice conversations for your robot.</h1>
 				<p class="lede">
-					A friendly, camera-aware companion for Reachy Mini. Chat out loud, watch it follow faces, dance, or react with recorded emotions—all while streaming transcripts in a clean web UI.
+					A cascade pipeline — ASR → LLM → TTS — where each stage is a swappable provider. Mix cloud APIs and local models, define personality profiles, trigger live reactions, and let the LLM call tools to dance, emote, or look around.
 				</p>
 				<div class="hero-actions">
 					<a class="btn primary" href="#highlights">Explore features</a>
 					<a class="btn ghost" href="#story">See how it feels</a>
 				</div>
 				<div class="hero-badges">
-					<span>Low-latency voice loop</span>
-					<span>Camera insights on demand</span>
-					<span>Choreographed dances & emotions</span>
-					<span>Personality profiles via web UI</span>
+					<span>Cascade ASR → LLM → TTS</span>
+					<span>Local + cloud providers</span>
+					<span>Live reactions while you speak</span>
+					<span>LLM tool calls for movement</span>
 				</div>
 			</div>
 			<div class="hero-visual">
@@ -49,37 +49,37 @@
 
 	<section id="highlights" class="section features">
 		<div class="section-header">
-			<p class="eyebrow">What’s inside</p>
-			<h2>All-in-one conversational layer for your robot</h2>
+			<p class="eyebrow">What's inside</p>
+			<h2>A modular conversational layer for your robot</h2>
 			<p class="intro">
-				The app blends realtime speech, vision, and motion so Reachy Mini feels present..
+				Each piece of the pipeline is independent and swappable — pick the providers that fit your setup, budget, and latency needs.
 			</p>
 		</div>
 		<div class="feature-grid">
 			<div class="feature-card">
-				<span class="icon">🎤</span>
-				<h3>Natural voice chat</h3>
-				<p>Talk freely and get fast, high-quality replies powered by realtime models.</p>
+				<span class="icon">🔗</span>
+				<h3>Cascade pipeline</h3>
+				<p>ASR → LLM → TTS in discrete stages. VAD segments audio, ASR transcribes, LLM reasons, TTS speaks — all streaming.</p>
 			</div>
 			<div class="feature-card">
-				<span class="icon">🎥</span>
-				<h3>Vision-aware replies</h3>
-				<p>Ask the camera tool to see what’s in front, track a face, or keep attention on whoever is speaking.</p>
+				<span class="icon">🔀</span>
+				<h3>Swappable providers</h3>
+				<p>Mix local models (Parakeet, Kokoro) with cloud APIs (Deepgram, Gemini, OpenAI, ElevenLabs). Switch from YAML or CLI flags.</p>
 			</div>
 			<div class="feature-card">
-				<span class="icon">💃</span>
-				<h3>Expressive motion</h3>
-				<p>Queue dances, play recorded emotions while Reachy listens and talks.</p>
+				<span class="icon">🎭</span>
+				<h3>Personality profiles</h3>
+				<p>Each profile bundles a system prompt, voice, enabled tools, and reaction triggers. Switch profiles live from the Gradio UI.</p>
 			</div>
 			<div class="feature-card">
-				<span class="icon">🧠</span>
-				<h3>Personalities on demand</h3>
-				<p>Switch conversation styles through profiles and decide which tools (dance, camera, tracking) each persona can use.</p>
+				<span class="icon">⚡</span>
+				<h3>Live reactions</h3>
+				<p>Keyword and entity triggers fire while the user is still speaking — the robot reacts before the LLM even sees the text.</p>
 			</div>
 			<div class="feature-card">
-				<span class="icon">🌐</span>
-				<h3>Ready for your setup</h3>
-				<p>Works with wired or wireless Reachy Mini, and can run vision locally or through the default cloud model.</p>
+				<span class="icon">🛠️</span>
+				<h3>LLM tool calls</h3>
+				<p>The LLM can dance, play emotions, move the head, peek through the camera, or toggle head-tracking — all via tool calls.</p>
 			</div>
 		</div>
 	</section>
@@ -88,26 +88,26 @@
 		<div class="story-grid">
 			<div class="story-card">
 				<p class="eyebrow">How it feels</p>
-				<h3>From hello to helpful in seconds</h3>
+				<h3>From config to conversation in one command</h3>
 				<ul class="story-list">
-					<li><span>👋</span> Say “Hey Reachy” and start chatting—no extra setup in the moment.</li>
-					<li><span>👀</span> Ask what it sees; it can peek through the camera or keep focus on your face.</li>
-					<li><span>🎭</span> Trigger emotions or dance breaks to keep the conversation lively.</li>
-					<li><span>📝</span> Follow along with live transcripts in the web UI or run audio-only from the console.</li>
+					<li><span>⚙️</span> Pick your providers in cascade.yaml — local ASR, cloud LLM, local TTS, or any mix.</li>
+					<li><span>🗣️</span> Start talking and watch streaming transcripts appear in the Gradio UI.</li>
+					<li><span>⚡</span> The robot reacts to keywords instantly — before your sentence even finishes.</li>
+					<li><span>💃</span> Ask for a dance or an emotion; the LLM calls tools and the robot moves.</li>
 				</ul>
 			</div>
 			<div class="story-card secondary">
 				<p class="eyebrow">Where it shines</p>
-				<h3>Great for demos, teaching, and playful exploration</h3>
+				<h3>Demos, teaching, and custom robot personalities</h3>
 				<p class="story-text">
-					Show off how Reachy Mini listens, responds, and moves in sync. Whether you’re guiding a class, hosting a booth, or experimenting at home, the app keeps the robot expressive without juggling scripts or joystick controls.
+					Build a pirate-themed guide, a museum docent, or a classroom assistant — each with its own voice, tools, and live reactions. Swap providers to balance cost and latency, run fully local on Apple Silicon, or mix in cloud APIs for maximum quality.
 				</p>
 				<div class="chips">
-					<span class="chip">Live conversation</span>
-					<span class="chip">Face tracking</span>
-					<span class="chip">Camera tool</span>
-					<span class="chip">Dance library</span>
-					<span class="chip">Profiles & tools</span>
+					<span class="chip">Cascade pipeline</span>
+					<span class="chip">Local + cloud mix</span>
+					<span class="chip">Profiles</span>
+					<span class="chip">Live reactions</span>
+					<span class="chip">Tool calls</span>
 				</div>
 			</div>
 		</div>
