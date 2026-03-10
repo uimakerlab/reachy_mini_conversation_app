@@ -19,6 +19,45 @@
         <p class="subtitle">Configure your OpenAI key and tweak personalities without the full UI.</p>
       </header>
 
+      <aside class="privacy-notice" role="note" aria-label="Privacy notice">
+        <p>
+          <strong>Privacy notice:</strong>
+          By default, speech and camera data is sent to OpenAI's Realtime API for inference.
+          OpenAI does <strong>not</strong> use API data to train models, but retains it up to 30 days
+          for abuse monitoring. Clone the
+          <a href="https://github.com/pollen-robotics/reachy_mini_conversation_app" target="_blank" rel="noopener">
+            project from GitHub
+          </a>
+          and use <code>--local-vision</code> to keep image processing on-device.
+        </p>
+
+        <details>
+          <summary>Learn more</summary>
+
+          <p>
+            Audio streams are transmitted to OpenAI for realtime speech processing. 
+            Robot-captured images may also be sent when the assistant uses the camera tool for vision analysis. Per OpenAI's
+            <a href="https://platform.openai.com/docs/guides/your-data" target="_blank" rel="noopener">
+              data usage policy
+            </a>:
+          </p>
+
+          <ul>
+            <li>API inputs and outputs are <strong>not</strong> used for model training (since March 2023).</li>
+            <li>Data may be retained up to <strong>30 days</strong> for abuse monitoring.</li>
+            <li>Audio outputs are cached for <strong>~1 hour</strong> to support multi-turn conversations.</li>
+          </ul>
+
+          <p>
+            In privacy-sensitive environments, use <code>--local-vision</code> to process images on-device. See the
+            <a href="https://github.com/pollen-robotics/reachy_mini_conversation_app/blob/main/README.md" target="_blank" rel="noopener">
+              project README
+            </a>
+            for full setup instructions.
+          </p>
+        </details>
+      </aside>
+
       <div id="configured" class="panel hidden">
         <div class="panel-heading">
           <div>
