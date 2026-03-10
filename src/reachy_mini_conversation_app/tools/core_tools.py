@@ -3,11 +3,12 @@ import re
 import abc
 import sys
 import json
+import asyncio
 import inspect
 import logging
 import importlib
 import importlib.util
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -17,6 +18,10 @@ from reachy_mini_conversation_app.config import DEFAULT_PROFILES_DIRECTORY as DE
 # Import config to ensure .env is loaded before reading REACHY_MINI_CUSTOM_PROFILE
 from reachy_mini_conversation_app.config import config  # noqa: F401
 from reachy_mini_conversation_app.tools.tool_constants import SystemTool
+
+
+if TYPE_CHECKING:
+    from reachy_mini_conversation_app.tools.background_tool_manager import BackgroundToolManager
 
 
 logger = logging.getLogger(__name__)
@@ -298,19 +303,28 @@ def _safe_load_obj(args_json: str) -> Dict[str, Any]:
         return {}
 
 
-async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
-    """Dispatch a tool call by name with JSON args and dependencies."""
+async def _dispatch_tool_call(tool_name: str, args: Dict[str, Any], deps: ToolDependencies) -> Dict[str, Any]:
     tool = ALL_TOOLS.get(tool_name)
-
     if not tool:
         return {"error": f"unknown tool: {tool_name}"}
-
-    args = _safe_load_obj(args_json)
-    tool_manager = kwargs.get("tool_manager")
-    if tool_manager is not None:
-        args["tool_manager"] = tool_manager
     try:
         return await tool(deps, **args)
+    except asyncio.CancelledError:
+        logger.info("Tool cancelled: %s", tool_name)
+        return {"error": "Tool cancelled"}
     except Exception as e:
-        logger.exception("Tool error in %s: %s", tool_name, e)
-        raise e
+        msg = f"{type(e).__name__}: {e}"
+        logger.exception("Tool error in %s: %s", tool_name, msg)
+        return {"error": msg}
+
+
+async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies) -> Dict[str, Any]:
+    """Dispatch a tool call by name with JSON args and dependencies."""
+    return await _dispatch_tool_call(tool_name, _safe_load_obj(args_json), deps)
+
+
+async def dispatch_tool_call_with_manager(tool_name: str, args_json: str, deps: ToolDependencies, tool_manager: "BackgroundToolManager") -> Dict[str, Any]:
+    """Dispatch a tool call, injecting a BackgroundToolManager into the args."""
+    args = _safe_load_obj(args_json)
+    args["tool_manager"] = tool_manager
+    return await _dispatch_tool_call(tool_name, args, deps)

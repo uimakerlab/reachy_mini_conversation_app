@@ -13,7 +13,11 @@ from typing import Any, Dict, Callable, Optional, Coroutine
 
 from pydantic import Field, BaseModel, PrivateAttr
 
-from reachy_mini_conversation_app.tools.core_tools import ToolDependencies, dispatch_tool_call
+from reachy_mini_conversation_app.tools.core_tools import (
+    ToolDependencies,
+    dispatch_tool_call,
+    dispatch_tool_call_with_manager,
+)
 from reachy_mini_conversation_app.tools.tool_constants import ToolState, SystemTool
 
 
@@ -51,7 +55,7 @@ class ToolCallRoutine(BaseModel):
         """Execute the stored callable with its arguments."""
         if self.tool_name in _SYSTEM_TOOL_NAMES:
             # For safety purposes, we only allow system tools to be called with the tool manager
-            return await dispatch_tool_call(tool_name=self.tool_name, args_json=self.args_json_str, deps=self.deps, tool_manager=tool_manager)
+            return await dispatch_tool_call_with_manager(tool_name=self.tool_name, args_json=self.args_json_str, deps=self.deps, tool_manager=tool_manager)
         return await dispatch_tool_call(tool_name=self.tool_name, args_json=self.args_json_str, deps=self.deps)
 
 
@@ -70,7 +74,7 @@ class ToolNotification(BaseModel):
     """the status of the tool"""
     status: ToolState
 
-    """the original JSON arguments string (added by memory system for conversation logging)"""
+    """the original JSON arguments string (for conversation logging)"""
     args_json_str: Optional[str] = None
 
     """the result of the tool"""
@@ -98,7 +102,7 @@ class BackgroundTool(ToolNotification):
     @property
     def tool_id(self) -> str:
         """Get the name of the tool."""
-        return f"{self.tool_name}-{self.id}"
+        return f"{self.tool_name}-{self.id}-{self.started_at}"
 
     def get_notification(self) -> ToolNotification:
         """Get the notification for the tool."""
@@ -135,11 +139,11 @@ class BackgroundToolManager(BaseModel):
     """internal lifecycle tasks (notification listener, periodic cleanup)"""
     _lifecycle_tasks: list[asyncio.Task[None]] = PrivateAttr(default_factory=list)
 
-    """the maximum duration of a tool execution in seconds (default: 1 hour)"""
-    _max_tool_duration_seconds: float = PrivateAttr(default=3600)
+    """the maximum duration of a tool execution in seconds (default: 1 day)"""
+    _max_tool_duration_seconds: float = PrivateAttr(default=86400)
 
-    """the maximum time to keep a completed/failed/cancelled tool in memory (default: 1 day)"""
-    _max_tool_memory_seconds: float = PrivateAttr(default=86400)
+    """the maximum time to keep a completed/failed/cancelled tool in memory (default: 1 hour)"""
+    _max_tool_memory_seconds: float = PrivateAttr(default=3600)
 
     def set_loop(
         self,
@@ -208,27 +212,23 @@ class BackgroundToolManager(BaseModel):
         tool_call_routine: ToolCallRoutine,
     ) -> None:
         """Execute the tool and handle completion."""
-        try:
-            result = await tool_call_routine(self)
+        result: dict[str, Any] = await tool_call_routine(self)
+        bg_tool.completed_at = time.monotonic()
+        error = result.get("error")
+
+        if error is not None:
+            if error == "Tool cancelled":
+                bg_tool.status = ToolState.CANCELLED
+                logger.debug(f"Background tool cancelled: {bg_tool.tool_name} (id={bg_tool.id})")
+            else:
+                bg_tool.status = ToolState.FAILED
+                logger.debug(f"Background tool failed: {bg_tool.tool_name} (id={bg_tool.id}): {bg_tool.error}")
+            bg_tool.error = result["error"]
+
+        else:
             bg_tool.result = result
             bg_tool.status = ToolState.COMPLETED
-            bg_tool.completed_at = time.monotonic()
-
-            logger.info(f"Background tool completed: {bg_tool.tool_name} (id={bg_tool.id})")
-
-        except asyncio.CancelledError:
-            bg_tool.status = ToolState.CANCELLED
-            bg_tool.completed_at = time.monotonic()
-            bg_tool.error = "Tool cancelled"
-            logger.info(f"Background tool cancelled: {bg_tool.tool_name} (id={bg_tool.id})")
-            raise
-
-        except Exception as e:
-            msg = f"{type(e).__name__}: {e}"
-            bg_tool.error = msg
-            bg_tool.status = ToolState.FAILED
-            bg_tool.completed_at = time.monotonic()
-            logger.error(f"Background tool failed: {bg_tool.tool_name} (id={bg_tool.id}): {e}")
+            logger.debug(f"Background tool completed: {bg_tool.tool_name} (id={bg_tool.id})")
 
         await self._notification_queue.put(bg_tool.get_notification())
         logger.debug(f"Queued notification for tool: {bg_tool.tool_name} (id={bg_tool.id})")
