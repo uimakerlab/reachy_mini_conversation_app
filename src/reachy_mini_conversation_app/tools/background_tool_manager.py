@@ -23,7 +23,6 @@ from reachy_mini_conversation_app.tools.tool_constants import ToolState, SystemT
 
 logger = logging.getLogger(__name__)
 
-# Pre-compute for O(1) membership check; `str in EnumMeta` is not supported on Python <3.12.
 _SYSTEM_TOOL_NAMES: set[str] = {t.value for t in SystemTool}
 
 

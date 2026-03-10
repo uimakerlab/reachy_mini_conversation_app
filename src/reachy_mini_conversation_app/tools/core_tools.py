@@ -181,21 +181,21 @@ def _load_profile_tools() -> None:
         sys.exit(1)
 
     # Parse tool names (skip comments and blank lines)
-    tool_names = set[str]()
+    tool_names = []
     for line in lines:
         line = line.strip()
         # Skip blank lines and comments
         if not line or line.startswith("#"):
             continue
-        tool_names.add(line)
+        tool_names.append(line)
 
     # Add system tools
-    tool_names.update({tool.value for tool in SystemTool})
+    tool_names.extend({tool.value for tool in SystemTool})
 
     logger.info(f"Found {len(tool_names)} tools to load: {tool_names}")
 
     if config.AUTOLOAD_EXTERNAL_TOOLS and config.TOOLS_DIRECTORY and config.TOOLS_DIRECTORY.is_dir():
-        discovered_external_tools: set[str] = set()
+        discovered_external_tools: List[str] = []
         for tool_file in sorted(config.TOOLS_DIRECTORY.glob("*.py")):
             if tool_file.name.startswith("_"):
                 continue
@@ -203,14 +203,15 @@ def _load_profile_tools() -> None:
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", candidate_name):
                 logger.warning("Skipping external tool with invalid name: %s", tool_file.name)
                 continue
-            discovered_external_tools.add(candidate_name)
+            discovered_external_tools.append(candidate_name)
 
-        if discovered_external_tools:
-            tool_names.update(discovered_external_tools)
+        extra_tools = [name for name in discovered_external_tools if name not in tool_names]
+        if extra_tools:
+            tool_names.extend(extra_tools)
             logger.info(
                 "AUTOLOAD_EXTERNAL_TOOLS enabled: added %d external tool(s): %s",
-                len(discovered_external_tools),
-                discovered_external_tools,
+                len(extra_tools),
+                extra_tools,
             )
 
     for tool_name in tool_names:
