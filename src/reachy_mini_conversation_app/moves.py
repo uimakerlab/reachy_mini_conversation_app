@@ -55,7 +55,7 @@ from reachy_mini.utils.interpolation import (
 logger = logging.getLogger(__name__)
 
 # Configuration constants
-CONTROL_LOOP_FREQUENCY_HZ = 100.0  # Hz - Target frequency for the movement control loop
+CONTROL_LOOP_FREQUENCY_HZ = 60.0  # Hz - Target frequency for the movement control loop
 
 # Type definitions
 FullBodyPose = Tuple[NDArray[np.float32], Tuple[float, float], float]  # (head_pose_4x4, antennas, body_yaw)
@@ -147,7 +147,7 @@ def combine_full_body(primary_pose: FullBodyPose, secondary_pose: FullBodyPose) 
     # Combine head poses using compose_world_offset; the secondary pose must be an
     # offset expressed in the world frame (T_off_world) applied to the absolute
     # primary transform (T_abs).
-    combined_head = compose_world_offset(primary_head, secondary_head, reorthonormalize=True)
+    combined_head = compose_world_offset(primary_head, secondary_head, reorthonormalize=False)
 
     # Sum antennas and body_yaw
     combined_antennas = (
@@ -280,6 +280,8 @@ class MovementManager:
         self._last_listening_toggle_time = self._now()
         self._last_set_target_err = 0.0
         self._set_target_err_interval = 1.0  # seconds between error logs
+        self._cached_secondary_offsets: tuple = ()  # force miss on first call
+        self._cached_secondary_pose: FullBodyPose | None = None
         self._set_target_err_suppressed = 0
 
         # Cross-thread signalling
@@ -564,26 +566,32 @@ class MovementManager:
     def _get_secondary_pose(self) -> FullBodyPose:
         """Get the secondary full body pose from speech and face tracking offsets."""
         # Combine speech sway offsets + face tracking offsets for secondary pose
-        secondary_offsets = [
+        current_offsets = (
             self.state.speech_offsets[0] + self.state.face_tracking_offsets[0],
             self.state.speech_offsets[1] + self.state.face_tracking_offsets[1],
             self.state.speech_offsets[2] + self.state.face_tracking_offsets[2],
             self.state.speech_offsets[3] + self.state.face_tracking_offsets[3],
             self.state.speech_offsets[4] + self.state.face_tracking_offsets[4],
             self.state.speech_offsets[5] + self.state.face_tracking_offsets[5],
-        ]
+        )
+
+        # Cache: skip expensive create_head_pose if offsets unchanged
+        if current_offsets == self._cached_secondary_offsets:
+            return self._cached_secondary_pose
 
         secondary_head_pose = create_head_pose(
-            x=secondary_offsets[0],
-            y=secondary_offsets[1],
-            z=secondary_offsets[2],
-            roll=secondary_offsets[3],
-            pitch=secondary_offsets[4],
-            yaw=secondary_offsets[5],
+            x=current_offsets[0],
+            y=current_offsets[1],
+            z=current_offsets[2],
+            roll=current_offsets[3],
+            pitch=current_offsets[4],
+            yaw=current_offsets[5],
             degrees=False,
             mm=False,
         )
-        return (secondary_head_pose, (0.0, 0.0), 0.0)
+        self._cached_secondary_offsets = current_offsets
+        self._cached_secondary_pose = (secondary_head_pose, (0.0, 0.0), 0.0)
+        return self._cached_secondary_pose
 
     def _compose_full_body_pose(self, current_time: float) -> FullBodyPose:
         """Compose primary and secondary poses into a single command pose."""
@@ -635,7 +643,7 @@ class MovementManager:
     def _issue_control_command(self, head: NDArray[np.float32], antennas: Tuple[float, float], body_yaw: float) -> None:
         """Send the fused pose to the robot with throttled error logging."""
         try:
-            self.current_robot.set_target(head=head, antennas=antennas, body_yaw=body_yaw)
+            self.current_robot.set_target_full(head=head, antennas=antennas, body_yaw=body_yaw)
         except Exception as e:
             now = self._now()
             if now - self._last_set_target_err >= self._set_target_err_interval:
@@ -650,6 +658,32 @@ class MovementManager:
         else:
             with self._status_lock:
                 self._last_commanded_pose = clone_full_body_pose((head, antennas, body_yaw))
+
+    def _issue_control_command_instrumented(
+        self, head: NDArray[np.float32], antennas: Tuple[float, float], body_yaw: float,
+    ) -> Tuple[float, float, float]:
+        """Instrumented version: returns (set_target_ms, lock_ms, clone_ms)."""
+        t0 = self._now()
+        try:
+            self.current_robot.set_target_full(head=head, antennas=antennas, body_yaw=body_yaw)
+        except Exception as e:
+            now = self._now()
+            if now - self._last_set_target_err >= self._set_target_err_interval:
+                msg = f"Failed to set robot target: {e}"
+                if self._set_target_err_suppressed:
+                    msg += f" (suppressed {self._set_target_err_suppressed} repeats)"
+                    self._set_target_err_suppressed = 0
+                logger.error(msg)
+                self._last_set_target_err = now
+            else:
+                self._set_target_err_suppressed += 1
+            return ((now - t0) * 1000, 0.0, 0.0)
+        t1 = self._now()
+        with self._status_lock:
+            t2 = self._now()
+            self._last_commanded_pose = clone_full_body_pose((head, antennas, body_yaw))
+        t3 = self._now()
+        return ((t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000)
 
     def _update_frequency_stats(
         self, loop_start: float, prev_loop_start: float, stats: LoopFrequencyStats,
@@ -809,9 +843,25 @@ class MovementManager:
         print_interval_loops = max(1, int(self.target_frequency * 2))
         freq_stats = self._freq_stats
 
+        # Frequency benchmark — dump all samples to CSV on stop
+        bench_log: list[tuple[float, float]] = []  # (t_since_start, freq_hz)
+        bench_start = self._now()
+        bench_prev = self._now()
+
+        # Per-tick timing breakdown
+        tick_log: list[tuple[float, float, float, float, float, float, float, float]] = []
+        # (t, signals_ms, motion_ms, compose_ms, ws_send_ms, lock_wait_ms, clone_ms, sleep_overshoot_ms)
+
         while not self._stop_event.is_set():
             loop_start = self._now()
             loop_count += 1
+
+            # Benchmark: record (timestamp, frequency) for every tick
+            if loop_count > 1:
+                dt = loop_start - bench_prev
+                if dt > 0:
+                    bench_log.append((loop_start - bench_start, 1.0 / dt))
+            bench_prev = loop_start
 
             if loop_count > 1:
                 freq_stats = self._update_frequency_stats(loop_start, prev_loop_start, freq_stats)
@@ -819,21 +869,25 @@ class MovementManager:
 
             # 1) Poll external commands and apply pending offsets (atomic snapshot)
             self._poll_signals(loop_start)
+            t1 = self._now()
 
             # 2) Manage the primary move queue (start new move, end finished move, breathing)
             self._update_primary_motion(loop_start)
 
             # 3) Update vision-based secondary offsets
             self._update_face_tracking(loop_start)
+            t2 = self._now()
 
             # 4) Build primary and secondary full-body poses, then fuse them
             head, antennas, body_yaw = self._compose_full_body_pose(loop_start)
 
             # 5) Apply listening antenna freeze or blend-back
             antennas_cmd = self._calculate_blended_antennas(antennas)
+            t3 = self._now()
 
-            # 6) Single set_target call - the only control point
-            self._issue_control_command(head, antennas_cmd, body_yaw)
+            # 6) Single set_target call - the only control point (instrumented)
+            ws_send_ms, lock_wait_ms, clone_ms = self._issue_control_command_instrumented(head, antennas_cmd, body_yaw)
+            t4 = self._now()
 
             # 7) Adaptive sleep to align to next tick, then publish shared state
             sleep_time, freq_stats = self._schedule_next_tick(loop_start, freq_stats)
@@ -845,5 +899,44 @@ class MovementManager:
 
             if sleep_time > 0:
                 time.sleep(sleep_time)
+            t5 = self._now()
+
+            # Record per-tick breakdown
+            expected_sleep = sleep_time if sleep_time > 0 else 0.0
+            actual_sleep = t5 - t4
+            tick_log.append((
+                loop_start - bench_start,
+                (t1 - loop_start) * 1000,   # signals (ms)
+                (t2 - t1) * 1000,            # motion+tracking (ms)
+                (t3 - t2) * 1000,            # compose+blend (ms)
+                ws_send_ms,                  # WebSocket send (ms)
+                lock_wait_ms,                # lock acquire wait (ms)
+                clone_ms,                    # clone_full_body_pose (ms)
+                (actual_sleep - expected_sleep) * 1000,  # sleep overshoot (ms)
+            ))
+
+        # Dump benchmark data to CSV
+        if bench_log:
+            bench_path = "/tmp/control_loop_bench.csv"
+            try:
+                with open(bench_path, "w") as f:
+                    f.write("t,freq_hz\n")
+                    for t, freq in bench_log:
+                        f.write(f"{t:.6f},{freq:.2f}\n")
+                logger.info("BENCH: wrote %d samples to %s", len(bench_log), bench_path)
+            except Exception as e:
+                logger.warning("BENCH: failed to write CSV: %s", e)
+
+        # Dump per-tick timing breakdown to CSV
+        if tick_log:
+            tick_path = "/tmp/control_loop_tick_breakdown.csv"
+            try:
+                with open(tick_path, "w") as f:
+                    f.write("t,signals_ms,motion_ms,compose_ms,ws_send_ms,lock_wait_ms,clone_ms,sleep_overshoot_ms\n")
+                    for row in tick_log:
+                        f.write(f"{row[0]:.6f},{row[1]:.4f},{row[2]:.4f},{row[3]:.4f},{row[4]:.4f},{row[5]:.4f},{row[6]:.4f},{row[7]:.4f}\n")
+                logger.info("BENCH: wrote %d tick breakdowns to %s", len(tick_log), tick_path)
+            except Exception as e:
+                logger.warning("BENCH: failed to write tick CSV: %s", e)
 
         logger.debug("Movement control loop stopped")
