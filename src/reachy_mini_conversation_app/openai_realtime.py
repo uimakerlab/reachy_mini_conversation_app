@@ -3,20 +3,28 @@ import base64
 import random
 import asyncio
 import logging
-from typing import Any, Final, Tuple, Literal, Optional
+from typing import Any, Final, Tuple, Literal, Optional, cast
 from pathlib import Path
 from datetime import datetime
 
 import cv2
 import numpy as np
 import gradio as gr
-from openai import AsyncOpenAI
 from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_to_int16
-from openai.resources.realtime.realtime import AsyncRealtimeConnection
 from numpy.typing import NDArray
 from scipy.signal import resample
 from websockets.exceptions import ConnectionClosedError
 
+from openai import AsyncOpenAI
+from openai.types.realtime import RealtimeSessionCreateRequestParam
+from openai.resources.realtime.realtime import AsyncRealtimeConnection
+from openai.types.realtime.audio_transcription_param import AudioTranscriptionParam
+from openai.types.realtime.realtime_audio_config_param import RealtimeAudioConfigParam
+from openai.types.realtime.realtime_tools_config_param import RealtimeToolsConfigParam
+from openai.types.realtime.realtime_audio_formats_param import AudioPCM
+from openai.types.realtime.realtime_audio_config_input_param import RealtimeAudioConfigInputParam
+from openai.types.realtime.realtime_audio_config_output_param import RealtimeAudioConfigOutputParam
+from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
 from reachy_mini_conversation_app.config import config
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
 from reachy_mini_conversation_app.tools.core_tools import (
@@ -133,11 +141,15 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             if self.connection is not None:
                 try:
                     await self.connection.session.update(
-                        session={
-                            "type": "realtime",
-                            "instructions": instructions,
-                            "audio": {"output": {"voice": voice}},
-                        },
+                        session=RealtimeSessionCreateRequestParam(
+                            type="realtime",
+                            instructions=instructions,
+                            audio=RealtimeAudioConfigParam(
+                                output=RealtimeAudioConfigOutputParam(
+                                    voice=voice,
+                                ),
+                            ),
+                        ),
                     )
                     logger.info("Applied personality via live update: %s", profile or "built-in default")
                 except Exception as e:
@@ -259,34 +271,24 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         """Establish and manage a single realtime session."""
         async with self.client.realtime.connect(model=config.MODEL_NAME) as conn:
             try:
-                await conn.session.update(
-                    session={
-                        "type": "realtime",
-                        "instructions": get_session_instructions(),
-                        "audio": {
-                            "input": {
-                                "format": {
-                                    "type": "audio/pcm",
-                                    "rate": self.input_sample_rate,
-                                },
-                                "transcription": {"model": "gpt-4o-transcribe", "language": "en"},
-                                "turn_detection": {
-                                    "type": "server_vad",
-                                    "interrupt_response": True,
-                                },
-                            },
-                            "output": {
-                                "format": {
-                                    "type": "audio/pcm",
-                                    "rate": self.output_sample_rate,
-                                },
-                                "voice": get_session_voice(),
-                            },
-                        },
-                        "tools": get_tool_specs(),  # type: ignore[typeddict-item]
-                        "tool_choice": "auto",
-                    },
+                session_config = RealtimeSessionCreateRequestParam(
+                    type="realtime",
+                    instructions=get_session_instructions(),
+                    audio=RealtimeAudioConfigParam(
+                        input=RealtimeAudioConfigInputParam(
+                            format=AudioPCM(type="audio/pcm", rate=self.input_sample_rate),
+                            transcription=AudioTranscriptionParam(model="gpt-4o-transcribe", language="en"),
+                            turn_detection=ServerVad(type="server_vad", interrupt_response=True),
+                        ),
+                        output=RealtimeAudioConfigOutputParam(
+                            format=AudioPCM(type="audio/pcm", rate=self.output_sample_rate),
+                            voice=get_session_voice(),
+                        ),
+                    ),
+                    tools=cast(RealtimeToolsConfigParam, get_tool_specs()),
+                    tool_choice="auto",
                 )
+                await conn.session.update(session=session_config)
                 logger.info(
                     "Realtime session initialized with profile=%r voice=%r",
                     getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None),
