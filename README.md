@@ -304,6 +304,29 @@ reachy-mini-conversation-app --robot-name <name>
 
 </details>
 
+## Development on Wireless
+
+The `scripts/` folder contains helper scripts for faster iteration on a Wireless Reachy Mini:
+
+- **`deploy_wireless.sh`** — Rsyncs your local source to the robot's site-packages, stops any running app, starts the conversation app via the daemon API, and tails logs. This uses the same launch path as the dashboard, so it's representative of production behavior.
+- **`stop_app.sh`** — Stops whatever app is currently running (equivalent to the dashboard's "Stop" button).
+
+```bash
+./scripts/deploy_wireless.sh                  # default: reachy-mini.local
+./scripts/deploy_wireless.sh 192.168.1.42    # custom IP
+./scripts/stop_app.sh
+```
+
+Requires `bash`, `ssh`, and `rsync` (native on Linux/macOS, use Git Bash or WSL on Windows).
+
+> [!TIP]
+> Set up passwordless SSH to avoid typing the password multiple times per deploy:
+> ```bash
+> ssh-copy-id pollen@reachy-mini.local   # password: root
+> ```
+
+For more development workflows and tips, see the [Development Workflow for Wireless Reachy Mini](https://huggingface.co/docs/reachy_mini/platforms/reachy_mini/development_workflow#development-workflow-for-wireless-reachy-mini) documentation.
+
 ## Contributing
 
 We welcome bug fixes, features, profiles, and documentation improvements. Please review our
