@@ -28,6 +28,12 @@
 *.psd lfs
 *.afphoto lfs
 *.afdesign lfs
+# Audio
+*.wav lfs
+*.mp3 lfs
+*.ogg lfs
+# Documents
+*.pdf lfs
 # Models
 *.pth lfs
 # Binaries

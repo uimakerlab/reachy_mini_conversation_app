@@ -59,3 +59,9 @@ cache/
 
 # User-created personalities (managed by UI)
 src/reachy_mini_conversation_app/profiles/user_personalities/
+
+# Local deploy/bench scripts (not pushed to remote)
+# NOTE: scripts/ and results dirs are tracked on the
+# 224-breathing-animation-causes-micro-head-vibrations branch
+# scripts/
+# breathing_results/
