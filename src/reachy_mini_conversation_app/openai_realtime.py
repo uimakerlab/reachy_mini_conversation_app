@@ -571,7 +571,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             except asyncio.CancelledError:
                                 pass
 
-                        # Start new debounce timer with the full accumulated transcript
+                        # Start new debounce timer with the last delta
                         self.partial_transcript_task = asyncio.create_task(
                             self._emit_debounced_partial(chunks[-1], item_id, sequence_counter)
                         )
