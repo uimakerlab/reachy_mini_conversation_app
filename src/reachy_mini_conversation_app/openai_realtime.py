@@ -19,14 +19,14 @@ from websockets.exceptions import ConnectionClosedError
 from openai import AsyncOpenAI
 from openai.types.realtime import RealtimeSessionCreateRequestParam
 from openai.resources.realtime.realtime import AsyncRealtimeConnection
+from openai.types.realtime.conversation_item_param import ConversationItemParam
 from openai.types.realtime.audio_transcription_param import AudioTranscriptionParam
 from openai.types.realtime.realtime_audio_config_param import RealtimeAudioConfigParam
-from openai.types.realtime.conversation_item_param import ConversationItemParam
-from openai.types.realtime.realtime_response_create_params_param import RealtimeResponseCreateParamsParam
 from openai.types.realtime.realtime_tools_config_param import RealtimeToolsConfigParam
 from openai.types.realtime.realtime_audio_formats_param import AudioPCM
 from openai.types.realtime.realtime_audio_config_input_param import RealtimeAudioConfigInputParam
 from openai.types.realtime.realtime_audio_config_output_param import RealtimeAudioConfigOutputParam
+from openai.types.realtime.realtime_response_create_params_param import RealtimeResponseCreateParamsParam
 from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
 from reachy_mini_conversation_app.config import config
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
@@ -490,7 +490,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             logger.info("Realtime session updated successfully")
 
             # Reset the partial-transcript accumulator for each new session
-            self.input_transcript_acc: dict[str, str] = {}
+            self.input_transcript_acc.clear()
 
             # Manage event received from the openai server
             self.connection = conn
