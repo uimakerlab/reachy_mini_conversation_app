@@ -28,7 +28,6 @@ from openai.types.realtime.realtime_audio_config_input_param import RealtimeAudi
 from openai.types.realtime.realtime_audio_config_output_param import RealtimeAudioConfigOutputParam
 from openai.types.realtime.realtime_response_create_params_param import RealtimeResponseCreateParamsParam
 from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
-from reachy_mini_conversation_app.config import config
 from reachy_mini_conversation_app.config import AVAILABLE_VOICES, config
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
 from reachy_mini_conversation_app.tools.core_tools import (
