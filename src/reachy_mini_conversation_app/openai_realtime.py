@@ -21,6 +21,8 @@ from openai.types.realtime import RealtimeSessionCreateRequestParam
 from openai.resources.realtime.realtime import AsyncRealtimeConnection
 from openai.types.realtime.audio_transcription_param import AudioTranscriptionParam
 from openai.types.realtime.realtime_audio_config_param import RealtimeAudioConfigParam
+from openai.types.realtime.conversation_item_param import ConversationItemParam
+from openai.types.realtime.realtime_response_create_params_param import RealtimeResponseCreateParamsParam
 from openai.types.realtime.realtime_tools_config_param import RealtimeToolsConfigParam
 from openai.types.realtime.realtime_audio_formats_param import AudioPCM
 from openai.types.realtime.realtime_audio_config_input_param import RealtimeAudioConfigInputParam
@@ -104,8 +106,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
         # Debouncing for partial transcripts
         self.partial_transcript_task: asyncio.Task[None] | None = None
-        self.partial_transcript_sequence: int = 0  # sequence counter to prevent stale emissions
         self.partial_debounce_delay = 0.5  # seconds
+        self.input_transcript_acc: dict[str, list[str]] = {} # list of delta transcripts by item_id
 
         # Internal lifecycle flags
         self._shutdown_requested: bool = False
@@ -190,12 +192,12 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             logger.error("Error applying personality '%s': %s", profile, e)
             return f"Failed to apply personality: {e}"
 
-    async def _emit_debounced_partial(self, transcript: str, sequence: int) -> None:
+    async def _emit_debounced_partial(self, transcript: str, content_index: int, sequence_counter: int) -> None:
         """Emit partial transcript after debounce delay."""
         try:
             await asyncio.sleep(self.partial_debounce_delay)
             # Only emit if this is still the latest partial (by sequence number)
-            if self.partial_transcript_sequence == sequence:
+            if content_index == sequence_counter:
                 await self.output_queue.put(AdditionalOutputs({"role": "user_partial", "content": transcript}))
                 logger.debug(f"Debounced partial emitted: {transcript}")
         except asyncio.CancelledError:
@@ -374,11 +376,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             # Send the tool result back
             if isinstance(bg_tool.id, str):
                 await self.connection.conversation.item.create(
-                    item={
+                    item=cast(ConversationItemParam, {
                         "type": "function_call_output",
                         "call_id": bg_tool.id,
                         "output": json.dumps(tool_result),
-                    },
+                    }),
                 )
 
             await self.output_queue.put(
@@ -402,7 +404,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     logger.warning("Unexpected type for b64_im: %s", type(b64_im))
                     b64_im = str(b64_im)
                 await self.connection.conversation.item.create(
-                    item={
+                    item=cast(ConversationItemParam, {
                         "type": "message",
                         "role": "user",
                         "content": [
@@ -411,7 +413,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                                 "image_url": f"data:image/jpeg;base64,{b64_im}",
                             },
                         ],
-                    },
+                    }),
                 )
                 logger.info("Added camera image to conversation")
 
@@ -437,9 +439,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             # For other tool calls, let the robot reply out loud.
             if not bg_tool.is_idle_tool_call:
                 await self._safe_response_create(
-                    response={
-                        "instructions": "Use the tool result just returned and answer concisely in speech.",
-                    },
+                    response=RealtimeResponseCreateParamsParam(
+                        instructions="Use the tool result just returned and answer concisely in speech.",
+                    ),
                 )
 
             # Re-synchronize the head wobble after a tool call that may have taken some time
@@ -486,6 +488,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 return
 
             logger.info("Realtime session updated successfully")
+
+            # Reset the partial-transcript accumulator for each new session
+            self.input_transcript_acc: dict[str, str] = {}
 
             # Manage event received from the openai server
             self.connection = conn
@@ -544,30 +549,38 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             logger.warning("No usage data available for cost tracking")
 
                     if event.type == "conversation.item.input_audio_transcription.delta":
-                         logger.debug(f"User partial transcript: {event.delta}")
+                        logger.debug(f"User partial transcript: {event.delta}")
 
-                         if event.delta is not None:
+                        item_id = event.item_id
+                        delta = event.delta or ""
+                        content_index = event.content_index or 0
 
-                             # Increment sequence
-                             self.partial_transcript_sequence += 1
-                             current_sequence = self.partial_transcript_sequence
+                        # Accumulate deltas by item_id
+                        try:
+                            chunks = self.input_transcript_acc[item_id]
+                        except KeyError:
+                            self.input_transcript_acc[item_id] = [delta]
+                        else:
+                            self.input_transcript_acc[item_id].append(delta)
 
-                             # Cancel previous debounce task if it exists
-                             if self.partial_transcript_task and not self.partial_transcript_task.done():
-                                 self.partial_transcript_task.cancel()
-                                 try:
-                                     await self.partial_transcript_task
-                                 except asyncio.CancelledError:
-                                     pass
+                        # Cancel previous debounce task if it exists
+                        if self.partial_transcript_task and not self.partial_transcript_task.done():
+                            self.partial_transcript_task.cancel()
+                            try:
+                                await self.partial_transcript_task
+                            except asyncio.CancelledError:
+                                pass
 
-                             # Start new debounce timer with sequence number
-                             self.partial_transcript_task = asyncio.create_task(
-                                 self._emit_debounced_partial(event.delta, current_sequence)
-                             )
+                        # Start new debounce timer with the full accumulated transcript
+                        self.partial_transcript_task = asyncio.create_task(
+                            self._emit_debounced_partial(chunks[-1], content_index, len(chunks) - 1)
+                        )
 
                     # Handle completed transcription (user finished speaking)
                     if event.type == "conversation.item.input_audio_transcription.completed":
                         logger.debug(f"User transcript: {event.transcript}")
+
+                        item_id = event.item_id
 
                         # Cancel any pending partial emission
                         if self.partial_transcript_task and not self.partial_transcript_task.done():
@@ -576,6 +589,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                                 await self.partial_transcript_task
                             except asyncio.CancelledError:
                                 pass
+
+                        # Clear the accumulator entry for this item
+                        self.input_transcript_acc.pop(item_id, None)
 
                         await self.output_queue.put(AdditionalOutputs({"role": "user", "content": event.transcript}))
 
@@ -640,9 +656,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             self.is_idle_tool_call = False
                         else:
                             await self._safe_response_create(
-                                response={
-                                    "instructions": "Notify what the tool has been running giving meaningful information about the task",
-                                },
+                                response=RealtimeResponseCreateParamsParam(
+                                    instructions="Notify what the tool has been running giving meaningful information about the task",
+                                ),
                             )
 
                         logger.info("Started background tool: %s (id=%s, call_id=%s)", tool_name, bg_tool.tool_id, call_id)
@@ -856,17 +872,17 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             logger.debug("No connection, cannot send idle signal")
             return
         await self.connection.conversation.item.create(
-            item={
+            item=cast(ConversationItemParam, {
                 "type": "message",
                 "role": "user",
                 "content": [{"type": "input_text", "text": timestamp_msg}],
-            },
+            }),
         )
         await self._safe_response_create(
-            response={
-                "instructions": "You MUST respond with function calls only - no speech or text. Choose appropriate actions for idle behavior.",
-                "tool_choice": "required",
-            },
+            response=RealtimeResponseCreateParamsParam(
+                instructions="You MUST respond with function calls only - no speech or text. Choose appropriate actions for idle behavior.",
+                tool_choice="required",
+            ),
         )
 
     def _persist_api_key_if_needed(self) -> None:
