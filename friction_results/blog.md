@@ -20,7 +20,7 @@ isn't fast enough for smooth motion?
 
 This is a reasonable first guess. At 100Hz, each tick is 10ms. If the motor moves
 in discrete steps every 10ms, you might expect a 100Hz vibration. But here's the
-thing — we measured the actual motor positions at 60Hz and found something
+thing — we measured the actual motor positions at 50Hz and found something
 completely different.
 
 The motors aren't stepping too fast. **They're not moving at all.**
@@ -28,21 +28,21 @@ The motors aren't stepping too fast. **They're not moving at all.**
 ## What We Actually Measured
 
 We recorded the commanded position (what we tell the motors to do) and the
-present position (what the motors actually report) at 60Hz. Then we looked for
-**stall runs** — consecutive ticks where the present position doesn't change.
+present position (what the motors actually report) at 50Hz — matching the
+daemon's internal control loop. Then we counted **stall events** — any time the
+present position stays unchanged for two or more consecutive ticks, meaning the
+motor has stopped and static friction has engaged.
 
-If the problem were control frequency, we'd expect stall runs of exactly 1 tick
-(16.7ms at 60Hz). The motor would update every tick, maybe sometimes skip one.
-
-Instead, we found stall runs of **30, 50, even 74 consecutive ticks**. That's
-the motor being completely stuck for over a second while the commanded position
-keeps moving away from it.
+If the problem were control frequency, we'd expect brief, regular pauses. Instead,
+we found stall runs of **30, 50, even 66 consecutive ticks**. That's the motor
+being completely stuck for over a second while the commanded position keeps
+moving away from it.
 
 Here's what that looks like. This is the antenna at 1 deg/s constant velocity,
 centered at 0 degrees. Blue is commanded, red is present. Red shaded regions are
 stalls:
 
-![Antenna at 1 deg/s — classic stick-slip sawtooth](ant_c0_v1.png)
+![Antenna at 1 deg/s — classic stick-slip sawtooth](../friction_results_50hz/ant_c0_v1.png)
 
 The present position (red) is a staircase. The motor gets stuck, the commanded
 position pulls ahead, and then suddenly the motor breaks free and jumps to catch
@@ -50,7 +50,7 @@ up. Then it gets stuck again. This is textbook **stick-slip friction**.
 
 And here's what smooth motion looks like, same antenna but at 30 deg/s:
 
-![Antenna at 30 deg/s — smooth tracking](ant_c0_v30.png)
+![Antenna at 30 deg/s — smooth tracking](../friction_results_50hz/ant_c0_v30.png)
 
 Night and day. At higher velocity, the motor tracks the commanded position
 smoothly with only brief pauses at direction reversals.
@@ -67,8 +67,6 @@ discontinuity at zero:
      3. Stribeck model (static friction peak at v=0, drops to kinetic, then viscous rise)
      4. Load-dependent model (friction threshold scales with torque load)
 -->
-
-![Friction models — placeholder for real diagrams](TODO_friction_models.png)
 
 The key feature is the **discontinuity at zero velocity**. Static friction
 (also called stiction) is the maximum friction force — the peak is right at
@@ -140,11 +138,9 @@ velocity band where the motor is most likely to get trapped in the stick-slip
 cycle. Once the motor is moving fast enough to stay firmly in the kinetic regime,
 friction becomes smooth and predictable.
 
-The 1.5 mm/s head Z test showed a 74-tick (1.2 second) continuous stall — worse
-than both slower and faster tests — suggesting this velocity sits right in the
-transition zone where the motor repeatedly crosses the static/kinetic boundary.
-
 ## The Experiments
+
+### Phase 1: Friction Characterization (constant-velocity tests)
 
 To verify all of this, we designed a systematic characterization. Instead of
 sinusoidal breathing motions (where velocity constantly changes), we used
@@ -152,104 +148,152 @@ sinusoidal breathing motions (where velocity constantly changes), we used
 forth at a fixed speed. This lets us cleanly measure the friction threshold as a
 function of velocity.
 
-### Test Matrix
+#### Test Matrix
 
 - **Antenna tests**: 9 velocities (1, 2, 3, 5, 8, 12, 20, 30, 50 deg/s) × 3
   center angles (0°, 10°, 90°) = 27 tests
 - **Head Z tests**: 9 velocities (0.5, 1, 1.5, 2, 3, 5, 8, 12, 20 mm/s) = 9
   tests
 - **Sinusoidal baseline**: 1 test (original breathing motion for reference)
-- 15 seconds each, 60Hz sampling, recording commanded and present positions
+- 15 seconds each, 50Hz sampling (matching daemon control loop)
 
-### Antenna Results: Friction Scales With Gravity
+#### Antenna Results: Stall Events vs Speed
 
-The minimum velocity for smooth motion (no stall runs longer than 3 ticks)
-depends dramatically on the operating angle:
+We counted stall events — each time the motor stops (two consecutive identical
+position readings), that's one event where static friction engaged and will
+cause a jerk when it breaks free.
 
-| Center Angle | Min Smooth Velocity | Physics |
-|---|---|---|
-| 0° (vertical) | 8 deg/s | Antenna hanging straight down, minimal gravity load on gearbox |
-| 10° (SDK default offset) | 20 deg/s | Slight angle, moderate gravity loading |
-| 90° (horizontal) | 30 deg/s | Full antenna weight on gearbox, maximum friction |
+![Antenna stall events vs speed](../friction_results_50hz/stall_events_antenna.png)
 
-Horizontal antennas need nearly 4× the velocity of vertical ones. This directly
-confirms gravity loading as a major factor in friction.
+Key observations:
+- **Stalls never reach zero.** Even at 50 deg/s, there are still 16-26 stall
+  events per 15 seconds. The gearbox friction causes micro-stalls at every speed.
+- **Minimum stalls around 20-30 deg/s** for all angles. The sweet spot for the
+  default 10° offset is 30 deg/s (21 stall events).
+- **Gravity loading is dramatic.** At 3 deg/s: 111 events at 0° vs 146 at 10°
+  vs 116 at 90°. The load-dependent friction effect is clearly visible.
+- **Slow speeds are worst.** The 2-5 deg/s range has the most stall events
+  (120-146 per 15s), because the motor repeatedly enters and exits the
+  stick-slip zone.
 
-Here's what stick-slip looks like at 90° center angle — the motor is stuck 78%
-of the time:
+Some representative raw traces:
 
-![Antenna at 90° center, 2 deg/s — 78% stuck](ant_c90_v2.png)
+![Antenna at 10° center, 3 deg/s — 146 stall events](../friction_results_50hz/ant_c10_v3.png)
+![Antenna at 10° center, 12 deg/s — 87 stall events](../friction_results_50hz/ant_c10_v12.png)
+![Antenna at 10° center, 30 deg/s — 21 stall events](../friction_results_50hz/ant_c10_v30.png)
 
-Compare with the same velocity at 0° center — still bad, but much less severe
-(50% stuck):
+#### Head Z Results: Friction At All Speeds
 
-![Antenna at 0° center, 1 deg/s — 50% stuck](ant_c0_v1.png)
+![Head Z stall events vs speed](../friction_results_50hz/stall_events_head_z.png)
 
-### Head Z Results: Friction Is Severe At All Tested Speeds
+The head Z shows a minimum around 5 mm/s (25 events) but stalls increase again
+at higher speeds. The shape of this curve is not fully explained yet — we would
+expect a monotonic decrease with speed in a simple friction model. The increase
+at high speeds may be related to direction reversals becoming more frequent and
+violent at higher velocities, or to the complex multi-actuator dynamics of the
+Stewart platform.
 
-This is the bad news. Even at 20 mm/s — far faster than any reasonable breathing
-animation — the head Z axis still shows stick-slip:
-
-| Velocity | Stall % | Max Stall | Duration |
+| Velocity | Stall Events | Stall % | Max Stall Run |
 |---|---|---|---|
-| 0.5 mm/s | 57.9% | 19 ticks | 317ms |
-| 1.0 mm/s | 51.1% | 26 ticks | 433ms |
-| 1.5 mm/s | 48.9% | **74 ticks** | **1233ms** |
-| 2.0 mm/s | 36.9% | 16 ticks | 267ms |
-| 3.0 mm/s | 31.8% | 17 ticks | 283ms |
-| 5.0 mm/s | 29.4% | 11 ticks | 183ms |
-| 8.0 mm/s | 27.5% | 10 ticks | 167ms |
-| 12.0 mm/s | 26.0% | 6 ticks | 100ms |
-| 20.0 mm/s | 23.4% | 4 ticks | 67ms |
+| 0.5 mm/s | 72 | 38.6% | 66 ticks (1320ms) |
+| 1.0 mm/s | 58 | 23.5% | 30 ticks (600ms) |
+| 1.5 mm/s | 59 | 17.1% | 12 ticks (240ms) |
+| 2.0 mm/s | 50 | 12.9% | 13 ticks (260ms) |
+| 3.0 mm/s | 33 | 6.5% | 8 ticks (160ms) |
+| **5.0 mm/s** | **25** | **9.6%** | **15 ticks (300ms)** |
+| 8.0 mm/s | 35 | 7.8% | 5 ticks (100ms) |
+| 12.0 mm/s | 36 | 6.5% | 6 ticks (120ms) |
+| 20.0 mm/s | 50 | 7.9% | 5 ticks (100ms) |
 
-Note the 1.5 mm/s anomaly — a 1.2-second stall, worse than both 0.5 and 2.0
-mm/s. This is likely the Stribeck effect: we're sitting right at the
-friction-velocity peak.
+Some representative raw traces:
 
-Here's that 1.5 mm/s test. The head is completely stuck for over a second while
-the command moves 2mm away:
+![Head Z at 1.0 mm/s — 58 stall events](../friction_results_50hz/z_v1.0.png)
+![Head Z at 5.0 mm/s — 25 stall events](../friction_results_50hz/z_v5.0.png)
+![Head Z at 20.0 mm/s — 50 stall events](../friction_results_50hz/z_v20.0.png)
 
-![Head Z at 1.5 mm/s — stuck for 1.2 seconds](z_v1.5.png)
+### Phase 2a: Trajectory Shape Optimization
 
-The breathing animation's peak Z velocity is about 3.1 mm/s (5mm amplitude ×
-0.1Hz × 2π), and its *average* velocity is much lower. It spends most of its
-time deep in the stick-slip zone.
+With the friction characterization done, we tried different trajectory shapes to
+see if we could reduce stalls by avoiding zero-velocity moments. We tested 8
+shapes, all at 30 deg/s antenna speed:
 
-### The Baseline: Confirming the Breathing Is Affected
+| Rank | Trajectory | Vib/s | OscRMS | Stall% | Description |
+|---|---|---|---|---|---|
+| 1 | overshoot | 24.7 | 0.01698 | 9.6% | 10% overshoot then settle |
+| 2 | smoothed_tri | 25.2 | 0.01527 | 7.0% | Triangle with cosine-blended corners |
+| 3 | s_curve | 25.2 | 0.00560 | 6.4% | Cosine acceleration profile |
+| 4 | min_jerk | 26.2 | 0.00990 | 9.9% | Minimum-jerk segments |
+| 5 | sinusoidal | 26.2 | 0.01509 | 6.7% | Pure sinusoid |
+| 6 | pause_peaks | 26.7 | 0.01244 | 6.0% | Fast move + pause at peaks |
+| 7 | trapezoidal | 26.9 | 0.00959 | 8.2% | Trapezoidal velocity |
+| 8 | triangle | 27.2 | 0.01493 | 3.4% | Constant velocity baseline |
 
-The original breathing motion shows exactly what we predicted:
-- **Z signal**: 43.6% stall, max 32 ticks (533ms) — the head trembles
-- **Antenna signal**: 22.3% stall, max 5 ticks (83ms) — antennas are smoother
-  because they move faster (47 deg/s peak)
+The differences are modest — trajectory shape alone doesn't solve the friction
+problem. The stall events are dominated by direction reversals where velocity
+passes through zero, regardless of the shape.
 
-The antenna sway is fast enough to stay mostly in the kinetic friction regime.
-The Z motion is far too slow. This is why the *head* trembles but the *antennas*
-look relatively smooth.
+### Phase 2b: PID Tuning
+
+We tested 12 PID configurations on the antenna motors (Dynamixel XL330-M288).
+The robot's default is P=200 I=0 D=0 (well below the factory default of P=400).
+
+We found that higher PID gains (P=1000 D=1000) made the **encoder metrics look
+better** — lower OscRMS, fewer stall ticks — but the **antennas visibly shook
+more**. The antennas are flexible spring-like metallic rods with very low inertia.
+They ring like springs when the motor makes sharp corrections.
+
+This is a crucial finding: **encoder-based metrics don't capture antenna tip
+vibration.** The motor shaft can be tracking perfectly while the antenna tip
+oscillates wildly. Higher PID gains make the motor more aggressive, which excites
+the antenna spring more at each correction.
+
+We attempted to measure the vibration acoustically using the robot's microphone,
+but ambient noise dominated the signal. We also computed a "vibration index"
+(acceleration sign changes per second) from the encoder data, which showed the
+right trend (P=1000 D=1000 was 21-40% shakier) but the magnitude was too small
+to match the visually dramatic difference.
+
+**Conclusion: keep the default PID (P=200 D=0) for antennas.** The problem is
+mechanical (antenna flexibility), not a PID tuning issue.
+
+Full PID results in `pid_results/PID_RESULTS.md`.
+
+### A Critical Bug: 60Hz vs 50Hz Sampling
+
+During this investigation, we discovered that all our test scripts were sampling
+at 60 Hz while the daemon's internal control loop runs at 50 Hz. This meant
+~1 in 6 position reads returned a stale value from the previous tick, producing
+false zero-velocity samples.
+
+**Impact**: Stall percentages were inflated by ~3x (e.g., 20% reported as stalls
+were actually stale reads, not real motor stops). All velocity plots had spurious
+zero spikes. Jerk values were artificially high.
+
+**Fix**: Changed all scripts to 50 Hz. The corrected data is in
+`friction_results_50hz/` and `trajectory_results_50hz/`. The original 60Hz data
+is preserved in `friction_results/` for reference.
 
 ## What Now?
 
-We're exploring two approaches:
+The stall event analysis shows that:
 
-### Approach 1: Avoid Low Velocities
+1. **Zero stalls is unreachable** at any tested speed — the gearbox always has
+   micro-stalls.
+2. **Antenna sweet spot: ~30 deg/s** at the default 10° offset (21 stall events
+   per 15s).
+3. **Head Z sweet spot: ~5 mm/s** (25 events), but the curve is non-monotonic
+   and not yet fully explained.
+4. **PID tuning helps the encoder but hurts the antenna tips** — the problem is
+   mechanical, not control.
+5. **Trajectory shape gives marginal improvements** — the stalls come from
+   direction reversals, not the trajectory between them.
 
-If we can keep all movements above the stick-slip threshold, the motors stay in
-the kinetic regime and motion is smooth. This would mean replacing smooth
-sinusoidal trajectories (whose velocity passes through zero at every peak) with
-trajectories that maintain a minimum velocity.
-
-The challenge: for head Z, even 20 mm/s still shows stick-slip. The threshold
-may be impractically high for a gentle breathing animation.
-
-### Approach 2: Pre-Rotation to Break Static Friction
-
-This is the more promising idea. Instead of fighting gravity head-on with a pure
-Z translation, we start each movement phase with a small rotation (roll or
-pitch). Rotations don't change gravitational potential energy — they don't fight
-gravity — so their friction threshold is much lower. Once the motors are moving
-in the kinetic regime, we add Z translation while they're already "warmed up."
-
-Think of it like unsticking a jar lid: you don't just pull harder, you twist
-first.
+Open questions:
+- Can pre-rotation (starting with a small roll/pitch before Z translation) break
+  static friction and reduce head Z stalls?
+- Can we find a combined trajectory that keeps the motor moving continuously
+  (e.g., circular motion in roll+Z space) to avoid zero-velocity crossings?
+- Can the non-monotonic head Z curve be explained by reversal dynamics?
 
 *This investigation is ongoing. We'll update this post as we test these
 approaches and find out what works.*
