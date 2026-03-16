@@ -22,7 +22,6 @@ from openai.resources.realtime.realtime import AsyncRealtimeConnection
 from openai.types.realtime.conversation_item_param import ConversationItemParam
 from openai.types.realtime.audio_transcription_param import AudioTranscriptionParam
 from openai.types.realtime.realtime_audio_config_param import RealtimeAudioConfigParam
-from openai.types.realtime.realtime_tools_config_param import RealtimeToolsConfigParam
 from openai.types.realtime.realtime_audio_formats_param import AudioPCM
 from openai.types.realtime.realtime_audio_config_input_param import RealtimeAudioConfigInputParam
 from openai.types.realtime.realtime_audio_config_output_param import RealtimeAudioConfigOutputParam
@@ -481,7 +480,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             voice=get_session_voice(),
                         ),
                     ),
-                    tools=cast(RealtimeToolsConfigParam, get_tool_specs()),
+                    tools=get_tool_specs(), # type: ignore[typeddict-item]
                     tool_choice="auto",
                 )
                 await conn.session.update(session=session_config)
