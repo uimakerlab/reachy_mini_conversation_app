@@ -4,16 +4,16 @@ import base64
 import random
 import asyncio
 import logging
-from pydantic import BaseModel, Field
-from datetime import datetime
+from typing import Any, Final, Tuple, Literal, Optional, cast
 from pathlib import Path
-from typing import Any, Final, Literal, Optional, Tuple, cast
+from datetime import datetime
 
 import cv2
 import numpy as np
 import gradio as gr
 from openai import AsyncOpenAI
 from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_to_int16
+from pydantic import Field, BaseModel
 from numpy.typing import NDArray
 from scipy.signal import resample
 from openai.types.realtime import RealtimeSessionCreateRequestParam
@@ -383,7 +383,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             return
 
         try:
-            # Send the tool result back
+            # TODO: refactor this since it's repeated here, in the camera branch below, and in send_idle_signal
             if isinstance(bg_tool.id, str):
                 await self.connection.conversation.item.create(
                     item=cast(ConversationItemParam, {
@@ -569,6 +569,10 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             input_transcript.deltas.append(delta)
 
                         sequence_counter = len(input_transcript.deltas) - 1
+
+                        logger.debug(f"Input transcript: {input_transcript.deltas}")
+                        logger.debug(f"Item ID: {item_id}")
+                        logger.debug(f"Sequence counter: {sequence_counter}")
 
                         # Cancel previous debounce task if it exists
                         if self.partial_transcript_task and not self.partial_transcript_task.done():
