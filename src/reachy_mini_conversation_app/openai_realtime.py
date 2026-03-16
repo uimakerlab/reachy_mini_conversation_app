@@ -4,9 +4,10 @@ import base64
 import random
 import asyncio
 import logging
-from typing import Any, Final, Tuple, Literal, Optional, cast
-from pathlib import Path
+from pydantic import BaseModel, Field
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Final, Literal, Optional, Tuple, cast
 
 import cv2
 import numpy as np
@@ -54,6 +55,14 @@ TEXT_OUTPUT_COST_PER_1M = 16.0
 IMAGE_INPUT_COST_PER_1M = 5.0
 
 _RESPONSE_DONE_TIMEOUT: Final[float] = 30.0
+
+
+
+class InputTranscriptChunksByItem(BaseModel):
+    """Current item_id and its accumulated deltas. Only one item at a time."""
+
+    item_id: str | None = None
+    deltas: list[str] = Field(default_factory=list)
 
 
 def _compute_response_cost(usage: Any) -> float:
@@ -107,7 +116,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # Debouncing for partial transcripts
         self.partial_transcript_task: asyncio.Task[None] | None = None
         self.partial_debounce_delay = 0.5  # seconds
-        self.input_transcript_acc: dict[str, list[str]] = {} # list of delta transcripts by item_id
+        self.input_transcript_chunks_by_item = InputTranscriptChunksByItem()
 
         # Internal lifecycle flags
         self._shutdown_requested: bool = False
@@ -197,8 +206,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         try:
             await asyncio.sleep(self.partial_debounce_delay)
 
-            # Only emit if this is still the latest partial (by sequence number)
-            if item_id in self.input_transcript_acc and len(self.input_transcript_acc[item_id]) - 1 == sequence_counter:
+            input_transcript = self.input_transcript_chunks_by_item
+            if input_transcript.item_id == item_id and len(input_transcript.deltas) - 1 == sequence_counter:
                 await self.output_queue.put(AdditionalOutputs({"role": "user_partial", "content": transcript}))
                 logger.debug(f"Debounced partial emitted: {transcript}")
         except asyncio.CancelledError:
@@ -491,7 +500,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             logger.info("Realtime session updated successfully")
 
             # Reset the partial-transcript accumulator for each new session
-            self.input_transcript_acc.clear()
+            self.input_transcript_chunks_by_item = InputTranscriptChunksByItem()
 
             # Manage event received from the openai server
             self.connection = conn
@@ -552,13 +561,14 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         item_id = event.item_id
                         delta = event.delta or ""
 
-                        if item_id not in self.input_transcript_acc:
-                            self.input_transcript_acc[item_id] = [delta]
+                        input_transcript = self.input_transcript_chunks_by_item
+                        if input_transcript.item_id != item_id:
+                            input_transcript.item_id = item_id
+                            input_transcript.deltas = [delta]
                         else:
-                            self.input_transcript_acc[item_id].append(delta)
+                            input_transcript.deltas.append(delta)
 
-                        chunks = self.input_transcript_acc[item_id]
-                        sequence_counter = len(chunks) - 1
+                        sequence_counter = len(input_transcript.deltas) - 1
 
                         # Cancel previous debounce task if it exists
                         if self.partial_transcript_task and not self.partial_transcript_task.done():
@@ -570,7 +580,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
                         # Start new debounce timer with the last delta
                         self.partial_transcript_task = asyncio.create_task(
-                            self._emit_debounced_partial(chunks[-1], item_id, sequence_counter)
+                            self._emit_debounced_partial("".join(input_transcript.deltas), item_id, sequence_counter)
                         )
 
                     # Handle completed transcription (user finished speaking)
@@ -586,9 +596,6 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                                 await self.partial_transcript_task
                             except asyncio.CancelledError:
                                 pass
-
-                        # Clear the accumulator entry for this item
-                        self.input_transcript_acc.pop(item_id, None)
 
                         await self.output_queue.put(AdditionalOutputs({"role": "user", "content": event.transcript}))
 
