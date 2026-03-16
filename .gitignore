@@ -57,5 +57,8 @@ cache/
 .Trash-*
 .nfs*
 
+# Frontend
+frontend/node_modules/
+
 # User-created personalities (managed by UI)
 src/reachy_mini_conversation_app/profiles/user_personalities/

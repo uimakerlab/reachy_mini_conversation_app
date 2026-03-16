@@ -73,13 +73,12 @@ def run(
             logger.info("Using default backend for lite version")
             robot = ReachyMini(media_backend="default")
 
-    # Check if running in simulation mode without --gradio
-    if robot.client.get_status()["simulation_enabled"] and not args.gradio:
-        logger.error(
-            "Simulation mode requires Gradio interface. Please use --gradio flag when running in simulation mode.",
-        )
-        robot.client.disconnect()
-        sys.exit(1)
+    use_web = getattr(args, "web", False) or getattr(args, "gradio", False)
+
+    # Auto-enable web UI in simulation mode
+    if robot.client.get_status()["simulation_enabled"] and not use_web:
+        logger.info("Simulation mode detected. Automatically enabling web UI.")
+        use_web = True
 
     camera_worker, _, vision_manager = handle_vision_stuff(args, robot)
 
@@ -111,9 +110,13 @@ def run(
 
     handler = OpenaiRealtimeHandler(deps, gradio_mode=args.gradio, instance_path=instance_path)
 
-    stream_manager: gr.Blocks | LocalStream | None = None
+    if use_web:
+        from reachy_mini_conversation_app.web_ui import WebUI
 
-    if args.gradio:
+        stream_manager = WebUI(handler)
+    elif args.gradio:
+        stream_manager: gr.Blocks | LocalStream | None = None
+
         api_key_textbox = gr.Textbox(
             label="OPENAI API Key",
             type="password",
@@ -148,7 +151,6 @@ def run(
 
         app = gr.mount_gradio_app(app, stream.ui, path="/")
     else:
-        # In headless mode, wire settings_app + instance_path to console LocalStream
         stream_manager = LocalStream(
             handler,
             robot,
