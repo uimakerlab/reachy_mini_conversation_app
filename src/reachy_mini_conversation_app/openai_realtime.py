@@ -11,13 +11,12 @@ from datetime import datetime
 import cv2
 import numpy as np
 import gradio as gr
+from openai import AsyncOpenAI
 from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_to_int16
 from numpy.typing import NDArray
 from scipy.signal import resample
-from websockets.exceptions import ConnectionClosedError
-
-from openai import AsyncOpenAI
 from openai.types.realtime import RealtimeSessionCreateRequestParam
+from websockets.exceptions import ConnectionClosedError
 from openai.resources.realtime.realtime import AsyncRealtimeConnection
 from openai.types.realtime.conversation_item_param import ConversationItemParam
 from openai.types.realtime.audio_transcription_param import AudioTranscriptionParam
@@ -28,6 +27,7 @@ from openai.types.realtime.realtime_audio_config_input_param import RealtimeAudi
 from openai.types.realtime.realtime_audio_config_output_param import RealtimeAudioConfigOutputParam
 from openai.types.realtime.realtime_response_create_params_param import RealtimeResponseCreateParamsParam
 from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
+
 from reachy_mini_conversation_app.config import AVAILABLE_VOICES, config
 from reachy_mini_conversation_app.prompts import get_session_voice, get_session_instructions
 from reachy_mini_conversation_app.tools.core_tools import (
@@ -525,10 +525,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         self.deps.movement_manager.set_listening(False)
                         logger.debug("User speech stopped - server will auto-commit with VAD")
 
-                    if event.type in (
-                        "response.output_audio.done",  # GA
-                        "response.completed",  # text-only completion
-                    ):
+                    if event.type == "response.output_audio.done":
                         logger.debug("response completed")
 
                     if event.type == "response.created":
