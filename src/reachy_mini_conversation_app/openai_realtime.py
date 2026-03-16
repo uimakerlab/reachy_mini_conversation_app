@@ -569,9 +569,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
                         sequence_counter = len(input_transcript.deltas) - 1
 
-                        logger.debug(f"Input transcript: {input_transcript.deltas}")
-                        logger.debug(f"Item ID: {item_id}")
-                        logger.debug(f"Sequence counter: {sequence_counter}")
+                        logger.info(f"Input transcript: {input_transcript.deltas}")
+                        logger.info(f"Item ID: {item_id}")
+                        logger.info(f"Sequence counter: {sequence_counter}")
 
                         # Cancel previous debounce task if it exists
                         if self.partial_transcript_task and not self.partial_transcript_task.done():
