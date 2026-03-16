@@ -16,16 +16,18 @@ from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_
 from pydantic import Field, BaseModel
 from numpy.typing import NDArray
 from scipy.signal import resample
-from openai.types.realtime import RealtimeSessionCreateRequestParam
+from openai.types.realtime import (
+    ConversationItemParam,
+    AudioTranscriptionParam,
+    RealtimeAudioConfigParam,
+    RealtimeAudioConfigInputParam,
+    RealtimeAudioConfigOutputParam,
+    RealtimeResponseCreateParamsParam,
+    RealtimeSessionCreateRequestParam,
+)
 from websockets.exceptions import ConnectionClosedError
 from openai.resources.realtime.realtime import AsyncRealtimeConnection
-from openai.types.realtime.conversation_item_param import ConversationItemParam
-from openai.types.realtime.audio_transcription_param import AudioTranscriptionParam
-from openai.types.realtime.realtime_audio_config_param import RealtimeAudioConfigParam
 from openai.types.realtime.realtime_audio_formats_param import AudioPCM
-from openai.types.realtime.realtime_audio_config_input_param import RealtimeAudioConfigInputParam
-from openai.types.realtime.realtime_audio_config_output_param import RealtimeAudioConfigOutputParam
-from openai.types.realtime.realtime_response_create_params_param import RealtimeResponseCreateParamsParam
 from openai.types.realtime.realtime_audio_input_turn_detection_param import ServerVad
 
 from reachy_mini_conversation_app.config import AVAILABLE_VOICES, config
@@ -568,10 +570,6 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             input_transcript.deltas.append(delta)
 
                         sequence_counter = len(input_transcript.deltas) - 1
-
-                        logger.info(f"Input transcript: {input_transcript.deltas}")
-                        logger.info(f"Item ID: {item_id}")
-                        logger.info(f"Sequence counter: {sequence_counter}")
 
                         # Cancel previous debounce task if it exists
                         if self.partial_transcript_task and not self.partial_transcript_task.done():
