@@ -23,13 +23,10 @@ export default function Header({
   customProfile,
   onOpenProfiles,
   onOpenSettings,
-  isConnected,
-  isConnecting,
   robotConnected,
 }: HeaderProps) {
   const name = builtinProfile?.name ?? customProfile?.name ?? "Default";
   const image = builtinProfile?.avatar.image;
-  const gradient = builtinProfile?.avatar.gradient ?? ["#7C3AED", "#A78BFA"];
   const initial = customProfile?.name?.trim()?.[0]?.toUpperCase() ?? "R";
 
   return (

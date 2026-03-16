@@ -108,10 +108,6 @@ const TOOL_CATEGORIES: ToolCategory[] = [
   },
 ];
 
-const TOOL_LABELS: Record<string, string> = Object.fromEntries(
-  TOOL_CATEGORIES.flatMap((cat) => cat.tools.map((t) => [t.id, t.label])),
-);
-
 interface BuiltinModalProps {
   open: boolean;
   profile: BuiltinProfile;
@@ -133,6 +129,46 @@ interface CustomModalProps {
   onClose: () => void;
   onSave: (data: CustomModalSaveData) => void;
   onDelete?: () => void;
+}
+
+function ToolCard({ tool, enabled, onClick }: { tool: ToolMeta; enabled: boolean; onClick?: () => void }) {
+  return (
+    <Box
+      key={tool.id}
+      onClick={onClick}
+      sx={{
+        px: 1.5,
+        py: 1,
+        borderRadius: 2,
+        border: 2,
+        borderColor: enabled ? "primary.main" : "divider",
+        bgcolor: enabled ? "action.selected" : "transparent",
+        opacity: enabled ? 1 : onClick ? 0.55 : 0.35,
+        cursor: onClick ? "pointer" : "default",
+        transition: "all 0.15s ease",
+        ...(onClick && {
+          "&:hover": {
+            opacity: 1,
+            borderColor: enabled ? "primary.main" : "text.disabled",
+            bgcolor: enabled ? "action.selected" : "action.hover",
+          },
+        }),
+      }}
+    >
+      <Typography
+        variant="body2"
+        sx={{ fontWeight: 600, fontSize: "0.78rem", color: enabled ? "primary.main" : "text.primary" }}
+      >
+        {tool.label}
+      </Typography>
+      <Typography
+        variant="caption"
+        sx={{ fontSize: "0.66rem", color: enabled ? "primary.main" : "text.secondary", opacity: enabled ? 0.7 : 1, lineHeight: 1.3 }}
+      >
+        {tool.description}
+      </Typography>
+    </Box>
+  );
 }
 
 function AvatarBadge({ avatar, size = 96 }: { avatar: ProfileAvatar; size?: number }) {
@@ -229,8 +265,7 @@ export function BuiltinProfileModal({
           </Typography>
           <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
             {TOOL_CATEGORIES.map((cat) => {
-              const catToolIds = cat.tools.map((t) => t.id);
-              const enabledInCat = catToolIds.filter((id) => profile.enabledTools.includes(id));
+              const enabledInCat = cat.tools.filter((t) => profile.enabledTools.includes(t.id));
               if (enabledInCat.length === 0) return null;
               return (
                 <Box key={cat.key}>
@@ -241,45 +276,9 @@ export function BuiltinProfileModal({
                     </Typography>
                   </Box>
                   <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, pl: 3 }}>
-                    {cat.tools.map((t) => {
-                      const enabled = profile.enabledTools.includes(t.id);
-                      return (
-                        <Box
-                          key={t.id}
-                          sx={{
-                            px: 1.5,
-                            py: 1,
-                            borderRadius: 2,
-                            border: 2,
-                            borderColor: enabled ? "primary.main" : "divider",
-                            bgcolor: enabled ? "action.selected" : "transparent",
-                            opacity: enabled ? 1 : 0.35,
-                          }}
-                        >
-                          <Typography
-                            variant="body2"
-                            sx={{
-                              fontWeight: 600,
-                              fontSize: "0.78rem",
-                              color: enabled ? "primary.main" : "text.primary",
-                            }}
-                          >
-                            {t.label}
-                          </Typography>
-                          <Typography
-                            variant="caption"
-                            sx={{
-                              fontSize: "0.66rem",
-                              color: enabled ? "primary.main" : "text.secondary",
-                              opacity: enabled ? 0.7 : 1,
-                              lineHeight: 1.3,
-                            }}
-                          >
-                            {t.description}
-                          </Typography>
-                        </Box>
-                      );
-                    })}
+                    {cat.tools.map((t) => (
+                      <ToolCard key={t.id} tool={t} enabled={profile.enabledTools.includes(t.id)} />
+                    ))}
                   </Box>
                 </Box>
               );
@@ -542,53 +541,9 @@ export function CustomProfileModal({
                     </Box>
                   </Box>
                   <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
-                    {cat.tools.map((t) => {
-                      const enabled = tools.includes(t.id);
-                      return (
-                        <Box
-                          key={t.id}
-                          onClick={() => toggleTool(t.id)}
-                          sx={{
-                            px: 1.5,
-                            py: 1,
-                            borderRadius: 2,
-                            border: 2,
-                            borderColor: enabled ? "primary.main" : "divider",
-                            bgcolor: enabled ? "action.selected" : "transparent",
-                            cursor: "pointer",
-                            opacity: enabled ? 1 : 0.55,
-                            transition: "all 0.15s ease",
-                            "&:hover": {
-                              opacity: 1,
-                              borderColor: enabled ? "primary.main" : "text.disabled",
-                              bgcolor: enabled ? "action.selected" : "action.hover",
-                            },
-                          }}
-                        >
-                          <Typography
-                            variant="body2"
-                            sx={{
-                              fontWeight: 600,
-                              fontSize: "0.78rem",
-                              color: enabled ? "primary.main" : "text.primary",
-                            }}
-                          >
-                            {t.label}
-                          </Typography>
-                          <Typography
-                            variant="caption"
-                            sx={{
-                              fontSize: "0.66rem",
-                              color: enabled ? "primary.main" : "text.secondary",
-                              opacity: enabled ? 0.7 : 1,
-                              lineHeight: 1.3,
-                            }}
-                          >
-                            {t.description}
-                          </Typography>
-                        </Box>
-                      );
-                    })}
+                    {cat.tools.map((t) => (
+                      <ToolCard key={t.id} tool={t} enabled={tools.includes(t.id)} onClick={() => toggleTool(t.id)} />
+                    ))}
                   </Box>
                 </Box>
               );
