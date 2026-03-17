@@ -180,6 +180,7 @@ export default function ProfileDrawer({ open, onClose, settings, onUpdate, initi
                 selected={settings.profileId === cp.id}
                 onSelect={() => handleSelectCustom(cp)}
                 onEdit={() => setModal({ kind: "custom-edit", profile: cp })}
+                onDelete={() => handleDeleteCustom(cp.id)}
               />
             ))}
             <NewCustomCard onSelect={() => setModal({ kind: "custom-new" })} />
