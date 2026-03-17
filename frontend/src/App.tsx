@@ -114,12 +114,18 @@ export default function App() {
         customProfile={activeCustom}
         onOpenProfiles={openProfiles}
         onOpenSettings={openSettings}
+        onReload={() => { disconnect(); pendingConnectRef.current = true; }}
         isConnected={isConnected}
         isConnecting={isConnecting}
         robotConnected={robotConnected}
       />
 
-      <ChatPanel messages={chat.messages} isConnected={isConnected} />
+      <ChatPanel
+        messages={chat.messages}
+        isConnected={isConnected}
+        botAvatar={activeBuiltin?.avatar.image ?? null}
+        botName={activeBuiltin?.name ?? activeCustom?.name ?? null}
+      />
       <AudioControls
         status={status}
         isMuted={isMuted}
@@ -127,7 +133,6 @@ export default function App() {
         onDisconnect={disconnect}
         onToggleMute={toggleMute}
         onCancelResponse={cancelResponse}
-        onReload={() => { disconnect(); pendingConnectRef.current = true; }}
         getLocalStream={getLocalStream}
       />
 

@@ -8,7 +8,6 @@ import MicIcon from "@mui/icons-material/Mic";
 import MicOffIcon from "@mui/icons-material/MicOff";
 import VolumeUpIcon from "@mui/icons-material/VolumeUp";
 import StopIcon from "@mui/icons-material/Stop";
-import RefreshIcon from "@mui/icons-material/Refresh";
 import type { ConnectionStatus } from "../hooks/useRealtime";
 import { voiceEventBus } from "../voice/eventBus";
 
@@ -110,12 +109,11 @@ interface Props {
   onDisconnect: () => void;
   onToggleMute: () => void;
   onCancelResponse: () => void;
-  onReload: () => void;
   getLocalStream?: () => MediaStream | null;
 }
 
 export default function AudioControls({
-  status, isMuted, onConnect, onDisconnect, onToggleMute, onCancelResponse, onReload, getLocalStream,
+  status, isMuted, onConnect, onDisconnect, onToggleMute, onCancelResponse, getLocalStream,
 }: Props) {
   const isConnected = status === "connected";
   const isConnecting = status === "connecting";
@@ -135,8 +133,8 @@ export default function AudioControls({
   useEffect(() => {
     const unsubs = [
       voiceEventBus.on("tts:start", () => { setIsSpeaking(true); setIsProcessing(false); }),
-      voiceEventBus.on("tts:done", () => setIsSpeaking(false)),
-      voiceEventBus.on("tts:stop", () => setIsSpeaking(false)),
+      voiceEventBus.on("tts:done", () => { setIsSpeaking(false); setIsProcessing(false); }),
+      voiceEventBus.on("tts:stop", () => { setIsSpeaking(false); setIsProcessing(false); }),
       voiceEventBus.on("vad:start", () => { setVadActive(true); setIsProcessing(false); }),
       voiceEventBus.on("vad:end", () => { setVadActive(false); setIsProcessing(true); }),
     ];
@@ -170,242 +168,241 @@ export default function AudioControls({
 
   const ORB_SIZE = 56;
   const RING_SIZE = 76;
+  const ORB_AREA = RING_SIZE + 20;
+  const showControls = isConnected;
+
+  const sideButtonSx = {
+    width: 36,
+    height: 36,
+    opacity: showControls ? 1 : 0,
+    transform: showControls ? "scale(1)" : "scale(0.5)",
+    transition: "opacity 0.25s ease, transform 0.25s ease, background-color 0.2s ease, color 0.2s ease",
+    pointerEvents: showControls ? "auto" as const : "none" as const,
+  };
 
   return (
     <Box
       sx={{
-        py: 2,
-        pb: 2.5,
+        py: 1.5,
+        pb: 2,
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        gap: 1,
+        gap: 0.5,
         borderTop: 1,
         borderColor: "divider",
         bgcolor: "background.paper",
       }}
     >
-      {/* Orb container */}
-      <Box sx={{ position: "relative", width: RING_SIZE + 20, height: RING_SIZE + 20 }}>
-        {/* Outer ring */}
-        <Box
-          sx={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            width: RING_SIZE,
-            height: RING_SIZE,
-            borderRadius: "50%",
-            border: "1.5px solid",
-            borderColor: alpha(style.color, 0.3),
-            opacity: ringOpacity,
-            transform: `translate(-50%, -50%) scale(${ringScale})`,
-            transition: isHearing
-              ? "transform 0.08s ease-out, border-color 0.5s ease, opacity 0.08s ease-out"
-              : "transform 0.3s ease-out, border-color 0.5s ease, opacity 0.3s ease",
-            animation:
-              !isAudioReactive && agentState !== "idle" && agentState !== "processing"
-                ? "ctrlPulse 2s ease-in-out infinite"
-                : "none",
-            "@keyframes ctrlPulse": {
-              "0%, 100%": { transform: "translate(-50%, -50%) scale(1)", opacity: 0.4 },
-              "50%": { transform: "translate(-50%, -50%) scale(1.06)", opacity: 0.15 },
-            },
-          }}
-        />
+      {/* Main row: [Mic] -- ORB -- [Stop] */}
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 1.5,
+        }}
+      >
+        {/* Left: Mic */}
+        <Tooltip title={isMuted ? "Unmute mic" : "Mute mic"} arrow>
+          <IconButton
+            onClick={onToggleMute}
+            aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+            sx={{
+              ...sideButtonSx,
+              color: isMuted ? "error.main" : "text.secondary",
+              bgcolor: isMuted ? (t) => alpha(t.palette.error.main, 0.1) : "transparent",
+              "&:hover": {
+                bgcolor: isMuted
+                  ? (t) => alpha(t.palette.error.main, 0.18)
+                  : "action.hover",
+              },
+            }}
+          >
+            {isMuted ? <MicOffIcon fontSize="small" /> : <MicIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
 
-        {/* Secondary ring (speaking/hearing) */}
-        {(agentState === "speaking" || isHearing) && (
+        {/* Center: Orb */}
+        <Box sx={{ position: "relative", width: ORB_AREA, height: ORB_AREA, flexShrink: 0 }}>
           <Box
             sx={{
               position: "absolute",
               top: "50%",
               left: "50%",
-              width: RING_SIZE + 16,
-              height: RING_SIZE + 16,
+              width: RING_SIZE,
+              height: RING_SIZE,
               borderRadius: "50%",
-              border: "1px solid",
-              borderColor: alpha(style.color, 0.2),
-              opacity: isHearing ? 0.1 + boosted * 0.35 : 0.25,
-              transform: isHearing
-                ? `translate(-50%, -50%) scale(${1 + boosted * 0.12})`
-                : "translate(-50%, -50%)",
+              border: "1.5px solid",
+              borderColor: alpha(style.color, 0.3),
+              opacity: ringOpacity,
+              transform: `translate(-50%, -50%) scale(${ringScale})`,
               transition: isHearing
-                ? "transform 0.08s ease-out, opacity 0.08s ease-out"
-                : "none",
-              animation: !isHearing
-                ? "ctrlPulseOuter 2.5s ease-in-out infinite"
-                : "none",
-              "@keyframes ctrlPulseOuter": {
-                "0%, 100%": { transform: "translate(-50%, -50%) scale(1)", opacity: 0.25 },
-                "50%": { transform: "translate(-50%, -50%) scale(1.08)", opacity: 0.05 },
+                ? "transform 0.08s ease-out, border-color 0.5s ease, opacity 0.08s ease-out"
+                : "transform 0.3s ease-out, border-color 0.5s ease, opacity 0.3s ease",
+              animation:
+                !isAudioReactive && agentState !== "idle" && agentState !== "processing"
+                  ? "ctrlPulse 2s ease-in-out infinite"
+                  : "none",
+              "@keyframes ctrlPulse": {
+                "0%, 100%": { transform: "translate(-50%, -50%) scale(1)", opacity: 0.4 },
+                "50%": { transform: "translate(-50%, -50%) scale(1.06)", opacity: 0.15 },
               },
             }}
           />
-        )}
 
-        {/* Main circle button */}
-        <Box
-          onClick={handleClick}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleClick(); } }}
-          aria-label={isConnected ? "Disconnect" : "Connect"}
-          sx={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            width: ORB_SIZE,
-            height: ORB_SIZE,
-            borderRadius: "50%",
-            background: `radial-gradient(circle at 40% 35%, ${alpha(style.color, 0.25)}, ${alpha(style.color, 0.1)} 60%, ${alpha(style.color, 0.05)})`,
-            border: `2px solid ${alpha(style.color, 0.35)}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: isConnecting ? "wait" : "pointer",
-            zIndex: 1,
-            transform: `translate(-50%, -50%) scale(${reactiveScale})`,
-            boxShadow: `0 0 ${glowSize}px ${alpha(style.color, 0.2)}, inset 0 0 20px ${alpha(style.color, 0.15)}`,
-            transition: isHearing
-              ? "transform 0.08s ease-out, box-shadow 0.08s ease-out"
-              : isAudioReactive
-                ? "transform 0.3s ease-out, box-shadow 0.3s ease-out"
-                : "all 0.5s ease",
-            animation: !isAudioReactive
-              ? agentState === "speaking"
-                ? "ctrlBreathing 1.5s ease-in-out infinite"
-                : (agentState === "connecting" || agentState === "processing")
-                  ? "ctrlThinking 1s ease-in-out infinite"
-                  : "none"
-              : "none",
-            "&:hover": { filter: "brightness(1.2)" },
-            "&:active": { filter: "brightness(0.85)" },
-            "&:focus-visible": {
-              outline: `2px solid ${style.color}`,
-              outlineOffset: 4,
-            },
-            "@keyframes ctrlBreathing": {
-              "0%, 100%": { transform: "translate(-50%, -50%) scale(1)" },
-              "50%": { transform: "translate(-50%, -50%) scale(1.05)" },
-            },
-            "@keyframes ctrlThinking": {
-              "0%, 100%": { transform: "translate(-50%, -50%) scale(1)", opacity: 1 },
-              "50%": { transform: "translate(-50%, -50%) scale(0.96)", opacity: 0.7 },
-            },
-          }}
-        >
-          {agentState === "listening" || agentState === "hearing" ? (
+          {(agentState === "speaking" || isHearing) && (
             <Box
               sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: "2.5px",
-                height: 28,
-              }}
-            >
-              {bands.map((b, i) => {
-                const minH = 3;
-                const maxH = 26;
-                const h = minH + b * (maxH - minH);
-                return (
-                  <Box
-                    key={i}
-                    sx={{
-                      width: 3.5,
-                      height: h,
-                      minHeight: minH,
-                      borderRadius: 2,
-                      bgcolor: style.color,
-                      opacity: 0.65 + b * 0.35,
-                      transition: "height 0.12s ease-out, opacity 0.15s ease-out",
-                    }}
-                  />
-                );
-              })}
-            </Box>
-          ) : agentState === "speaking" ? (
-            <VolumeUpIcon sx={{ fontSize: 26, color: style.color, opacity: 0.9 }} />
-          ) : agentState === "connecting" || agentState === "processing" ? (
-            <Box
-              sx={{
-                width: 22,
-                height: 22,
-                border: "2.5px solid",
-                borderColor: style.color,
-                borderRightColor: "transparent",
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                width: RING_SIZE + 16,
+                height: RING_SIZE + 16,
                 borderRadius: "50%",
-                animation: "ctrlSpin 1s linear infinite",
-                opacity: 0.8,
-                "@keyframes ctrlSpin": {
-                  "0%": { transform: "rotate(0deg)" },
-                  "100%": { transform: "rotate(360deg)" },
+                border: "1px solid",
+                borderColor: alpha(style.color, 0.2),
+                opacity: isHearing ? 0.1 + boosted * 0.35 : 0.25,
+                transform: isHearing
+                  ? `translate(-50%, -50%) scale(${1 + boosted * 0.12})`
+                  : "translate(-50%, -50%)",
+                transition: isHearing
+                  ? "transform 0.08s ease-out, opacity 0.08s ease-out"
+                  : "none",
+                animation: !isHearing
+                  ? "ctrlPulseOuter 2.5s ease-in-out infinite"
+                  : "none",
+                "@keyframes ctrlPulseOuter": {
+                  "0%, 100%": { transform: "translate(-50%, -50%) scale(1)", opacity: 0.25 },
+                  "50%": { transform: "translate(-50%, -50%) scale(1.08)", opacity: 0.05 },
                 },
               }}
             />
-          ) : (
-            <MicOffIcon sx={{ fontSize: 26, color: style.color, opacity: 0.5 }} />
           )}
+
+          <Box
+            onClick={handleClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleClick(); } }}
+            aria-label={isConnected ? "Disconnect" : "Connect"}
+            sx={{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              width: ORB_SIZE,
+              height: ORB_SIZE,
+              borderRadius: "50%",
+              background: `radial-gradient(circle at 40% 35%, ${alpha(style.color, 0.25)}, ${alpha(style.color, 0.1)} 60%, ${alpha(style.color, 0.05)})`,
+              border: `2px solid ${alpha(style.color, 0.35)}`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: isConnecting ? "wait" : "pointer",
+              zIndex: 1,
+              transform: `translate(-50%, -50%) scale(${reactiveScale})`,
+              boxShadow: `0 0 ${glowSize}px ${alpha(style.color, 0.2)}, inset 0 0 20px ${alpha(style.color, 0.15)}`,
+              transition: isHearing
+                ? "transform 0.08s ease-out, box-shadow 0.08s ease-out"
+                : isAudioReactive
+                  ? "transform 0.3s ease-out, box-shadow 0.3s ease-out"
+                  : "all 0.5s ease",
+              animation: !isAudioReactive
+                ? agentState === "speaking"
+                  ? "ctrlBreathing 1.5s ease-in-out infinite"
+                  : (agentState === "connecting" || agentState === "processing")
+                    ? "ctrlThinking 1s ease-in-out infinite"
+                    : "none"
+                : "none",
+              "&:hover": { filter: "brightness(1.2)" },
+              "&:active": { filter: "brightness(0.85)" },
+              "&:focus-visible": {
+                outline: `2px solid ${style.color}`,
+                outlineOffset: 4,
+              },
+              "@keyframes ctrlBreathing": {
+                "0%, 100%": { transform: "translate(-50%, -50%) scale(1)" },
+                "50%": { transform: "translate(-50%, -50%) scale(1.05)" },
+              },
+              "@keyframes ctrlThinking": {
+                "0%, 100%": { transform: "translate(-50%, -50%) scale(1)", opacity: 1 },
+                "50%": { transform: "translate(-50%, -50%) scale(0.96)", opacity: 0.7 },
+              },
+            }}
+          >
+            {agentState === "listening" || agentState === "hearing" ? (
+              <Box sx={{ display: "flex", alignItems: "center", gap: "2.5px", height: 28 }}>
+                {bands.map((b, i) => {
+                  const minH = 3;
+                  const maxH = 26;
+                  const h = minH + b * (maxH - minH);
+                  return (
+                    <Box
+                      key={i}
+                      sx={{
+                        width: 3.5,
+                        height: h,
+                        minHeight: minH,
+                        borderRadius: 2,
+                        bgcolor: style.color,
+                        opacity: 0.65 + b * 0.35,
+                        transition: "height 0.12s ease-out, opacity 0.15s ease-out",
+                      }}
+                    />
+                  );
+                })}
+              </Box>
+            ) : agentState === "speaking" ? (
+              <VolumeUpIcon sx={{ fontSize: 26, color: style.color, opacity: 0.9 }} />
+            ) : agentState === "connecting" || agentState === "processing" ? (
+              <Box
+                sx={{
+                  width: 22,
+                  height: 22,
+                  border: "2.5px solid",
+                  borderColor: style.color,
+                  borderRightColor: "transparent",
+                  borderRadius: "50%",
+                  animation: "ctrlSpin 1s linear infinite",
+                  opacity: 0.8,
+                  "@keyframes ctrlSpin": {
+                    "0%": { transform: "rotate(0deg)" },
+                    "100%": { transform: "rotate(360deg)" },
+                  },
+                }}
+              />
+            ) : (
+              <MicOffIcon sx={{ fontSize: 26, color: style.color, opacity: 0.5 }} />
+            )}
+          </Box>
         </Box>
+
+        {/* Right: Stop */}
+        {(() => {
+          const canStop = isSpeaking || isProcessing;
+          return (
+            <Tooltip title="Stop response" arrow>
+              <IconButton
+                onClick={onCancelResponse}
+                disabled={!canStop}
+                aria-label="Stop AI response"
+                sx={{
+                  ...sideButtonSx,
+                  color: canStop ? "warning.main" : "text.disabled",
+                  bgcolor: canStop ? (t) => alpha(t.palette.warning.main, 0.1) : "transparent",
+                  "&:hover": {
+                    bgcolor: canStop
+                      ? (t) => alpha(t.palette.warning.main, 0.18)
+                      : "action.hover",
+                  },
+                }}
+              >
+                <StopIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          );
+        })()}
       </Box>
-
-      {/* Session controls - visible only when connected */}
-      {isConnected && (
-        <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
-          <Tooltip title={isMuted ? "Unmute mic" : "Mute mic"} arrow>
-            <IconButton
-              size="small"
-              onClick={onToggleMute}
-              aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
-              sx={{
-                color: isMuted ? "error.main" : "text.secondary",
-                bgcolor: isMuted ? (t) => alpha(t.palette.error.main, 0.1) : "transparent",
-                "&:hover": {
-                  bgcolor: isMuted
-                    ? (t) => alpha(t.palette.error.main, 0.18)
-                    : "action.hover",
-                },
-              }}
-            >
-              {isMuted ? <MicOffIcon fontSize="small" /> : <MicIcon fontSize="small" />}
-            </IconButton>
-          </Tooltip>
-
-          <Tooltip title="Stop response" arrow>
-            <IconButton
-              size="small"
-              onClick={onCancelResponse}
-              disabled={!isSpeaking}
-              aria-label="Stop AI response"
-              sx={{
-                color: isSpeaking ? "warning.main" : "text.disabled",
-                bgcolor: isSpeaking ? (t) => alpha(t.palette.warning.main, 0.1) : "transparent",
-                "&:hover": {
-                  bgcolor: isSpeaking
-                    ? (t) => alpha(t.palette.warning.main, 0.18)
-                    : "action.hover",
-                },
-              }}
-            >
-              <StopIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-
-          <Tooltip title="New session" arrow>
-            <IconButton
-              size="small"
-              onClick={onReload}
-              aria-label="Start new session"
-              sx={{
-                color: "text.secondary",
-                "&:hover": { bgcolor: "action.hover" },
-              }}
-            >
-              <RefreshIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Box>
-      )}
 
       {/* State label */}
       <Typography

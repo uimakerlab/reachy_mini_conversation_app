@@ -2,9 +2,7 @@ import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
 import { alpha, useTheme } from "@mui/material/styles";
-import SmartToyIcon from "@mui/icons-material/SmartToy";
-import PersonIcon from "@mui/icons-material/Person";
-import BuildIcon from "@mui/icons-material/Build";
+import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import type { ChatMessage } from "../hooks/useChat";
 
@@ -18,15 +16,13 @@ function timeAgo(ts: number): string {
 }
 
 function ToolBubble({ msg }: { msg: ChatMessage }) {
-  const theme = useTheme();
   const toolColor = "#8b5cf6";
 
   return (
     <Box
       sx={{
-        display: "flex",
-        justifyContent: "center",
-        my: 0.75,
+        mx: 1.5,
+        my: 1.5,
         animation: "bubbleIn 0.3s ease-out",
         "@keyframes bubbleIn": {
           "0%": { opacity: 0, transform: "translateY(8px)" },
@@ -37,46 +33,51 @@ function ToolBubble({ msg }: { msg: ChatMessage }) {
       <Box
         sx={{
           display: "flex",
-          alignItems: "center",
-          gap: 1,
+          alignItems: "flex-start",
+          gap: 1.25,
           px: 2,
-          py: 0.75,
-          borderRadius: 99,
-          bgcolor: alpha(toolColor, 0.08),
-          border: `1px solid ${alpha(toolColor, 0.2)}`,
-          maxWidth: "85%",
+          py: 1.25,
+          borderRadius: 2,
+          bgcolor: alpha(toolColor, 0.06),
+          border: `1px solid ${alpha(toolColor, 0.15)}`,
         }}
       >
-        <CheckCircleOutlineIcon sx={{ fontSize: 14, color: toolColor, flexShrink: 0 }} />
-        <Typography
-          sx={{
-            fontSize: "0.72rem",
-            fontFamily: "monospace",
-            fontWeight: 600,
-            color: toolColor,
-            whiteSpace: "nowrap",
-            flexShrink: 0,
-          }}
-        >
-          {msg.toolName ?? "tool"}
-        </Typography>
-        <Typography
-          sx={{
-            fontSize: "0.72rem",
-            color: "text.secondary",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {msg.content.slice(0, 100)}
-        </Typography>
+        <CheckCircleOutlineIcon sx={{ fontSize: 16, color: toolColor, flexShrink: 0, mt: 0.1 }} />
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography
+            sx={{
+              fontSize: "0.72rem",
+              fontFamily: "monospace",
+              fontWeight: 600,
+              color: toolColor,
+              mb: 0.25,
+            }}
+          >
+            {msg.toolName ?? "tool"}
+          </Typography>
+          <Typography
+            sx={{
+              fontSize: "0.72rem",
+              color: "text.secondary",
+              lineHeight: 1.5,
+              wordBreak: "break-word",
+            }}
+          >
+            {msg.content.slice(0, 200)}
+          </Typography>
+        </Box>
       </Box>
     </Box>
   );
 }
 
-export default function MessageBubble({ msg }: { msg: ChatMessage }) {
+interface BubbleProps {
+  msg: ChatMessage;
+  botAvatar?: string | null;
+  botName?: string | null;
+}
+
+export default function MessageBubble({ msg, botAvatar, botName }: BubbleProps) {
   const theme = useTheme();
   const isUser = msg.role === "user";
   const isTool = msg.role === "tool";
@@ -84,7 +85,6 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
   if (isTool) return <ToolBubble msg={msg} />;
 
   const avatarColor = isUser ? theme.palette.primary.main : "#10b981";
-  const AvatarIcon = isUser ? PersonIcon : SmartToyIcon;
 
   return (
     <Box
@@ -114,9 +114,26 @@ export default function MessageBubble({ msg }: { msg: ChatMessage }) {
           justifyContent: "center",
           flexShrink: 0,
           mb: 0.25,
+          overflow: "hidden",
         }}
       >
-        <AvatarIcon sx={{ fontSize: 15, color: avatarColor }} />
+        {isUser ? (
+          <PersonOutlineIcon sx={{ fontSize: 15, color: avatarColor }} />
+        ) : botAvatar ? (
+          <img src={botAvatar} alt="" style={{ width: 20, height: 20, objectFit: "contain" }} />
+        ) : (
+          <Typography
+            sx={{
+              fontSize: "0.7rem",
+              fontWeight: 700,
+              color: avatarColor,
+              lineHeight: 1,
+              userSelect: "none",
+            }}
+          >
+            {(botName ?? "R").charAt(0).toUpperCase()}
+          </Typography>
+        )}
       </Box>
 
       {/* Bubble + timestamp */}

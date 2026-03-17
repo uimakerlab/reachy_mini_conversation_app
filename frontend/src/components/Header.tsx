@@ -2,8 +2,10 @@ import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
 import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
+import Tooltip from "@mui/material/Tooltip";
 import Chip from "@mui/material/Chip";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import type { BuiltinProfile } from "../config/builtinProfiles";
 import type { CustomProfile } from "../config/settings";
@@ -13,6 +15,7 @@ interface HeaderProps {
   customProfile: CustomProfile | null;
   onOpenProfiles: () => void;
   onOpenSettings: () => void;
+  onReload?: () => void;
   isConnected: boolean;
   isConnecting: boolean;
   robotConnected: boolean;
@@ -23,6 +26,8 @@ export default function Header({
   customProfile,
   onOpenProfiles,
   onOpenSettings,
+  onReload,
+  isConnected,
   robotConnected,
 }: HeaderProps) {
   const name = builtinProfile?.name ?? customProfile?.name ?? "Default";
@@ -110,7 +115,14 @@ export default function Header({
         />
       )}
 
-      {/* Settings gear */}
+      {isConnected && onReload && (
+        <Tooltip title="New session" arrow>
+          <IconButton size="small" onClick={onReload} aria-label="Start new session">
+            <RefreshIcon sx={{ fontSize: 20 }} />
+          </IconButton>
+        </Tooltip>
+      )}
+
       <IconButton size="small" onClick={onOpenSettings} sx={{ ml: 0.5 }}>
         <SettingsOutlinedIcon sx={{ fontSize: 20 }} />
       </IconButton>

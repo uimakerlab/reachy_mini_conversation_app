@@ -7,9 +7,11 @@ import EmptyChat from "./EmptyChat";
 interface Props {
   messages: ChatMessage[];
   isConnected: boolean;
+  botAvatar?: string | null;
+  botName?: string | null;
 }
 
-export default function ChatPanel({ messages, isConnected }: Props) {
+export default function ChatPanel({ messages, isConnected, botAvatar, botName }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -43,7 +45,7 @@ export default function ChatPanel({ messages, isConnected }: Props) {
         <EmptyChat isConnected={isConnected} />
       ) : (
         <Box sx={{ maxWidth: 640, mx: "auto", width: "100%", px: 2, py: 2 }}>
-          {messages.map((msg) => <MessageBubble key={msg.id} msg={msg} />)}
+          {messages.map((msg) => <MessageBubble key={msg.id} msg={msg} botAvatar={botAvatar} botName={botName} />)}
         </Box>
       )}
     </Box>
