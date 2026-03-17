@@ -11,6 +11,8 @@ export interface VoiceEvents {
   "gate:muted": Record<string, never>;
   "gate:unmuted": Record<string, never>;
   "bargein:trigger": Record<string, never>;
+  "bot:audio_active": Record<string, never>;
+  "bot:audio_silent": Record<string, never>;
 }
 
 type EventName = keyof VoiceEvents;

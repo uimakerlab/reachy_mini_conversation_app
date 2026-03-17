@@ -17,7 +17,6 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onReload?: () => void;
   isConnected: boolean;
-  isConnecting: boolean;
   robotConnected: boolean;
 }
 

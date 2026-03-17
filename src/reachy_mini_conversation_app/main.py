@@ -114,7 +114,7 @@ def run(
     if use_web:
         from reachy_mini_conversation_app.web_ui import WebUI
 
-        stream_manager = WebUI(handler)
+        stream_manager = WebUI(handler, instance_path=instance_path)
     elif args.gradio:
         api_key_textbox = gr.Textbox(
             label="OPENAI API Key",

@@ -88,7 +88,9 @@ export class RealtimeAdapter {
   }
 
   cancelResponse() {
-    this.send({ type: "response.cancel" });
+    if (this._responseActive) {
+      this.send({ type: "response.cancel" });
+    }
     this.bus.emit("tts:stop", {});
     this._responseActive = false;
   }
@@ -213,9 +215,12 @@ export class RealtimeAdapter {
         break;
       }
 
-      case "error":
+      case "error": {
+        const errObj = event.error as Record<string, unknown> | undefined;
+        if (errObj?.code === "response_cancel_not_active") break;
         this.onError(new Error(JSON.stringify(event.error)));
         break;
+      }
 
       case "input_audio_buffer.speech_started":
         this._userTranscript = "";

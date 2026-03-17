@@ -5,10 +5,11 @@ import Drawer from "@mui/material/Drawer";
 import IconButton from "@mui/material/IconButton";
 import CloseIcon from "@mui/icons-material/Close";
 import type { AppSettings, CustomProfile } from "../config/settings";
+import { saveProfileToServer, applyProfileOnServer } from "../config/settings";
 import { BUILTIN_PROFILES } from "../config/builtinProfiles";
 import type { BuiltinProfile } from "../config/builtinProfiles";
 import { ProfileCard, SavedCustomCard, NewCustomCard } from "./ProfileCard";
-import { BuiltinProfileModal, CustomProfileModal } from "./ProfileModal";
+import { BuiltinProfileViewer, CustomProfileEditor } from "./ProfileModal";
 import type { CustomModalSaveData } from "./ProfileModal";
 
 interface Props {
@@ -30,7 +31,9 @@ function generateId(): string {
 }
 
 export default function ProfileDrawer({ open, onClose, settings, onUpdate, initialCreate }: Props) {
-  const [modal, setModal] = useState<ModalTarget>(null);
+  const [modal, setModal] = useState<ModalTarget>(() =>
+    initialCreate ? { kind: "custom-new" } : null,
+  );
 
   useEffect(() => {
     if (open && initialCreate) {
@@ -44,6 +47,7 @@ export default function ProfileDrawer({ open, onClose, settings, onUpdate, initi
       voice: profile.voice,
       customInstructions: "",
     });
+    applyProfileOnServer(profile.id, true);
     onClose();
   };
 
@@ -54,6 +58,8 @@ export default function ProfileDrawer({ open, onClose, settings, onUpdate, initi
       customInstructions: profile.instructions,
       customEnabledTools: profile.enabledTools,
     });
+    const serverName = `user_personalities/${profile.name.replace(/\s+/g, "_")}`;
+    applyProfileOnServer(serverName, true);
     onClose();
   };
 
@@ -74,6 +80,7 @@ export default function ProfileDrawer({ open, onClose, settings, onUpdate, initi
       customInstructions: newCustom.instructions,
       customEnabledTools: newCustom.enabledTools,
     });
+    saveProfileToServer(newCustom);
     setModal({ kind: "custom-edit", profile: newCustom });
   };
 
@@ -93,6 +100,7 @@ export default function ProfileDrawer({ open, onClose, settings, onUpdate, initi
           customEnabledTools: data.enabledTools,
         }),
       });
+      saveProfileToServer({ id: data.id, name: data.name, instructions: data.instructions, voice: data.voice, enabledTools: data.enabledTools });
     } else {
       const id = generateId();
       const newProfile: CustomProfile = {
@@ -109,6 +117,7 @@ export default function ProfileDrawer({ open, onClose, settings, onUpdate, initi
         customInstructions: newProfile.instructions,
         customEnabledTools: newProfile.enabledTools,
       });
+      saveProfileToServer(newProfile);
     }
     setModal(null);
   };
@@ -123,95 +132,116 @@ export default function ProfileDrawer({ open, onClose, settings, onUpdate, initi
     setModal(null);
   };
 
+  const isSubView = modal !== null;
+  const drawerWidth = isSubView ? 520 : 420;
+
   return (
-    <>
-      <Drawer
-        anchor="right"
-        open={open}
-        onClose={onClose}
-        PaperProps={{
-          sx: {
-            width: { xs: "100%", sm: 420 },
-            maxWidth: "100vw",
-          },
-        }}
-      >
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            px: 2.5,
-            py: 2,
-            borderBottom: 1,
-            borderColor: "divider",
-          }}
-        >
-          <Typography variant="h6" sx={{ fontWeight: 700, flex: 1, fontSize: "1rem" }}>
-            Choose a Personality
-          </Typography>
-          <IconButton size="small" onClick={onClose}>
-            <CloseIcon sx={{ fontSize: 20 }} />
-          </IconButton>
-        </Box>
-
-        <Box sx={{ flex: 1, overflow: "auto", p: 2.5 }}>
-          <Box
-            sx={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
-              gap: 1.5,
-            }}
-          >
-            {BUILTIN_PROFILES.map((p) => (
-              <ProfileCard
-                key={p.id}
-                name={p.name}
-                description={p.description}
-                avatar={p.avatar}
-                selected={settings.profileId === p.id}
-                onSelect={() => handleSelectBuiltin(p)}
-                onDetails={() => setModal({ kind: "builtin", profile: p })}
-              />
-            ))}
-            {settings.customProfiles.map((cp) => (
-              <SavedCustomCard
-                key={cp.id}
-                name={cp.name}
-                selected={settings.profileId === cp.id}
-                onSelect={() => handleSelectCustom(cp)}
-                onEdit={() => setModal({ kind: "custom-edit", profile: cp })}
-                onDelete={() => handleDeleteCustom(cp.id)}
-              />
-            ))}
-            <NewCustomCard onSelect={() => setModal({ kind: "custom-new" })} />
-          </Box>
-        </Box>
-      </Drawer>
-
-      {modal?.kind === "builtin" && (
-        <BuiltinProfileModal
-          open
+    <Drawer
+      anchor="right"
+      open={open}
+      onClose={onClose}
+      PaperProps={{
+        sx: {
+          width: { xs: "100%", sm: drawerWidth },
+          maxWidth: "100vw",
+          display: "flex",
+          flexDirection: "column",
+        },
+      }}
+    >
+      {modal?.kind === "builtin" ? (
+        <BuiltinProfileViewer
           profile={modal.profile}
-          onClose={() => setModal(null)}
+          onBack={() => setModal(null)}
           onDuplicate={() => handleDuplicateBuiltin(modal.profile)}
         />
-      )}
-      {modal?.kind === "custom-new" && (
-        <CustomProfileModal
-          open
-          onClose={() => setModal(null)}
+      ) : modal?.kind === "custom-new" || modal?.kind === "custom-edit" ? (
+        <CustomProfileEditor
+          editing={modal?.kind === "custom-edit" ? modal.profile : undefined}
+          onBack={() => setModal(null)}
           onSave={handleSaveCustomModal}
+          onDelete={
+            modal?.kind === "custom-edit"
+              ? () => handleDeleteCustom(modal.profile.id)
+              : undefined
+          }
         />
+      ) : (
+        <>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              px: 2.5,
+              py: 2,
+              borderBottom: 1,
+              borderColor: "divider",
+              flexShrink: 0,
+            }}
+          >
+            <Typography variant="h6" sx={{ fontWeight: 700, flex: 1, fontSize: "1rem" }}>
+              Choose a Personality
+            </Typography>
+            <IconButton size="small" onClick={onClose}>
+              <CloseIcon sx={{ fontSize: 20 }} />
+            </IconButton>
+          </Box>
+
+          <Box sx={{ flex: 1, overflow: "auto", p: 2.5 }}>
+            <Typography
+              variant="overline"
+              sx={{ display: "block", mb: 1.5, color: "text.secondary", fontWeight: 700, letterSpacing: 1.2, fontSize: "0.7rem" }}
+            >
+              Your Profiles
+            </Typography>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+                gap: 1.5,
+                mb: 3,
+              }}
+            >
+              <NewCustomCard onSelect={() => setModal({ kind: "custom-new" })} />
+              {settings.customProfiles.map((cp) => (
+                <SavedCustomCard
+                  key={cp.id}
+                  name={cp.name}
+                  selected={settings.profileId === cp.id}
+                  onSelect={() => handleSelectCustom(cp)}
+                  onEdit={() => setModal({ kind: "custom-edit", profile: cp })}
+                />
+              ))}
+            </Box>
+
+            <Typography
+              variant="overline"
+              sx={{ display: "block", mb: 1.5, color: "text.secondary", fontWeight: 700, letterSpacing: 1.2, fontSize: "0.7rem" }}
+            >
+              Built-in Personalities
+            </Typography>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+                gap: 1.5,
+              }}
+            >
+              {BUILTIN_PROFILES.map((p) => (
+                <ProfileCard
+                  key={p.id}
+                  name={p.name}
+                  description={p.description}
+                  avatar={p.avatar}
+                  selected={settings.profileId === p.id}
+                  onSelect={() => handleSelectBuiltin(p)}
+                  onDetails={() => setModal({ kind: "builtin", profile: p })}
+                />
+              ))}
+            </Box>
+          </Box>
+        </>
       )}
-      {modal?.kind === "custom-edit" && (
-        <CustomProfileModal
-          open
-          editing={modal.profile}
-          onClose={() => setModal(null)}
-          onSave={handleSaveCustomModal}
-          onDelete={() => handleDeleteCustom(modal.profile.id)}
-        />
-      )}
-    </>
+    </Drawer>
   );
 }

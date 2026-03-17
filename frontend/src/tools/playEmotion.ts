@@ -7,7 +7,7 @@ export function setManager(mgr: MovementManager | null): void {
   _manager = mgr;
 }
 
-const AVAILABLE_EMOTIONS = ["happy", "sad", "surprised", "confused", "angry", "excited"];
+const AVAILABLE_EMOTIONS = ["joy", "sadness", "surprise", "curious", "anger"];
 
 export const definitions: ToolDefinition[] = [
   {

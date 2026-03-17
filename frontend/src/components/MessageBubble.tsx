@@ -104,31 +104,27 @@ export default function MessageBubble({ msg, botAvatar, botName }: BubbleProps) 
       {/* Avatar */}
       <Box
         sx={{
-          width: 28,
-          height: 28,
-          borderRadius: "50%",
-          bgcolor: alpha(avatarColor, 0.12),
-          border: `1.5px solid ${alpha(avatarColor, 0.3)}`,
+          width: 24,
+          height: 24,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           flexShrink: 0,
-          mb: 0.25,
-          overflow: "hidden",
         }}
       >
         {isUser ? (
-          <PersonOutlineIcon sx={{ fontSize: 15, color: avatarColor }} />
+          <PersonOutlineIcon sx={{ fontSize: 20, color: avatarColor, opacity: 0.7 }} />
         ) : botAvatar ? (
-          <img src={botAvatar} alt="" style={{ width: 20, height: 20, objectFit: "contain" }} />
+          <img src={botAvatar} alt="" style={{ width: 24, height: 24, objectFit: "contain" }} />
         ) : (
           <Typography
             sx={{
-              fontSize: "0.7rem",
+              fontSize: "0.82rem",
               fontWeight: 700,
               color: avatarColor,
               lineHeight: 1,
               userSelect: "none",
+              opacity: 0.8,
             }}
           >
             {(botName ?? "R").charAt(0).toUpperCase()}

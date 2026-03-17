@@ -36,6 +36,7 @@ export function useRealtime(
   const mgrRef = useRef<MovementManager | null>(null);
   const cleanupRef = useRef<CleanupRefs | null>(null);
   const micTrackRef = useRef<MediaStreamTrack | null>(null);
+  const cancelledRef = useRef(false);
 
   // Stabilize chat handlers so `connect` callback doesn't recreate on every render
   const chatRef = useRef(chat);
@@ -50,6 +51,7 @@ export function useRealtime(
       return;
     }
 
+    cancelledRef.current = false;
     setStatus("connecting");
     setError(null);
     chatRef.current.clear();
@@ -85,7 +87,7 @@ export function useRealtime(
       eventUnsubs.push(
         voiceEventBus.on("gate:muted", () => mgr.setListening(false)),
         voiceEventBus.on("gate:unmuted", () => mgr.setListening(true)),
-        voiceEventBus.on("tts:start", () => mgr.setSpeaking(true)),
+        voiceEventBus.on("tts:start", () => { mgr.setSpeaking(true); if (conn.audioEl.muted) conn.audioEl.muted = false; }),
         voiceEventBus.on("tts:done", () => { mgr.setSpeaking(false); mgr.stopSpeechSway(); mgr.allowBreathingNow(); }),
         voiceEventBus.on("tts:stop", () => { mgr.setSpeaking(false); mgr.stopSpeechSway(); }),
       );
@@ -102,19 +104,48 @@ export function useRealtime(
         analyser.fftSize = 2048;
         source.connect(analyser);
         const buffer = new Float32Array(analyser.fftSize);
+
+        const RMS_THRESHOLD = 0.004;
+        const SILENCE_DEBOUNCE_MS = 800;
+        let botAudioActive = false;
+        let silenceSince = 0;
+
         swayInterval = setInterval(() => {
-          if (!mgr.getIsRunning()) return;
           analyser.getFloatTimeDomainData(buffer);
-          mgr.feedSpeechAudio(buffer.slice(0, 480), audioCtx.sampleRate);
+
+          if (mgr.getIsRunning()) {
+            mgr.feedSpeechAudio(buffer.slice(0, 480), audioCtx.sampleRate);
+          }
+
+          let sumSq = 0;
+          for (let i = 0; i < buffer.length; i++) sumSq += buffer[i] * buffer[i];
+          const rms = Math.sqrt(sumSq / buffer.length);
+          const hasAudio = rms > RMS_THRESHOLD;
+
+          if (hasAudio) {
+            silenceSince = 0;
+            if (!botAudioActive) {
+              botAudioActive = true;
+              voiceEventBus.emit("bot:audio_active", {});
+            }
+          } else if (botAudioActive) {
+            if (silenceSince === 0) {
+              silenceSince = Date.now();
+            } else if (Date.now() - silenceSince > SILENCE_DEBOUNCE_MS) {
+              botAudioActive = false;
+              silenceSince = 0;
+              voiceEventBus.emit("bot:audio_silent", {});
+            }
+          }
         }, 10);
       }
 
       // Wait for DataChannel
       await new Promise<void>((resolve, reject) => {
         if (conn.dc.readyState === "open") { resolve(); return; }
-        conn.dc.onopen = () => resolve();
-        conn.dc.onerror = () => reject(new Error("DataChannel failed"));
-        setTimeout(() => reject(new Error("DataChannel timeout")), 15000);
+        const timer = setTimeout(() => reject(new Error("DataChannel timeout")), 15000);
+        conn.dc.onopen = () => { clearTimeout(timer); resolve(); };
+        conn.dc.onerror = () => { clearTimeout(timer); reject(new Error("DataChannel failed")); };
       });
 
       // Adapter
@@ -148,8 +179,10 @@ export function useRealtime(
         eventUnsubs,
       };
 
+      if (cancelledRef.current) return;
       setStatus("connected");
     } catch (err) {
+      if (cancelledRef.current) return;
       if (DEBUG) console.error("[useRealtime] connect error:", err);
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
@@ -163,6 +196,7 @@ export function useRealtime(
   }, [settings.openaiApiKey, settings.voice, settings.profileId, settings.customInstructions, settings.daemonUrl]);
 
   const disconnect = useCallback(() => {
+    cancelledRef.current = true;
     adapterRef.current?.dispose();
     adapterRef.current = null;
     gateRef.current?.dispose();
@@ -198,6 +232,8 @@ export function useRealtime(
 
   const cancelResponse = useCallback(() => {
     adapterRef.current?.cancelResponse();
+    const audioEl = connRef.current?.audioEl;
+    if (audioEl) audioEl.muted = true;
   }, []);
 
   useEffect(() => () => disconnect(), [disconnect]);

@@ -15,8 +15,9 @@ export interface BuiltinProfile {
 
 export const ALL_TOOLS = [
   "dance", "stop_dance", "play_emotion", "stop_emotion",
-  "camera", "do_nothing", "head_tracking", "move_head",
-  "nod", "shake", "set_volume", "get_volume", "web_search",
+  "take_photo", "do_nothing", "toggle_head_tracking", "move_head",
+  "nod", "shake_head", "set_volume", "get_volume", "web_search",
+  "wake_up", "go_to_sleep",
 ];
 
 export const BUILTIN_PROFILES: BuiltinProfile[] = [

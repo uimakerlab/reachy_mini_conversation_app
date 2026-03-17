@@ -31,7 +31,6 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const isConnected = status === "connected";
-  const isConnecting = status === "connecting";
 
   const activeBuiltin = useMemo(
     () => getBuiltinProfile(settings.profileId) ?? null,
@@ -77,6 +76,7 @@ export default function App() {
   }, [update]);
 
   const handleWelcomeSkip = useCallback(() => {
+    pendingConnectRef.current = true;
     update({ onboardingDone: true });
   }, [update]);
 
@@ -116,7 +116,6 @@ export default function App() {
         onOpenSettings={openSettings}
         onReload={() => { disconnect(); pendingConnectRef.current = true; }}
         isConnected={isConnected}
-        isConnecting={isConnecting}
         robotConnected={robotConnected}
       />
 
@@ -140,7 +139,7 @@ export default function App() {
         open={!!toastError}
         autoHideDuration={8000}
         onClose={() => setToastError(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
         sx={{
           "& .MuiSnackbarContent-root": { p: 0, bgcolor: "transparent", boxShadow: "none" },
         }}

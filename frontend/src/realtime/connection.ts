@@ -80,13 +80,27 @@ export async function connectRealtime(
   };
 
   // Local mic
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  });
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+  } catch (micErr) {
+    pc.close();
+    audioEl.remove();
+    const name = micErr instanceof DOMException ? micErr.name : "";
+    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+      throw new Error("Microphone access denied. Please allow microphone permissions and try again.");
+    }
+    if (name === "NotFoundError" || name === "OverconstrainedError") {
+      throw new Error("No microphone found. Please connect a microphone and try again.");
+    }
+    throw new Error("Could not access microphone. Please check your audio settings.");
+  }
   pc.addTrack(stream.getAudioTracks()[0], stream);
 
   // DataChannel
@@ -101,10 +115,10 @@ export async function connectRealtime(
       resolve();
       return;
     }
+    const iceTimer = setTimeout(resolve, 3000);
     pc.onicegatheringstatechange = () => {
-      if (pc.iceGatheringState === "complete") resolve();
+      if (pc.iceGatheringState === "complete") { clearTimeout(iceTimer); resolve(); }
     };
-    setTimeout(resolve, 3000);
   });
 
   // Step 4: SDP exchange

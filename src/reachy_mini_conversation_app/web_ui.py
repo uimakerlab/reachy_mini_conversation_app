@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-from reachy_mini_conversation_app.config import config
+from reachy_mini_conversation_app.config import config, set_custom_profile
 from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler
 from reachy_mini_conversation_app.headless_personality import (
     DEFAULT_OPTION,
@@ -55,11 +55,18 @@ QueueItem = Union[tuple[int, Any], AdditionalOutputs, str]
 class WebUI:
     """Lightweight web server that bridges a React frontend to the realtime handler."""
 
-    def __init__(self, handler: OpenaiRealtimeHandler, host: str = "0.0.0.0", port: int = 7860):
+    def __init__(
+        self,
+        handler: OpenaiRealtimeHandler,
+        host: str = "0.0.0.0",
+        port: int = 7860,
+        instance_path: Optional[str] = None,
+    ):
         """Initialize the web UI server with a realtime handler."""
         self.handler = handler
         self.host = host
         self.port = port
+        self._instance_path = instance_path
         self.app = FastAPI(title="Reachy Mini Conversation")
         self._active_handler: Optional[OpenaiRealtimeHandler] = None
         self._setup_middleware()
@@ -73,6 +80,82 @@ class WebUI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    # ------------------------------------------------------------------
+    # Startup personality persistence (same pattern as console.py)
+    # ------------------------------------------------------------------
+    def _read_env_lines(self, env_path: Path) -> list[str]:
+        """Load env file contents or a template as a list of lines."""
+        try:
+            if env_path.exists():
+                return env_path.read_text(encoding="utf-8").splitlines()
+            for candidate in [
+                env_path.parent / ".env.example",
+                Path.cwd() / ".env.example",
+                Path(__file__).parent / ".env.example",
+            ]:
+                if candidate.exists():
+                    return candidate.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            pass
+        return []
+
+    def _persist_personality(self, profile: Optional[str]) -> None:
+        """Persist the startup personality to the instance .env and config."""
+        selection = (profile or "").strip() or None
+        set_custom_profile(selection)
+        if not self._instance_path:
+            return
+        try:
+            env_path = Path(self._instance_path) / ".env"
+            lines = self._read_env_lines(env_path)
+            replaced = False
+            for i, ln in enumerate(list(lines)):
+                if ln.strip().startswith("REACHY_MINI_CUSTOM_PROFILE="):
+                    if selection:
+                        lines[i] = f"REACHY_MINI_CUSTOM_PROFILE={selection}"
+                    else:
+                        lines.pop(i)
+                    replaced = True
+                    break
+            if selection and not replaced:
+                lines.append(f"REACHY_MINI_CUSTOM_PROFILE={selection}")
+            if selection is None and not env_path.exists():
+                return
+            env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            logger.info("Persisted startup personality to %s", env_path)
+            try:
+                from dotenv import load_dotenv
+
+                load_dotenv(dotenv_path=str(env_path), override=True)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning("Failed to persist REACHY_MINI_CUSTOM_PROFILE: %s", e)
+
+    def _read_persisted_personality(self) -> Optional[str]:
+        """Read persisted startup personality from instance .env (if any)."""
+        if not self._instance_path:
+            return None
+        env_path = Path(self._instance_path) / ".env"
+        try:
+            if env_path.exists():
+                for ln in env_path.read_text(encoding="utf-8").splitlines():
+                    if ln.strip().startswith("REACHY_MINI_CUSTOM_PROFILE="):
+                        _, _, val = ln.partition("=")
+                        v = val.strip()
+                        return v or None
+        except Exception:
+            pass
+        return None
+
+    def _startup_choice(self) -> str:
+        """Return the persisted startup personality or default."""
+        persisted = self._read_persisted_personality()
+        if persisted:
+            return persisted
+        env_val = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
+        return env_val if env_val else DEFAULT_OPTION
 
     # ------------------------------------------------------------------
     # REST API for settings (personalities, voices, API key)
@@ -99,7 +182,7 @@ class WebUI:
         def api_personalities() -> dict[str, Any]:
             choices = [DEFAULT_OPTION, *list_personalities()]
             cur = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or DEFAULT_OPTION
-            return {"choices": choices, "current": cur}
+            return {"choices": choices, "current": cur, "startup": self._startup_choice()}
 
         @self.app.get("/api/personalities/load")
         def api_load_personality(name: str) -> dict[str, Any]:
@@ -154,11 +237,16 @@ class WebUI:
             except Exception:
                 raw = {}
             sel_name = str(raw.get("name", DEFAULT_OPTION))
+            persist = bool(raw.get("persist", False))
             handler = self._active_handler or self.handler
             sel = None if sel_name == DEFAULT_OPTION else sel_name
             try:
                 status = await handler.apply_personality(sel)
-                return JSONResponse({"ok": True, "status": status})
+                startup = self._startup_choice()
+                if persist:
+                    self._persist_personality(sel)
+                    startup = self._startup_choice()
+                return JSONResponse({"ok": True, "status": status, "startup": startup})
             except Exception as e:
                 return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
@@ -264,7 +352,7 @@ class WebUI:
                     break
             handler.output_queue.put_nowait(_INTERRUPT_SENTINEL)  # type: ignore[arg-type]
 
-        handler._clear_queue = clear_queue  # type: ignore[attr-defined]
+        handler._clear_queue = clear_queue
 
     @staticmethod
     async def _receive_loop(ws: WebSocket, handler: OpenaiRealtimeHandler) -> None:

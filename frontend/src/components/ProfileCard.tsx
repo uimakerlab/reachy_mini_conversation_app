@@ -6,7 +6,6 @@ import IconButton from "@mui/material/IconButton";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import AddIcon from "@mui/icons-material/Add";
 import type { ProfileAvatar } from "../config/builtinProfiles";
 
@@ -101,10 +100,9 @@ interface SavedCustomProps {
   selected: boolean;
   onSelect: () => void;
   onEdit: () => void;
-  onDelete: () => void;
 }
 
-export function SavedCustomCard({ name, selected, onSelect, onEdit, onDelete }: SavedCustomProps) {
+export function SavedCustomCard({ name, selected, onSelect, onEdit }: SavedCustomProps) {
   const initial = name.trim() ? name.trim()[0].toUpperCase() : "?";
   return (
     <Card variant="outlined" sx={cardSx(selected)}>
@@ -151,34 +149,22 @@ export function SavedCustomCard({ name, selected, onSelect, onEdit, onDelete }: 
         />
       )}
 
-      <Box
+      <IconButton
         className="details-btn"
+        size="small"
+        onClick={(e) => { e.stopPropagation(); onEdit(); }}
         sx={{
           position: "absolute",
           top: 6,
           right: 6,
-          display: "flex",
-          flexDirection: "column",
-          gap: 0.25,
           opacity: selected ? 0.7 : 0,
           transition: "opacity 0.15s ease",
+          bgcolor: "background.paper",
+          "&:hover": { bgcolor: "action.hover", opacity: 1 },
         }}
       >
-        <IconButton
-          size="small"
-          onClick={(e) => { e.stopPropagation(); onEdit(); }}
-          sx={{ bgcolor: "background.paper", "&:hover": { bgcolor: "action.hover", opacity: 1 } }}
-        >
-          <EditOutlinedIcon sx={{ fontSize: 16 }} />
-        </IconButton>
-        <IconButton
-          size="small"
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          sx={{ bgcolor: "background.paper", "&:hover": { bgcolor: "error.main", color: "error.contrastText", opacity: 1 } }}
-        >
-          <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-        </IconButton>
-      </Box>
+        <EditOutlinedIcon sx={{ fontSize: 16 }} />
+      </IconButton>
     </Card>
   );
 }

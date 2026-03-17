@@ -6,6 +6,7 @@ import Tooltip from "@mui/material/Tooltip";
 import { alpha } from "@mui/material/styles";
 import MicIcon from "@mui/icons-material/Mic";
 import MicOffIcon from "@mui/icons-material/MicOff";
+import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
 import VolumeUpIcon from "@mui/icons-material/VolumeUp";
 import StopIcon from "@mui/icons-material/Stop";
 import type { ConnectionStatus } from "../hooks/useRealtime";
@@ -22,9 +23,17 @@ const STATE_STYLES: Record<AgentState, { color: string; label: string }> = {
   speaking: { color: "#10b981", label: "Speaking..." },
 };
 
-const ANALYSIS_BANDS = 3;
-const DISPLAY_BARS = 5;
-const EMPTY_BANDS = new Array(DISPLAY_BARS).fill(0) as number[];
+const NUM_BARS = 5;
+const EMPTY_BANDS = new Array(NUM_BARS).fill(0) as number[];
+
+// Log-spaced bin edges for 5 bands (fftSize 1024 -> 512 bins, ~47 Hz/bin at 48 kHz)
+const BAND_EDGES = [4, 8, 16, 32, 64, 128];
+
+const LOG1P_10 = Math.log1p(10);
+const compress = (v: number) => Math.log1p(v * 10) / LOG1P_10;
+
+const EMA_ATTACK = 0.7;
+const EMA_RELEASE = 0.25;
 
 function useAudioLevel(
   isActive: boolean,
@@ -35,11 +44,13 @@ function useAudioLevel(
   const rafRef = useRef<number | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const smoothedRef = useRef<number[]>(new Array(NUM_BARS).fill(0));
 
   useEffect(() => {
     if (!isActive) {
       setLevel(0);
       setBands(EMPTY_BANDS);
+      smoothedRef.current = new Array(NUM_BARS).fill(0);
       return;
     }
     let cancelled = false;
@@ -53,39 +64,42 @@ function useAudioLevel(
         const ctx = new AudioContext();
         if (ctx.state === "suspended") ctx.resume();
         const analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.55;
+        analyser.fftSize = 1024;
+        analyser.smoothingTimeConstant = 0.4;
         const source = ctx.createMediaStreamSource(stream);
         source.connect(analyser);
         ctxRef.current = ctx;
         sourceRef.current = source;
         const data = new Uint8Array(analyser.frequencyBinCount);
+        const sm = smoothedRef.current;
 
         const tick = () => {
           if (cancelled) return;
           analyser.getByteFrequencyData(data);
+
           let sum = 0;
           for (let i = 0; i < data.length; i++) sum += data[i];
           setLevel(sum / data.length / 255);
 
-          const binCount = data.length;
-          const bandSize = Math.floor(binCount / ANALYSIS_BANDS);
-          const raw = new Array(ANALYSIS_BANDS) as number[];
-          for (let i = 0; i < ANALYSIS_BANDS; i++) {
+          const out = new Array(NUM_BARS) as number[];
+          for (let b = 0; b < NUM_BARS; b++) {
+            const lo = BAND_EDGES[b];
+            const hi = BAND_EDGES[b + 1];
             let bandSum = 0;
-            for (let j = i * bandSize; j < (i + 1) * bandSize; j++) bandSum += data[j];
-            const v = bandSum / bandSize / 255;
-            raw[i] = Math.min(1, Math.pow(v * 2.2, 0.6));
+            for (let j = lo; j < hi; j++) bandSum += data[j];
+            const raw = compress(bandSum / (hi - lo) / 255);
+            const alpha = raw > sm[b] ? EMA_ATTACK : EMA_RELEASE;
+            sm[b] += alpha * (raw - sm[b]);
+            out[b] = Math.min(1, sm[b]);
           }
 
-          setBands([raw[2], raw[1], raw[0], raw[1], raw[2]]);
+          setBands(out);
           rafRef.current = requestAnimationFrame(tick);
         };
         rafRef.current = requestAnimationFrame(tick);
       } catch { /* audio context unavailable */ }
     };
 
-    // Small delay to ensure the WebRTC stream is fully ready
     const timer = setTimeout(setup, 100);
 
     return () => {
@@ -121,9 +135,11 @@ export default function AudioControls({
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [vadActive, setVadActive] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const serverDoneRef = useRef(false);
 
   useEffect(() => {
     if (!isConnected) {
+      serverDoneRef.current = false;
       setIsSpeaking(false);
       setVadActive(false);
       setIsProcessing(false);
@@ -132,9 +148,26 @@ export default function AudioControls({
 
   useEffect(() => {
     const unsubs = [
-      voiceEventBus.on("tts:start", () => { setIsSpeaking(true); setIsProcessing(false); }),
-      voiceEventBus.on("tts:done", () => { setIsSpeaking(false); setIsProcessing(false); }),
-      voiceEventBus.on("tts:stop", () => { setIsSpeaking(false); setIsProcessing(false); }),
+      voiceEventBus.on("tts:start", () => {
+        serverDoneRef.current = false;
+        setIsSpeaking(true);
+        setIsProcessing(false);
+      }),
+      voiceEventBus.on("tts:done", () => {
+        serverDoneRef.current = true;
+        setIsProcessing(false);
+      }),
+      voiceEventBus.on("tts:stop", () => {
+        serverDoneRef.current = false;
+        setIsSpeaking(false);
+        setIsProcessing(false);
+      }),
+      voiceEventBus.on("bot:audio_silent", () => {
+        if (serverDoneRef.current) {
+          serverDoneRef.current = false;
+          setIsSpeaking(false);
+        }
+      }),
       voiceEventBus.on("vad:start", () => { setVadActive(true); setIsProcessing(false); }),
       voiceEventBus.on("vad:end", () => { setVadActive(false); setIsProcessing(true); }),
     ];
@@ -156,10 +189,9 @@ export default function AudioControls({
   const isHearing = agentState === "hearing";
   const isAudioReactive = agentState === "listening" || isHearing;
   const boosted = Math.min(1, Math.pow(audioLevel * 2.5, 0.7));
-  const reactiveScale = isHearing ? 1 + boosted * 0.12 : isAudioReactive ? 1 + boosted * 0.05 : 1;
-  const glowSize = isHearing ? 20 + boosted * 40 : isAudioReactive ? 15 + boosted * 15 : 20;
-  const ringOpacity = isHearing ? 0.3 + boosted * 0.5 : isAudioReactive ? 0.15 + boosted * 0.2 : agentState === "idle" ? 0.2 : 0.4;
-  const ringScale = isHearing ? 1 + boosted * 0.1 : isAudioReactive ? 1 + boosted * 0.04 : 1;
+  const glowSize = 20;
+  const ringOpacity = agentState === "idle" ? 0.2 : 0.4;
+  const ringScale = 1;
 
   const handleClick = () => {
     if (isConnected) onDisconnect();
@@ -300,13 +332,9 @@ export default function AudioControls({
               justifyContent: "center",
               cursor: isConnecting ? "wait" : "pointer",
               zIndex: 1,
-              transform: `translate(-50%, -50%) scale(${reactiveScale})`,
+              transform: "translate(-50%, -50%)",
               boxShadow: `0 0 ${glowSize}px ${alpha(style.color, 0.2)}, inset 0 0 20px ${alpha(style.color, 0.15)}`,
-              transition: isHearing
-                ? "transform 0.08s ease-out, box-shadow 0.08s ease-out"
-                : isAudioReactive
-                  ? "transform 0.3s ease-out, box-shadow 0.3s ease-out"
-                  : "all 0.5s ease",
+              transition: "all 0.5s ease",
               animation: !isAudioReactive
                 ? agentState === "speaking"
                   ? "ctrlBreathing 1.5s ease-in-out infinite"
@@ -346,7 +374,6 @@ export default function AudioControls({
                         borderRadius: 2,
                         bgcolor: style.color,
                         opacity: 0.65 + b * 0.35,
-                        transition: "height 0.12s ease-out, opacity 0.15s ease-out",
                       }}
                     />
                   );
@@ -372,7 +399,7 @@ export default function AudioControls({
                 }}
               />
             ) : (
-              <MicOffIcon sx={{ fontSize: 26, color: style.color, opacity: 0.5 }} />
+              <PlayArrowRoundedIcon sx={{ fontSize: 28, color: style.color, opacity: 0.6 }} />
             )}
           </Box>
         </Box>

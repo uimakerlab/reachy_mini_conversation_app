@@ -66,3 +66,37 @@ export async function fetchConfigFromBackend(): Promise<Partial<AppSettings>> {
   } catch { /* backend not available */ }
   return {};
 }
+
+// Server-side personality sync (fire-and-forget, best effort)
+
+export async function saveProfileToServer(profile: CustomProfile): Promise<boolean> {
+  try {
+    const res = await fetch("/api/personalities/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: profile.name,
+        instructions: profile.instructions,
+        tools_text: profile.enabledTools.join("\n"),
+        voice: profile.voice,
+      }),
+    });
+    return res.ok;
+  } catch { return false; }
+}
+
+export async function applyProfileOnServer(
+  profileName: string,
+  persist = false,
+): Promise<{ ok: boolean; startup?: string }> {
+  try {
+    const res = await fetch("/api/personalities/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: profileName, persist }),
+    });
+    if (!res.ok) return { ok: false };
+    return await res.json();
+  } catch { return { ok: false }; }
+}
+

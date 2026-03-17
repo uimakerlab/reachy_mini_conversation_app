@@ -7,17 +7,27 @@ import {
 } from "../config/settings";
 
 export function useSettings() {
-  const [settings, setSettings] = useState<AppSettings>(getSettings);
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    const s = getSettings();
+    if (import.meta.env.DEV) {
+      const reset = updateSettings({ onboardingDone: false });
+      return reset;
+    }
+    return s;
+  });
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
   useEffect(() => {
+    let mounted = true;
     fetchConfigFromBackend().then((backendConfig) => {
+      if (!mounted) return;
       if (backendConfig.openaiApiKey && !settingsRef.current.openaiApiKey) {
         const updated = updateSettings({ openaiApiKey: backendConfig.openaiApiKey });
         setSettings(updated);
       }
     });
+    return () => { mounted = false; };
   }, []);
 
   const update = useCallback((patch: Partial<AppSettings>) => {
@@ -25,9 +35,5 @@ export function useSettings() {
     setSettings(updated);
   }, []);
 
-  const clearApiKey = useCallback(() => {
-    update({ openaiApiKey: "" });
-  }, [update]);
-
-  return { settings, update, clearApiKey, hasKey: Boolean(settings.openaiApiKey) };
+  return { settings, update, hasKey: Boolean(settings.openaiApiKey) };
 }

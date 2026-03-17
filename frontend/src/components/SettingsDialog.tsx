@@ -1,20 +1,19 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import TextField from "@mui/material/TextField";
 import Button from "@mui/material/Button";
-import Dialog from "@mui/material/Dialog";
-import DialogTitle from "@mui/material/DialogTitle";
-import DialogContent from "@mui/material/DialogContent";
+import Drawer from "@mui/material/Drawer";
 import IconButton from "@mui/material/IconButton";
 import InputAdornment from "@mui/material/InputAdornment";
+import Divider from "@mui/material/Divider";
+import Collapse from "@mui/material/Collapse";
+import Fade from "@mui/material/Fade";
 import CloseIcon from "@mui/icons-material/Close";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
-import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
-import KeyOutlinedIcon from "@mui/icons-material/KeyOutlined";
-import RouterOutlinedIcon from "@mui/icons-material/RouterOutlined";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import type { AppSettings } from "../config/settings";
 
 interface Props {
@@ -25,53 +24,25 @@ interface Props {
   hasKey: boolean;
 }
 
-function SectionCard({
-  icon,
-  title,
-  status,
-  children,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  status?: { ok: boolean; label: string };
-  children: React.ReactNode;
-}) {
+function StatusChip({ ok, label }: { ok: boolean; label: string }) {
   return (
     <Box
       sx={{
-        border: 2,
-        borderColor: status?.ok ? "success.main" : "divider",
-        borderRadius: 2.5,
-        p: 2.5,
-        transition: "border-color 0.2s ease",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.75,
+        px: 1.25,
+        py: 0.375,
+        borderRadius: 10,
+        bgcolor: ok ? "success.main" : "text.disabled",
+        color: "#fff",
+        fontSize: "0.65rem",
+        fontWeight: 700,
+        letterSpacing: "0.03em",
+        textTransform: "uppercase",
       }}
     >
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
-        <Box sx={{ color: "text.secondary", display: "flex" }}>{icon}</Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, flex: 1 }}>
-          {title}
-        </Typography>
-        {status && (
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 0.5,
-              color: status.ok ? "success.main" : "text.disabled",
-            }}
-          >
-            {status.ok ? (
-              <CheckCircleOutlineIcon sx={{ fontSize: 16 }} />
-            ) : (
-              <ErrorOutlineIcon sx={{ fontSize: 16 }} />
-            )}
-            <Typography variant="caption" sx={{ fontSize: "0.7rem", fontWeight: 600 }}>
-              {status.label}
-            </Typography>
-          </Box>
-        )}
-      </Box>
-      {children}
+      {label}
     </Box>
   );
 }
@@ -79,6 +50,20 @@ function SectionCard({
 export default function SettingsDialog({ open, onClose, settings, onUpdate, hasKey }: Props) {
   const [keyInput, setKeyInput] = useState("");
   const [showKey, setShowKey] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    if (!open) {
+      setKeyInput("");
+      setShowKey(false);
+      setSaved(false);
+      setConfirmRemove(false);
+    }
+  }, [open]);
+
+  useEffect(() => () => clearTimeout(savedTimerRef.current), []);
 
   const handleSaveKey = () => {
     const key = keyInput.trim();
@@ -86,31 +71,60 @@ export default function SettingsDialog({ open, onClose, settings, onUpdate, hasK
     onUpdate({ openaiApiKey: key });
     setKeyInput("");
     setShowKey(false);
+    setSaved(true);
+    clearTimeout(savedTimerRef.current);
+    savedTimerRef.current = setTimeout(() => setSaved(false), 2500);
   };
 
   const handleClearKey = () => {
+    if (!confirmRemove) {
+      setConfirmRemove(true);
+      return;
+    }
     onUpdate({ openaiApiKey: "" });
     setKeyInput("");
+    setConfirmRemove(false);
   };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle component="div" sx={{ display: "flex", alignItems: "center", pr: 6 }}>
-        <Typography variant="h6" sx={{ fontWeight: 700, fontSize: "1rem", flex: 1 }}>
+    <Drawer
+      anchor="right"
+      open={open}
+      onClose={onClose}
+      PaperProps={{ sx: { width: { xs: "100%", sm: 420 }, maxWidth: "100vw" } }}
+    >
+      {/* Header */}
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          px: 2.5,
+          py: 2,
+          borderBottom: 1,
+          borderColor: "divider",
+          flexShrink: 0,
+        }}
+      >
+        <Typography variant="h6" sx={{ fontWeight: 700, flex: 1, fontSize: "1rem" }}>
           Settings
         </Typography>
-        <IconButton onClick={onClose} sx={{ position: "absolute", right: 12, top: 12 }}>
-          <CloseIcon />
+        <IconButton size="small" onClick={onClose}>
+          <CloseIcon sx={{ fontSize: 20 }} />
         </IconButton>
-      </DialogTitle>
+      </Box>
 
-      <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pb: 3 }}>
-        <SectionCard
-          icon={<KeyOutlinedIcon sx={{ fontSize: 20 }} />}
-          title="OpenAI API Key"
-          status={hasKey ? { ok: true, label: "Configured" } : { ok: false, label: "Missing" }}
-        >
-          <Box sx={{ display: "flex", gap: 1 }}>
+      {/* Body */}
+      <Box sx={{ flex: 1, overflow: "auto", p: 2.5, display: "flex", flexDirection: "column", gap: 3 }}>
+        {/* API Key */}
+        <Fade in timeout={300}>
+          <Box>
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                OpenAI API Key
+              </Typography>
+              <StatusChip ok={hasKey} label={hasKey ? "Configured" : "Required"} />
+            </Box>
+
             <TextField
               fullWidth
               size="small"
@@ -119,6 +133,7 @@ export default function SettingsDialog({ open, onClose, settings, onUpdate, hasK
               value={keyInput}
               onChange={(e) => setKeyInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSaveKey()}
+              sx={{ mb: 1.5 }}
               slotProps={{
                 input: {
                   endAdornment: (
@@ -127,12 +142,13 @@ export default function SettingsDialog({ open, onClose, settings, onUpdate, hasK
                         size="small"
                         onClick={() => setShowKey((v) => !v)}
                         edge="end"
-                        sx={{ mr: -0.5 }}
+                        tabIndex={-1}
+                        sx={{ color: "text.disabled" }}
                       >
                         {showKey ? (
-                          <VisibilityOffIcon sx={{ fontSize: 18 }} />
+                          <VisibilityOffIcon sx={{ fontSize: 16 }} />
                         ) : (
-                          <VisibilityIcon sx={{ fontSize: 18 }} />
+                          <VisibilityIcon sx={{ fontSize: 16 }} />
                         )}
                       </IconButton>
                     </InputAdornment>
@@ -140,49 +156,132 @@ export default function SettingsDialog({ open, onClose, settings, onUpdate, hasK
                 },
               }}
             />
+
             <Button
-              variant="outlined"
+              fullWidth
+              variant="contained"
               onClick={handleSaveKey}
               disabled={!keyInput.trim()}
-              sx={{ minWidth: 72 }}
+              disableElevation
+              sx={{ fontWeight: 600, fontSize: "0.8rem", mb: 1.5 }}
             >
-              {hasKey ? "Update" : "Save"}
+              {hasKey ? "Update Key" : "Save Key"}
             </Button>
-          </Box>
-          {hasKey && (
-            <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 1 }}>
-              <Button size="small" color="error" variant="text" onClick={handleClearKey}>
-                Remove key
-              </Button>
-            </Box>
-          )}
-        </SectionCard>
 
-        <SectionCard
-          icon={<RouterOutlinedIcon sx={{ fontSize: 20 }} />}
-          title="Robot Daemon"
-          status={
-            settings.daemonUrl
-              ? { ok: true, label: settings.daemonUrl }
-              : { ok: true, label: "Same origin" }
-          }
-        >
-          <TextField
-            fullWidth
-            size="small"
-            placeholder="http://reachy-mini.local:8000"
-            value={settings.daemonUrl}
-            onChange={(e) => onUpdate({ daemonUrl: e.target.value })}
-          />
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ mt: 1, display: "block", lineHeight: 1.4 }}
-          >
-            Leave empty to use the same origin. Set to the robot IP when running the frontend locally.
-          </Typography>
-        </SectionCard>
-      </DialogContent>
-    </Dialog>
+            <Collapse in={saved}>
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 0.75,
+                  mb: 1.5,
+                }}
+              >
+                <CheckCircleOutlineIcon sx={{ fontSize: 16, color: "success.main" }} />
+                <Typography variant="caption" sx={{ color: "success.main", fontWeight: 600, fontSize: "0.75rem" }}>
+                  API key saved successfully
+                </Typography>
+              </Box>
+            </Collapse>
+
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <Box
+                component="a"
+                href="https://platform.openai.com/api-keys"
+                target="_blank"
+                rel="noopener noreferrer"
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 0.5,
+                  color: "text.secondary",
+                  textDecoration: "none",
+                  fontSize: "0.75rem",
+                  "&:hover": { color: "primary.main" },
+                  transition: "color 0.15s ease",
+                }}
+              >
+                <OpenInNewIcon sx={{ fontSize: 14 }} />
+                {hasKey ? "Manage keys on OpenAI" : "Get a key from OpenAI"}
+              </Box>
+
+              {hasKey && !saved && (
+                <>
+                  {!confirmRemove ? (
+                    <Button
+                      size="small"
+                      color="error"
+                      variant="text"
+                      onClick={handleClearKey}
+                      sx={{ fontSize: "0.75rem", minHeight: 0, py: 0.25, px: 1, textTransform: "none" }}
+                    >
+                      Remove
+                    </Button>
+                  ) : (
+                    <Fade in>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                        <Typography variant="caption" sx={{ color: "error.main", fontSize: "0.72rem", fontWeight: 500 }}>
+                          Sure?
+                        </Typography>
+                        <Button
+                          size="small"
+                          color="error"
+                          variant="contained"
+                          disableElevation
+                          onClick={handleClearKey}
+                          sx={{ fontSize: "0.7rem", minHeight: 0, py: 0.25, px: 1, minWidth: 0 }}
+                        >
+                          Yes
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="text"
+                          color="inherit"
+                          onClick={() => setConfirmRemove(false)}
+                          sx={{ fontSize: "0.7rem", minHeight: 0, py: 0.25, px: 1, minWidth: 0, color: "text.secondary" }}
+                        >
+                          No
+                        </Button>
+                      </Box>
+                    </Fade>
+                  )}
+                </>
+              )}
+            </Box>
+          </Box>
+        </Fade>
+
+        <Divider />
+
+        {/* Robot Daemon */}
+        <Fade in timeout={450}>
+          <Box>
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                Robot Connection
+              </Typography>
+              <StatusChip ok label={settings.daemonUrl || "Auto"} />
+            </Box>
+
+            <TextField
+              fullWidth
+              size="small"
+              placeholder="http://reachy-mini.local:8000"
+              value={settings.daemonUrl}
+              onChange={(e) => onUpdate({ daemonUrl: e.target.value })}
+            />
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ mt: 1, display: "block", lineHeight: 1.5, fontSize: "0.72rem" }}
+            >
+              Leave empty to auto-detect. Set to the robot IP when running locally.
+            </Typography>
+          </Box>
+        </Fade>
+      </Box>
+
+      {/* Footer */}
+    </Drawer>
   );
 }
