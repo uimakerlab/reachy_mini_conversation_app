@@ -75,7 +75,9 @@ def run(
     use_web = getattr(args, "web", False) or getattr(args, "gradio", False)
 
     # Auto-enable web UI in simulation mode
-    if robot.client.get_status()["simulation_enabled"] and not use_web:
+    daemon_status = robot.client.get_status()
+    sim_enabled = daemon_status.simulation_enabled if hasattr(daemon_status, "simulation_enabled") else daemon_status.get("simulation_enabled", False)
+    if sim_enabled and not use_web:
         logger.info("Simulation mode detected. Automatically enabling web UI.")
         use_web = True
 
