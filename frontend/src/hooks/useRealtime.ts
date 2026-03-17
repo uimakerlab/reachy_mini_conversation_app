@@ -27,6 +27,7 @@ export function useRealtime(
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const [error, setError] = useState<string | null>(null);
   const [robotConnected, setRobotConnected] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
 
   const connRef = useRef<RealtimeConnection | null>(null);
   const adapterRef = useRef<RealtimeAdapter | null>(null);
@@ -34,6 +35,7 @@ export function useRealtime(
   const bargeinRef = useRef<BargeIn | null>(null);
   const mgrRef = useRef<MovementManager | null>(null);
   const cleanupRef = useRef<CleanupRefs | null>(null);
+  const micTrackRef = useRef<MediaStreamTrack | null>(null);
 
   // Stabilize chat handlers so `connect` callback doesn't recreate on every render
   const chatRef = useRef(chat);
@@ -73,9 +75,9 @@ export function useRealtime(
       });
       connRef.current = conn;
 
-      // AudioGate: mute mic during model speech
       const gate = new AudioGate(voiceEventBus);
-      const micTrack = conn.pc.getSenders().find((s) => s.track?.kind === "audio")?.track;
+      const micTrack = conn.pc.getSenders().find((s) => s.track?.kind === "audio")?.track ?? null;
+      micTrackRef.current = micTrack;
       if (micTrack) gate.setMicTrack(micTrack);
       gateRef.current = gate;
 
@@ -167,6 +169,7 @@ export function useRealtime(
     gateRef.current = null;
     bargeinRef.current?.dispose();
     bargeinRef.current = null;
+    micTrackRef.current = null;
 
     if (cleanupRef.current) {
       clearInterval(cleanupRef.current.swayInterval);
@@ -182,6 +185,19 @@ export function useRealtime(
     configureTools({ manager: null, adapter: null });
     setStatus("disconnected");
     setRobotConnected(false);
+    setIsMuted(false);
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const track = micTrackRef.current;
+    if (!track) return;
+    const next = !track.enabled;
+    track.enabled = next;
+    setIsMuted(!next);
+  }, []);
+
+  const cancelResponse = useCallback(() => {
+    adapterRef.current?.cancelResponse();
   }, []);
 
   useEffect(() => () => disconnect(), [disconnect]);
@@ -195,5 +211,5 @@ export function useRealtime(
     return null;
   }, []);
 
-  return { status, error, robotConnected, connect, disconnect, getManager: () => mgrRef.current, getLocalStream };
+  return { status, error, robotConnected, isMuted, connect, disconnect, toggleMute, cancelResponse, getManager: () => mgrRef.current, getLocalStream };
 }

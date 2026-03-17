@@ -18,7 +18,7 @@ import type { BuiltinProfile } from "./config/builtinProfiles";
 export default function App() {
   const { settings, update, hasKey } = useSettings();
   const chat = useChat();
-  const { status, error, robotConnected, connect, disconnect, getLocalStream } = useRealtime(settings, chat);
+  const { status, error, robotConnected, isMuted, connect, disconnect, toggleMute, cancelResponse, getLocalStream } = useRealtime(settings, chat);
 
   const [toastError, setToastError] = useState<string | null>(null);
 
@@ -47,15 +47,24 @@ export default function App() {
   const openSettings = useCallback(() => setSettingsOpen(true), []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
-  // Auto-connect after profile selection from welcome screen
   const pendingConnectRef = useRef(false);
+  const prevProfileIdRef = useRef(settings.profileId);
 
   useEffect(() => {
-    if (pendingConnectRef.current && settings.onboardingDone && status === "disconnected") {
+    const profileChanged = prevProfileIdRef.current !== settings.profileId;
+    prevProfileIdRef.current = settings.profileId;
+
+    if (profileChanged && (status === "connected" || status === "connecting")) {
+      disconnect();
+      pendingConnectRef.current = true;
+      return;
+    }
+
+    if (pendingConnectRef.current && status === "disconnected") {
       pendingConnectRef.current = false;
       connect();
     }
-  }, [settings.onboardingDone, settings.profileId, status, connect]);
+  }, [settings.onboardingDone, settings.profileId, status, connect, disconnect]);
 
   const handleWelcomeSelect = useCallback((profile: BuiltinProfile) => {
     pendingConnectRef.current = true;
@@ -111,7 +120,16 @@ export default function App() {
       />
 
       <ChatPanel messages={chat.messages} isConnected={isConnected} />
-      <AudioControls status={status} onConnect={connect} onDisconnect={disconnect} getLocalStream={getLocalStream} />
+      <AudioControls
+        status={status}
+        isMuted={isMuted}
+        onConnect={connect}
+        onDisconnect={disconnect}
+        onToggleMute={toggleMute}
+        onCancelResponse={cancelResponse}
+        onReload={() => { disconnect(); pendingConnectRef.current = true; }}
+        getLocalStream={getLocalStream}
+      />
 
       <Snackbar
         open={!!toastError}

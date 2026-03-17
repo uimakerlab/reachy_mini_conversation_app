@@ -1,9 +1,14 @@
 import { useState, useEffect, useRef } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
+import IconButton from "@mui/material/IconButton";
+import Tooltip from "@mui/material/Tooltip";
 import { alpha } from "@mui/material/styles";
+import MicIcon from "@mui/icons-material/Mic";
 import MicOffIcon from "@mui/icons-material/MicOff";
 import VolumeUpIcon from "@mui/icons-material/VolumeUp";
+import StopIcon from "@mui/icons-material/Stop";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import type { ConnectionStatus } from "../hooks/useRealtime";
 import { voiceEventBus } from "../voice/eventBus";
 
@@ -100,12 +105,18 @@ function useAudioLevel(
 
 interface Props {
   status: ConnectionStatus;
+  isMuted: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
+  onToggleMute: () => void;
+  onCancelResponse: () => void;
+  onReload: () => void;
   getLocalStream?: () => MediaStream | null;
 }
 
-export default function AudioControls({ status, onConnect, onDisconnect, getLocalStream }: Props) {
+export default function AudioControls({
+  status, isMuted, onConnect, onDisconnect, onToggleMute, onCancelResponse, onReload, getLocalStream,
+}: Props) {
   const isConnected = status === "connected";
   const isConnecting = status === "connecting";
 
@@ -338,6 +349,64 @@ export default function AudioControls({ status, onConnect, onDisconnect, getLoca
         </Box>
       </Box>
 
+      {/* Session controls - visible only when connected */}
+      {isConnected && (
+        <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+          <Tooltip title={isMuted ? "Unmute mic" : "Mute mic"} arrow>
+            <IconButton
+              size="small"
+              onClick={onToggleMute}
+              aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+              sx={{
+                color: isMuted ? "error.main" : "text.secondary",
+                bgcolor: isMuted ? (t) => alpha(t.palette.error.main, 0.1) : "transparent",
+                "&:hover": {
+                  bgcolor: isMuted
+                    ? (t) => alpha(t.palette.error.main, 0.18)
+                    : "action.hover",
+                },
+              }}
+            >
+              {isMuted ? <MicOffIcon fontSize="small" /> : <MicIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+
+          <Tooltip title="Stop response" arrow>
+            <IconButton
+              size="small"
+              onClick={onCancelResponse}
+              disabled={!isSpeaking}
+              aria-label="Stop AI response"
+              sx={{
+                color: isSpeaking ? "warning.main" : "text.disabled",
+                bgcolor: isSpeaking ? (t) => alpha(t.palette.warning.main, 0.1) : "transparent",
+                "&:hover": {
+                  bgcolor: isSpeaking
+                    ? (t) => alpha(t.palette.warning.main, 0.18)
+                    : "action.hover",
+                },
+              }}
+            >
+              <StopIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+
+          <Tooltip title="New session" arrow>
+            <IconButton
+              size="small"
+              onClick={onReload}
+              aria-label="Start new session"
+              sx={{
+                color: "text.secondary",
+                "&:hover": { bgcolor: "action.hover" },
+              }}
+            >
+              <RefreshIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      )}
+
       {/* State label */}
       <Typography
         variant="caption"
@@ -350,7 +419,7 @@ export default function AudioControls({ status, onConnect, onDisconnect, getLoca
           fontSize: "0.72rem",
         }}
       >
-        {style.label}
+        {isMuted && isConnected ? "Muted" : style.label}
       </Typography>
     </Box>
   );

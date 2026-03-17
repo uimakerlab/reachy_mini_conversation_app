@@ -5,6 +5,32 @@ function findCustom(profileId: string, customProfiles?: CustomProfile[]): Custom
   return customProfiles?.find((p) => p.id === profileId);
 }
 
+const BASE_TEMPLATE = `## IDENTITY
+You are a Reachy Mini robot assistant.
+
+## PERSONALITY
+- {name}
+- {personality}
+
+## RESPONSE RULES
+- Keep responses short: 1-3 sentences maximum.
+- Be helpful first, personality second.
+- Keep responses under 30 words when possible.
+- Switch languages only if the user explicitly asks.
+
+## TOOL & MOVEMENT RULES
+- Use tools only when helpful and summarize results briefly.
+- Use the camera for real visuals only - never invent details.
+- The head can move (left/right/up/down/front).
+- Enable head tracking when looking at a person; disable otherwise.
+- After a tool returns, explain the result briefly with personality.`;
+
+function wrapCustomInstructions(name: string, personality: string): string {
+  return BASE_TEMPLATE
+    .replace("{name}", name)
+    .replace("{personality}", personality.trim() || "Friendly and helpful assistant.");
+}
+
 export function buildInstructions(
   profileId: string,
   customInstructions?: string,
@@ -13,7 +39,7 @@ export function buildInstructions(
   const builtin = getBuiltinProfile(profileId);
   if (builtin) return builtin.instructions;
   const custom = findCustom(profileId, customProfiles);
-  if (custom) return custom.instructions;
+  if (custom) return wrapCustomInstructions(custom.name, custom.instructions);
   if (customInstructions?.trim()) return customInstructions.trim();
   return BUILTIN_PROFILES[0].instructions;
 }
