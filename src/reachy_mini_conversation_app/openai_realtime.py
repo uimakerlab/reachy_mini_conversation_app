@@ -4,7 +4,7 @@ import base64
 import random
 import asyncio
 import logging
-from typing import Any, Final, Tuple, Literal, Optional, cast
+from typing import Any, Final, Tuple, Literal, Optional
 from pathlib import Path
 from datetime import datetime
 
@@ -17,7 +17,6 @@ from pydantic import Field, BaseModel
 from numpy.typing import NDArray
 from scipy.signal import resample
 from openai.types.realtime import (
-    ConversationItemParam,
     AudioTranscriptionParam,
     RealtimeAudioConfigParam,
     RealtimeAudioConfigInputParam,
@@ -120,7 +119,6 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         self.input_transcript_chunks_by_item = InputTranscriptChunksByItem()
 
         # Internal lifecycle flags
-        self._shutdown_requested: bool = False
         self._connected_event: asyncio.Event = asyncio.Event()
 
         # Background tool manager
@@ -387,11 +385,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             # TODO: refactor this since it's repeated here, in the camera branch below, and in send_idle_signal
             if isinstance(bg_tool.id, str):
                 await self.connection.conversation.item.create(
-                    item=cast(ConversationItemParam, {
+                    item={
                         "type": "function_call_output",
                         "call_id": bg_tool.id,
                         "output": json.dumps(tool_result),
-                    }),
+                    },
                 )
 
             await self.output_queue.put(
@@ -415,7 +413,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     logger.warning("Unexpected type for b64_im: %s", type(b64_im))
                     b64_im = str(b64_im)
                 await self.connection.conversation.item.create(
-                    item=cast(ConversationItemParam, {
+                    item={
                         "type": "message",
                         "role": "user",
                         "content": [
@@ -424,7 +422,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                                 "image_url": f"data:image/jpeg;base64,{b64_im}",
                             },
                         ],
-                    }),
+                    },
                 )
                 logger.info("Added camera image to conversation")
 
@@ -587,8 +585,6 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     # Handle completed transcription (user finished speaking)
                     if event.type == "conversation.item.input_audio_transcription.completed":
                         logger.debug(f"User transcript: {event.transcript}")
-
-                        item_id = event.item_id
 
                         # Cancel any pending partial emission
                         if self.partial_transcript_task and not self.partial_transcript_task.done():
@@ -761,8 +757,6 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
     async def shutdown(self) -> None:
         """Shutdown the handler."""
-        self._shutdown_requested = True
-
         # Unblock the response sender worker so it can exit
         self._response_done_event.set()
 
@@ -868,11 +862,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             logger.debug("No connection, cannot send idle signal")
             return
         await self.connection.conversation.item.create(
-            item=cast(ConversationItemParam, {
+            item={
                 "type": "message",
                 "role": "user",
                 "content": [{"type": "input_text", "text": timestamp_msg}],
-            }),
+            },
         )
         await self._safe_response_create(
             response=RealtimeResponseCreateParamsParam(
