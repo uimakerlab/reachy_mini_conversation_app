@@ -435,6 +435,13 @@ def main() -> None:
             print("  Pausing 3s between configs...")
             time.sleep(3)
 
+    # Park antennas at 10° offset to avoid vertical vibration
+    with ReachyMini(media_backend="no_media") as robot:
+        neutral = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
+        ant_park = [-math.radians(10), math.radians(10)]
+        robot.set_target(head=neutral, antennas=ant_park, body_yaw=0.0)
+        time.sleep(1)
+
     print(f"\nAll recordings saved to {args.output}/")
 
 

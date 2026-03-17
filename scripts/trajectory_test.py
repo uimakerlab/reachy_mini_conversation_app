@@ -410,6 +410,12 @@ def main() -> None:
             run_test(robot, test, args.output)
             time.sleep(2)
 
+        # Park antennas at 10° offset to avoid vertical vibration
+        neutral = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
+        ant_park = [-math.radians(10), math.radians(10)]
+        robot.set_target(head=neutral, antennas=ant_park, body_yaw=0.0)
+        time.sleep(1)
+
     print(f"\nAll tests saved to {args.output}/")
 
 
