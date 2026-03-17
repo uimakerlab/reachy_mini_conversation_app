@@ -235,7 +235,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 logger.warning("OPENAI_API_KEY missing. Proceeding with a placeholder (tests/offline).")
                 openai_api_key = "DUMMY"
 
-        self.client = AsyncOpenAI(api_key=openai_api_key)
+        self.client = AsyncOpenAI(
+            api_key=openai_api_key,
+            base_url="http://127.0.0.1:8765/v1",
+            websocket_base_url="ws://127.0.0.1:8765/v1"
+        )
 
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
@@ -477,7 +481,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         ),
                         output=RealtimeAudioConfigOutputParam(
                             format=AudioPCM(type="audio/pcm", rate=self.output_sample_rate),
-                            voice=get_session_voice(),
+                            voice="af_heart", # get_session_voice(),
                         ),
                     ),
                     tools=get_tool_specs(), # type: ignore[typeddict-item]
