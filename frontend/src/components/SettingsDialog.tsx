@@ -95,7 +95,7 @@ export default function SettingsDialog({ open, onClose, settings, onUpdate, hasK
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle sx={{ display: "flex", alignItems: "center", pr: 6 }}>
+      <DialogTitle component="div" sx={{ display: "flex", alignItems: "center", pr: 6 }}>
         <Typography variant="h6" sx={{ fontWeight: 700, fontSize: "1rem", flex: 1 }}>
           Settings
         </Typography>

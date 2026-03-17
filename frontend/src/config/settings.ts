@@ -35,8 +35,7 @@ function load(): AppSettings {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      // TODO: remove onboardingDone override once onboarding testing is done
-      return { ...DEFAULTS, ...parsed, customProfiles: parsed.customProfiles ?? [], onboardingDone: false };
+      return { ...DEFAULTS, ...parsed, customProfiles: parsed.customProfiles ?? [] };
     }
   } catch { /* ignore */ }
   return { ...DEFAULTS };

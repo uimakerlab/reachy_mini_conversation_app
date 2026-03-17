@@ -200,7 +200,7 @@ export function BuiltinProfileModal({
 }: BuiltinModalProps) {
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth scroll="paper">
-      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 2, pr: 6 }}>
+      <DialogTitle component="div" sx={{ display: "flex", alignItems: "center", gap: 2, pr: 6 }}>
         <AvatarBadge avatar={profile.avatar} />
         <Box sx={{ flex: 1 }}>
           <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
@@ -349,7 +349,7 @@ export function CustomProfileModal({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth scroll="paper">
-      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 2, pr: 6 }}>
+      <DialogTitle component="div" sx={{ display: "flex", alignItems: "center", gap: 2, pr: 6 }}>
         <Box
           sx={{
             width: 64,
