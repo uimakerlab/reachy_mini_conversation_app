@@ -17,16 +17,16 @@ Server -> Client:
 import json
 import asyncio
 import logging
+from typing import Any, Union, Optional
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 from fastrtc import AdditionalOutputs
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 from reachy_mini_conversation_app.config import config
 from reachy_mini_conversation_app.openai_realtime import OpenaiRealtimeHandler
@@ -48,11 +48,15 @@ SETTINGS_STATIC_DIR = Path(__file__).parent / "static"
 
 WEB_INPUT_SAMPLE_RATE = 24000
 
+_INTERRUPT_SENTINEL = "__interrupt__"
+QueueItem = Union[tuple[int, Any], AdditionalOutputs, str]
+
 
 class WebUI:
     """Lightweight web server that bridges a React frontend to the realtime handler."""
 
     def __init__(self, handler: OpenaiRealtimeHandler, host: str = "0.0.0.0", port: int = 7860):
+        """Initialize the web UI server with a realtime handler."""
         self.handler = handler
         self.host = host
         self.port = port
@@ -76,7 +80,7 @@ class WebUI:
     def _setup_api_routes(self) -> None:
 
         @self.app.get("/api/config")
-        def api_config() -> dict:
+        def api_config() -> dict[str, Any]:
             """Expose the OpenAI API key (from HF Secret or env) to the TS frontend."""
             import os
             key = os.environ.get("OPENAI_API_KEY", "")
@@ -86,19 +90,19 @@ class WebUI:
             return {"openai_api_key": api_key}
 
         @self.app.get("/api/status")
-        def api_status() -> dict:
+        def api_status() -> dict[str, Any]:
             has_key = bool(config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip())
             cur = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or DEFAULT_OPTION
             return {"has_key": has_key, "current_profile": cur}
 
         @self.app.get("/api/personalities")
-        def api_personalities() -> dict:
+        def api_personalities() -> dict[str, Any]:
             choices = [DEFAULT_OPTION, *list_personalities()]
             cur = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None) or DEFAULT_OPTION
             return {"choices": choices, "current": cur}
 
         @self.app.get("/api/personalities/load")
-        def api_load_personality(name: str) -> dict:
+        def api_load_personality(name: str) -> dict[str, Any]:
             instr = read_instructions_for(name)
             tools_txt = ""
             voice = "cedar"
@@ -258,7 +262,7 @@ class WebUI:
                     handler.output_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-            handler.output_queue.put_nowait("__interrupt__")
+            handler.output_queue.put_nowait(_INTERRUPT_SENTINEL)  # type: ignore[arg-type]
 
         handler._clear_queue = clear_queue  # type: ignore[attr-defined]
 
@@ -289,7 +293,7 @@ class WebUI:
             if output is None:
                 continue
 
-            if output == "__interrupt__":
+            if isinstance(output, str) and output == _INTERRUPT_SENTINEL:
                 await ws.send_json({"type": "interrupt"})
                 continue
 

@@ -1,7 +1,6 @@
 """Entrypoint for the Reachy Mini conversation app."""
 
 import os
-import sys
 import time
 import asyncio
 import argparse
@@ -110,13 +109,13 @@ def run(
 
     handler = OpenaiRealtimeHandler(deps, gradio_mode=args.gradio, instance_path=instance_path)
 
+    stream_manager: Any = None
+
     if use_web:
         from reachy_mini_conversation_app.web_ui import WebUI
 
         stream_manager = WebUI(handler)
     elif args.gradio:
-        stream_manager: gr.Blocks | LocalStream | None = None
-
         api_key_textbox = gr.Textbox(
             label="OPENAI API Key",
             type="password",
