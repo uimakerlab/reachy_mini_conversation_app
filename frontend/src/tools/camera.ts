@@ -2,10 +2,8 @@ import type { ToolDefinition } from ".";
 import type { RealtimeAdapter } from "../realtime/adapter";
 
 let _adapter: RealtimeAdapter | null = null;
-let _videoEl: HTMLVideoElement | null = null;
 
 export function setAdapter(adapter: RealtimeAdapter | null): void { _adapter = adapter; }
-export function setVideoElement(el: HTMLVideoElement | null): void { _videoEl = el; }
 
 export const definitions: ToolDefinition[] = [
   {
@@ -16,15 +14,15 @@ export const definitions: ToolDefinition[] = [
   },
 ];
 
-function captureFrame(): string | null {
-  if (!_videoEl || _videoEl.videoWidth === 0) return null;
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.min(_videoEl.videoWidth, 640);
-  canvas.height = Math.round(canvas.width * (_videoEl.videoHeight / _videoEl.videoWidth));
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  ctx.drawImage(_videoEl, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
+async function fetchSnapshot(): Promise<string | null> {
+  try {
+    const res = await fetch("/api/camera/snapshot");
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.b64 ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function execute(
@@ -32,7 +30,7 @@ export async function execute(
   _args: Record<string, unknown>,
 ): Promise<string> {
   if (name !== "take_photo") throw new Error(`Unknown tool: ${name}`);
-  const frame = captureFrame();
+  const frame = await fetchSnapshot();
   if (!frame) return "Camera not available";
   if (_adapter) {
     _adapter.sendImage(frame);

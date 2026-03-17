@@ -14,12 +14,16 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Python backend (HF secret, status, personalities)
+      // Python backend (HF secret, status, personalities, camera)
       "/api/config": {
         target: "http://localhost:7860",
         changeOrigin: true,
       },
       "/api/status": {
+        target: "http://localhost:7860",
+        changeOrigin: true,
+      },
+      "/api/camera": {
         target: "http://localhost:7860",
         changeOrigin: true,
       },

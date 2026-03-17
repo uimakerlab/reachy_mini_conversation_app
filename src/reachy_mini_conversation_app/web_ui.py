@@ -15,16 +15,18 @@ Server -> Client:
 """
 
 import json
+import base64
 import asyncio
 import logging
 from typing import Any, Union, Optional
 from pathlib import Path
 
+import cv2
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastrtc import AdditionalOutputs
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -281,6 +283,21 @@ class WebUI:
             except Exception as e:
                 logger.warning("API key validation failed: %s", e)
                 return JSONResponse({"valid": False, "error": "validation_error"}, status_code=500)
+
+        @self.app.get("/api/camera/snapshot")
+        def api_camera_snapshot() -> Response:
+            """Return the latest camera frame as a base64-encoded JPEG."""
+            cam = self.handler.deps.camera_worker
+            if cam is None:
+                return JSONResponse({"error": "Camera worker not available"}, status_code=503)
+            frame = cam.get_latest_frame()
+            if frame is None:
+                return JSONResponse({"error": "No frame available"}, status_code=503)
+            ok, buf = cv2.imencode(".jpg", frame)
+            if not ok:
+                return JSONResponse({"error": "Failed to encode frame"}, status_code=500)
+            b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+            return JSONResponse({"b64": b64})
 
         @self.app.post("/api/openai_api_key")
         async def api_set_key(request: Request) -> JSONResponse:

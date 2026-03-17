@@ -63,7 +63,6 @@ export async function executeTool(
 export function configureTools(opts: {
   manager?: MovementManager | null;
   adapter?: RealtimeAdapter | null;
-  videoEl?: HTMLVideoElement | null;
   daemonUrl?: string;
 }): void {
   if (opts.manager !== undefined) {
@@ -76,6 +75,5 @@ export function configureTools(opts: {
     stopEmotion.setManager(opts.manager);
   }
   if (opts.adapter !== undefined) camera.setAdapter(opts.adapter);
-  if (opts.videoEl !== undefined) camera.setVideoElement(opts.videoEl);
   if (opts.daemonUrl !== undefined) setDaemonUrl(opts.daemonUrl);
 }
