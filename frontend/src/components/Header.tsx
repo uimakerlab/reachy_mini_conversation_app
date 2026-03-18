@@ -3,7 +3,6 @@ import ButtonBase from "@mui/material/ButtonBase";
 import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
-import Chip from "@mui/material/Chip";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
@@ -17,7 +16,6 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onReload?: () => void;
   isConnected: boolean;
-  robotConnected: boolean;
 }
 
 export default function Header({
@@ -27,7 +25,6 @@ export default function Header({
   onOpenSettings,
   onReload,
   isConnected,
-  robotConnected,
 }: HeaderProps) {
   const name = builtinProfile?.name ?? customProfile?.name ?? "Default";
   const image = builtinProfile?.avatar.image;
@@ -103,16 +100,6 @@ export default function Header({
         </Typography>
         <KeyboardArrowDownIcon sx={{ fontSize: 18, color: "text.secondary", ml: -0.5 }} />
       </ButtonBase>
-
-      {robotConnected && (
-        <Chip
-          label="Robot"
-          size="small"
-          color="primary"
-          variant="outlined"
-          sx={{ fontSize: "0.7rem", height: 24 }}
-        />
-      )}
 
       {isConnected && onReload && (
         <Tooltip title="New session" arrow>

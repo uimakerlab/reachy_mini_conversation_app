@@ -3950,12 +3950,13 @@ wheels = [
 ]
 
 [[package]]
-name = "reachy-mini-conversation-app"
+name = "reachy-mini-conversation-app-new-ui"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiortc" },
     { name = "eclipse-zenoh" },
+    { name = "fastapi" },
     { name = "fastrtc" },
     { name = "gradio" },
     { name = "gradio-client" },
@@ -3966,6 +3967,7 @@ dependencies = [
     { name = "reachy-mini" },
     { name = "reachy-mini-dances-library" },
     { name = "reachy-mini-toolbox" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.optional-dependencies]
@@ -4008,6 +4010,7 @@ dev = [
 requires-dist = [
     { name = "aiortc", specifier = ">=1.13.0" },
     { name = "eclipse-zenoh", specifier = "~=1.7.0" },
+    { name = "fastapi" },
     { name = "fastrtc", specifier = ">=0.0.34" },
     { name = "gradio", specifier = "==5.50.1.dev1" },
     { name = "gradio-client", specifier = ">=1.13.3" },
@@ -4032,6 +4035,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'local-vision'" },
     { name = "ultralytics", marker = "extra == 'all-vision'" },
     { name = "ultralytics", marker = "extra == 'yolo-vision'" },
+    { name = "uvicorn", extras = ["standard"] },
 ]
 provides-extras = ["reachy-mini-wireless", "local-vision", "yolo-vision", "mediapipe-vision", "all-vision"]
 

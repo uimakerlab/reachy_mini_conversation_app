@@ -6,6 +6,7 @@ export interface ChatMessage {
   content: string;
   partial?: boolean;
   toolName?: string;
+  imageUrl?: string;
   ts: number;
 }
 
@@ -100,6 +101,22 @@ export function useChat() {
     [addMessage],
   );
 
+  const attachImageToLastTool = useCallback(
+    (dataUrl: string) => {
+      setMessages((prev) => {
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].role === "tool" && prev[i].toolName?.includes("camera")) {
+            const updated = [...prev];
+            updated[i] = { ...updated[i], imageUrl: dataUrl };
+            return updated;
+          }
+        }
+        return prev;
+      });
+    },
+    [],
+  );
+
   return {
     messages,
     clear,
@@ -108,5 +125,6 @@ export function useChat() {
     handleUserTranscript,
     handleAssistantTranscript,
     addToolMessage,
+    attachImageToLastTool,
   };
 }

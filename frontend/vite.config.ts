@@ -14,7 +14,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Python backend (HF secret, status, personalities, camera)
+      // Python backend WebSocket (audio + conversation)
+      "/ws": {
+        target: "http://localhost:7860",
+        changeOrigin: true,
+        ws: true,
+      },
+      // Python backend REST endpoints
       "/api/config": {
         target: "http://localhost:7860",
         changeOrigin: true,
@@ -27,7 +33,23 @@ export default defineConfig({
         target: "http://localhost:7860",
         changeOrigin: true,
       },
-      // Daemon endpoints (volume, search, move, state, WebSocket)
+      "/api/personalities": {
+        target: "http://localhost:7860",
+        changeOrigin: true,
+      },
+      "/api/voices": {
+        target: "http://localhost:7860",
+        changeOrigin: true,
+      },
+      "/api/validate_api_key": {
+        target: "http://localhost:7860",
+        changeOrigin: true,
+      },
+      "/api/openai_api_key": {
+        target: "http://localhost:7860",
+        changeOrigin: true,
+      },
+      // Daemon endpoints (volume, search, move, state)
       "/api": {
         target: "http://localhost:8000",
         changeOrigin: true,

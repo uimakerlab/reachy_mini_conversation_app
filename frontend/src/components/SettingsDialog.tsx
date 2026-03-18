@@ -254,12 +254,41 @@ export default function SettingsDialog({ open, onClose, settings, onUpdate, hasK
 
         <Divider />
 
-        {/* Camera */}
+        {/* Robot */}
         <Fade in timeout={375}>
-          <Box>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+              Robot
+            </Typography>
+
+            {/* Connection URL */}
+            <Box>
+              <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1.5 }}>
+                <Typography variant="body2" sx={{ fontWeight: 500, fontSize: "0.82rem" }}>
+                  Connection
+                </Typography>
+                <StatusChip ok label={settings.daemonUrl || "Auto"} />
+              </Box>
+              <TextField
+                fullWidth
+                size="small"
+                placeholder="http://reachy-mini.local:8000"
+                value={settings.daemonUrl}
+                onChange={(e) => onUpdate({ daemonUrl: e.target.value })}
+              />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ mt: 1, display: "block", lineHeight: 1.5, fontSize: "0.72rem" }}
+              >
+                Leave empty to auto-detect. Set to the robot IP when running locally.
+              </Typography>
+            </Box>
+
+            {/* Camera toggle */}
             <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <Box>
-                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                <Typography variant="body2" sx={{ fontWeight: 500, fontSize: "0.82rem" }}>
                   Camera
                 </Typography>
                 <Typography
@@ -267,7 +296,7 @@ export default function SettingsDialog({ open, onClose, settings, onUpdate, hasK
                   color="text.secondary"
                   sx={{ display: "block", lineHeight: 1.5, fontSize: "0.72rem" }}
                 >
-                  Enable the robot's video feed for visual interactions
+                  Enable the video feed for visual interactions
                 </Typography>
               </Box>
               <Switch
@@ -276,35 +305,6 @@ export default function SettingsDialog({ open, onClose, settings, onUpdate, hasK
                 size="small"
               />
             </Box>
-          </Box>
-        </Fade>
-
-        <Divider />
-
-        {/* Robot Daemon */}
-        <Fade in timeout={450}>
-          <Box>
-            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                Robot Connection
-              </Typography>
-              <StatusChip ok label={settings.daemonUrl || "Auto"} />
-            </Box>
-
-            <TextField
-              fullWidth
-              size="small"
-              placeholder="http://reachy-mini.local:8000"
-              value={settings.daemonUrl}
-              onChange={(e) => onUpdate({ daemonUrl: e.target.value })}
-            />
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ mt: 1, display: "block", lineHeight: 1.5, fontSize: "0.72rem" }}
-            >
-              Leave empty to auto-detect. Set to the robot IP when running locally.
-            </Typography>
           </Box>
         </Fade>
       </Box>

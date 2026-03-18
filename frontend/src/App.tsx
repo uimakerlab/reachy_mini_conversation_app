@@ -11,14 +11,14 @@ import WelcomeScreen from "./components/WelcomeScreen";
 import ApiKeySetup from "./components/ApiKeySetup";
 import { useSettings } from "./hooks/useSettings";
 import { useChat } from "./hooks/useChat";
-import { useRealtime } from "./hooks/useRealtime";
+import { useConversation } from "./hooks/useConversation";
 import { getBuiltinProfile } from "./config/builtinProfiles";
 import type { BuiltinProfile } from "./config/builtinProfiles";
 
 export default function App() {
   const { settings, update, hasKey } = useSettings();
   const chat = useChat();
-  const { status, error, robotConnected, isMuted, connect, disconnect, toggleMute, cancelResponse, getLocalStream } = useRealtime(settings, chat);
+  const { status, error, isMuted, isPaused, connect, disconnect, toggleMute, togglePause, getLocalStream } = useConversation(settings, chat);
 
   const [toastError, setToastError] = useState<string | null>(null);
 
@@ -116,7 +116,6 @@ export default function App() {
         onOpenSettings={openSettings}
         onReload={() => { disconnect(); pendingConnectRef.current = true; }}
         isConnected={isConnected}
-        robotConnected={robotConnected}
       />
 
       <ChatPanel
@@ -128,10 +127,11 @@ export default function App() {
       <AudioControls
         status={status}
         isMuted={isMuted}
+        isPaused={isPaused}
         onConnect={connect}
         onDisconnect={disconnect}
         onToggleMute={toggleMute}
-        onCancelResponse={cancelResponse}
+        onTogglePause={togglePause}
         getLocalStream={getLocalStream}
       />
 

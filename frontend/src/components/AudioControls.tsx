@@ -7,9 +7,9 @@ import { alpha } from "@mui/material/styles";
 import MicIcon from "@mui/icons-material/Mic";
 import MicOffIcon from "@mui/icons-material/MicOff";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import PauseRoundedIcon from "@mui/icons-material/PauseRounded";
 import VolumeUpIcon from "@mui/icons-material/VolumeUp";
-import StopIcon from "@mui/icons-material/Stop";
-import type { ConnectionStatus } from "../hooks/useRealtime";
+import type { ConnectionStatus } from "../hooks/useConversation";
 import { voiceEventBus } from "../voice/eventBus";
 
 type AgentState = "idle" | "connecting" | "listening" | "hearing" | "processing" | "speaking";
@@ -119,15 +119,16 @@ function useAudioLevel(
 interface Props {
   status: ConnectionStatus;
   isMuted: boolean;
+  isPaused: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
   onToggleMute: () => void;
-  onCancelResponse: () => void;
+  onTogglePause: () => void;
   getLocalStream?: () => MediaStream | null;
 }
 
 export default function AudioControls({
-  status, isMuted, onConnect, onDisconnect, onToggleMute, onCancelResponse, getLocalStream,
+  status, isMuted, isPaused, onConnect, onDisconnect, onToggleMute, onTogglePause, getLocalStream,
 }: Props) {
   const isConnected = status === "connected";
   const isConnecting = status === "connecting";
@@ -404,31 +405,25 @@ export default function AudioControls({
           </Box>
         </Box>
 
-        {/* Right: Stop */}
-        {(() => {
-          const canStop = isSpeaking || isProcessing;
-          return (
-            <Tooltip title="Stop response" arrow>
-              <IconButton
-                onClick={onCancelResponse}
-                disabled={!canStop}
-                aria-label="Stop AI response"
-                sx={{
-                  ...sideButtonSx,
-                  color: canStop ? "warning.main" : "text.disabled",
-                  bgcolor: canStop ? (t) => alpha(t.palette.warning.main, 0.1) : "transparent",
-                  "&:hover": {
-                    bgcolor: canStop
-                      ? (t) => alpha(t.palette.warning.main, 0.18)
-                      : "action.hover",
-                  },
-                }}
-              >
-                <StopIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          );
-        })()}
+        {/* Right: Pause / Resume */}
+        <Tooltip title={isPaused ? "Resume conversation" : "Pause conversation"} arrow>
+          <IconButton
+            onClick={onTogglePause}
+            aria-label={isPaused ? "Resume conversation" : "Pause conversation"}
+            sx={{
+              ...sideButtonSx,
+              color: isPaused ? "info.main" : "text.secondary",
+              bgcolor: isPaused ? (t) => alpha(t.palette.info.main, 0.1) : "transparent",
+              "&:hover": {
+                bgcolor: isPaused
+                  ? (t) => alpha(t.palette.info.main, 0.18)
+                  : "action.hover",
+              },
+            }}
+          >
+            {isPaused ? <PlayArrowRoundedIcon fontSize="small" /> : <PauseRoundedIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
       </Box>
 
       {/* State label */}
@@ -443,7 +438,7 @@ export default function AudioControls({
           fontSize: "0.72rem",
         }}
       >
-        {isMuted && isConnected ? "Muted" : style.label}
+        {isPaused && isConnected ? "Paused" : isMuted && isConnected ? "Muted" : style.label}
       </Typography>
     </Box>
   );

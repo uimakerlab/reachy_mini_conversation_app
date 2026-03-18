@@ -415,6 +415,12 @@ class WebUI:
                 for msg in output.args:
                     if not isinstance(msg, dict):
                         continue
+
+                    # State events (VAD, TTS) forwarded as {"type": "state", "state": "..."}
+                    if "_state" in msg:
+                        await ws.send_json({"type": "state", "state": msg["_state"]})
+                        continue
+
                     role = msg.get("role", "")
                     content = msg.get("content", "")
                     metadata = msg.get("metadata")

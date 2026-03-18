@@ -289,10 +289,12 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     if self.deps.head_wobbler is not None:
                         self.deps.head_wobbler.reset()
                     self.deps.movement_manager.set_listening(True)
+                    await self.output_queue.put(AdditionalOutputs({"_state": "vad_start"}))
                     logger.debug("User speech started")
 
                 if event.type == "input_audio_buffer.speech_stopped":
                     self.deps.movement_manager.set_listening(False)
+                    await self.output_queue.put(AdditionalOutputs({"_state": "vad_end"}))
                     logger.debug("User speech stopped - server will auto-commit with VAD")
 
                 if event.type in (
@@ -407,6 +409,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         if not isinstance(b64_im, str):
                             logger.warning("Unexpected type for b64_im: %s", type(b64_im))
                             b64_im = str(b64_im)
+                        data_url = f"data:image/jpeg;base64,{b64_im}"
                         await self.connection.conversation.item.create(
                             item={
                                 "type": "message",
@@ -414,27 +417,36 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                                 "content": [
                                     {
                                         "type": "input_image",
-                                        "image_url": f"data:image/jpeg;base64,{b64_im}",
+                                        "image_url": data_url,
                                     },
                                 ],
                             },
                         )
                         logger.info("Added camera image to conversation")
 
-                        if self.deps.camera_worker is not None:
-                            np_img = self.deps.camera_worker.get_latest_frame()
-                            if np_img is not None:
-                                # Camera frames are BGR from OpenCV; convert so Gradio displays correct colors.
-                                rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
-                            else:
-                                rgb_frame = None
-                            img = gr.Image(value=rgb_frame)
+                        if self.gradio_mode:
+                            if self.deps.camera_worker is not None:
+                                np_img = self.deps.camera_worker.get_latest_frame()
+                                if np_img is not None:
+                                    rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
+                                else:
+                                    rgb_frame = None
+                                img = gr.Image(value=rgb_frame)
 
+                                await self.output_queue.put(
+                                    AdditionalOutputs(
+                                        {
+                                            "role": "assistant",
+                                            "content": img,
+                                        },
+                                    ),
+                                )
+                        else:
                             await self.output_queue.put(
                                 AdditionalOutputs(
                                     {
                                         "role": "assistant",
-                                        "content": img,
+                                        "content": data_url,
                                     },
                                 ),
                             )
