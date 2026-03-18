@@ -13,10 +13,16 @@ export interface FullBodyPose {
   bodyYaw: number;
 }
 
+export interface FullBodyMat4Pose {
+  head: import("./mat4").Mat4;
+  antennas: [number, number];
+  bodyYaw: number;
+}
+
 export const CONFIG = {
   LOOP_FREQUENCY: 100,
   DEFAULT_DAEMON_URL: "",
-  IDLE_DELAY_MS: 500,
+  IDLE_DELAY_MS: 300,
   WS_RECONNECT_DELAY: 1000,
 } as const;
 
@@ -137,7 +143,7 @@ export const HEAD_PRESETS: Record<string, HeadPose> = {
 
 export abstract class BaseGenerator {
   active = false;
-  abstract getPose(): HeadPose;
+  abstract getMat4(): import("./mat4").Mat4;
   abstract update(dt: number): void;
   reset(): void {
     this.active = false;

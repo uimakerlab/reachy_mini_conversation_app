@@ -7,6 +7,7 @@ import {
   BaseGenerator,
   JOINT_LIMITS,
 } from "../types";
+import { type Mat4, createHeadPoseMat4 } from "../mat4";
 
 interface EmotionPoseData {
   head: { pitch: number; yaw: number; roll: number };
@@ -154,6 +155,11 @@ export class EmotionsGenerator extends BaseGenerator {
       this.isDecaying = false;
       this.progress = 1;
     }
+  }
+
+  getMat4(): Mat4 {
+    const h = this.currentPose.head;
+    return createHeadPoseMat4(h.x, h.y, h.z, h.roll, h.pitch, h.yaw);
   }
 
   getPose(): HeadPose {

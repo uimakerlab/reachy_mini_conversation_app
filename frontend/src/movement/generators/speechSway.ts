@@ -1,10 +1,11 @@
 import { type HeadPose, createNeutralPose, BaseGenerator } from "../types";
+import { type Mat4, createHeadPoseMat4, mat4Identity } from "../mat4";
 
 const CFG = {
   SAMPLE_RATE: 16000,
   HOP_MS: 10,
   FRAME_MS: 20,
-  MASTER: 1.5,
+  MASTER: 2.5,
   VAD_DB_ON: -35.0,
   VAD_DB_OFF: -45.0,
   VAD_ATTACK_MS: 40,
@@ -64,6 +65,22 @@ function resampleLinear(data: Float32Array, fromRate: number, toRate: number): F
   return out;
 }
 
+/**
+ * Seeded PRNG matching numpy's default_rng for deterministic phase offsets.
+ * Uses a simple mulberry32 algorithm - only needs uniform [0,1) values.
+ */
+function seededRandom(seed: number): () => number {
+  let s = seed | 0;
+  return () => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const RNG_SEED = 7;
+
 export class SpeechSwayGenerator extends BaseGenerator {
   private ringBuffer = new Float32Array(2 * CFG.SAMPLE_RATE);
   private ringWritePos = 0;
@@ -76,14 +93,28 @@ export class SpeechSwayGenerator extends BaseGenerator {
   private swayUp = 0;
   private swayDown = 0;
   private time = 0;
-  private phasePitch = Math.random() * Math.PI * 2;
-  private phaseYaw = Math.random() * Math.PI * 2;
-  private phaseRoll = Math.random() * Math.PI * 2;
-  private phaseX = Math.random() * Math.PI * 2;
-  private phaseY = Math.random() * Math.PI * 2;
-  private phaseZ = Math.random() * Math.PI * 2;
+
+  // Deterministic phases matching Python's rng_seed=7
+  private phasePitch: number;
+  private phaseYaw: number;
+  private phaseRoll: number;
+  private phaseX: number;
+  private phaseY: number;
+  private phaseZ: number;
+
   private outputQueue: HeadPose[] = [];
   private currentPose: HeadPose = createNeutralPose();
+
+  constructor() {
+    super();
+    const rng = seededRandom(RNG_SEED);
+    this.phasePitch = rng() * Math.PI * 2;
+    this.phaseYaw = rng() * Math.PI * 2;
+    this.phaseRoll = rng() * Math.PI * 2;
+    this.phaseX = rng() * Math.PI * 2;
+    this.phaseY = rng() * Math.PI * 2;
+    this.phaseZ = rng() * Math.PI * 2;
+  }
 
   feedSamples(audioData: Float32Array, sampleRate = 24000): void {
     if (!audioData || audioData.length === 0) return;
@@ -146,14 +177,22 @@ export class SpeechSwayGenerator extends BaseGenerator {
     if (this.outputQueue.length > 100) this.outputQueue = this.outputQueue.slice(-100);
   }
 
-  update(dt: number): void {
+  update(_dt: number): void {
+    // Pop one result per tick (100Hz = 10ms, matching HOP_MS).
+    // When queue is empty, hold the last pose - no decay.
+    // Python's HeadWobbler holds offsets until reset(); the SwayRollRT's
+    // own envelope follower handles fade-out via VAD release.
     if (this.outputQueue.length > 0) {
       this.currentPose = this.outputQueue.shift()!;
-    } else if (this.active) {
-      const f = Math.max(0, 1 - 3 * dt);
-      this.currentPose = { x: this.currentPose.x * f, y: this.currentPose.y * f, z: this.currentPose.z * f, roll: this.currentPose.roll * f, pitch: this.currentPose.pitch * f, yaw: this.currentPose.yaw * f };
-      if (Math.abs(this.currentPose.pitch) < 0.001 && Math.abs(this.currentPose.yaw) < 0.001) this.active = false;
     }
+  }
+
+  getMat4(): Mat4 {
+    const p = this.currentPose;
+    if (p.x === 0 && p.y === 0 && p.z === 0 && p.roll === 0 && p.pitch === 0 && p.yaw === 0) {
+      return mat4Identity();
+    }
+    return createHeadPoseMat4(p.x, p.y, p.z, p.roll, p.pitch, p.yaw);
   }
 
   getPose(): HeadPose {

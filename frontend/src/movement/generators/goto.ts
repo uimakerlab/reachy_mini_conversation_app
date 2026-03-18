@@ -1,4 +1,5 @@
 import { type HeadPose, createNeutralPose, clonePose, lerpPose, minJerkPose, BaseGenerator, HEAD_PRESETS } from "../types";
+import { type Mat4, createHeadPoseMat4 } from "../mat4";
 
 export class GotoGenerator extends BaseGenerator {
   private startPose: HeadPose = createNeutralPose();
@@ -45,6 +46,11 @@ export class GotoGenerator extends BaseGenerator {
       this.onComplete = null;
       cb?.();
     }
+  }
+
+  getMat4(): Mat4 {
+    const p = this.currentPose;
+    return createHeadPoseMat4(p.x, p.y, p.z, p.roll, p.pitch, p.yaw);
   }
 
   getPose(): HeadPose {

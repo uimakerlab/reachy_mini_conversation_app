@@ -68,7 +68,10 @@ export function useRealtime(
       configureTools({ manager: mgr, daemonUrl: settings.daemonUrl });
 
       const cp = settings.customProfiles;
-      const enabledTools = resolveEnabledTools(settings.profileId, settings.customEnabledTools, cp);
+      let enabledTools = resolveEnabledTools(settings.profileId, settings.customEnabledTools, cp);
+      if (!settings.cameraEnabled && enabledTools) {
+        enabledTools = enabledTools.filter((t) => t !== "take_photo");
+      }
 
       const conn = await connectRealtime(settings.openaiApiKey, {
         voice: resolveVoice(settings.profileId, settings.voice, cp),

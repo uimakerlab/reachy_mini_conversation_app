@@ -17,6 +17,7 @@ export interface AppSettings {
   customEnabledTools: string[];
   customProfiles: CustomProfile[];
   onboardingDone: boolean;
+  cameraEnabled: boolean;
 }
 
 const DEFAULTS: AppSettings = {
@@ -28,6 +29,7 @@ const DEFAULTS: AppSettings = {
   customEnabledTools: [],
   customProfiles: [],
   onboardingDone: false,
+  cameraEnabled: true,
 };
 
 function load(): AppSettings {

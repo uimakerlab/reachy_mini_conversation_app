@@ -9,6 +9,7 @@ import InputAdornment from "@mui/material/InputAdornment";
 import Divider from "@mui/material/Divider";
 import Collapse from "@mui/material/Collapse";
 import Fade from "@mui/material/Fade";
+import Switch from "@mui/material/Switch";
 import CloseIcon from "@mui/icons-material/Close";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import VisibilityIcon from "@mui/icons-material/Visibility";
@@ -247,6 +248,33 @@ export default function SettingsDialog({ open, onClose, settings, onUpdate, hasK
                   )}
                 </>
               )}
+            </Box>
+          </Box>
+        </Fade>
+
+        <Divider />
+
+        {/* Camera */}
+        <Fade in timeout={375}>
+          <Box>
+            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                  Camera
+                </Typography>
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: "block", lineHeight: 1.5, fontSize: "0.72rem" }}
+                >
+                  Enable the robot's video feed for visual interactions
+                </Typography>
+              </Box>
+              <Switch
+                checked={settings.cameraEnabled}
+                onChange={(e) => onUpdate({ cameraEnabled: e.target.checked })}
+                size="small"
+              />
             </Box>
           </Box>
         </Fade>

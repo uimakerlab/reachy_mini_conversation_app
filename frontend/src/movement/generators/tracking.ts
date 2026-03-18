@@ -1,4 +1,5 @@
 import { type HeadPose, createNeutralPose, BaseGenerator, smoothStep } from "../types";
+import { type Mat4, createHeadPoseMat4, mat4Identity } from "../mat4";
 
 const CFG = {
   SMOOTHING: 0.05,
@@ -38,6 +39,11 @@ export class TrackingGenerator extends BaseGenerator {
     const s = smoothStep(CFG.SMOOTHING, dt);
     this.currentYaw += (this.targetYaw - this.currentYaw) * s;
     this.currentPitch += (this.targetPitch - this.currentPitch) * s;
+  }
+
+  getMat4(): Mat4 {
+    if (!this.active) return mat4Identity();
+    return createHeadPoseMat4(0, 0, 0, 0, this.currentPitch * this.fadeAmount, this.currentYaw * this.fadeAmount);
   }
 
   getPose(): HeadPose {

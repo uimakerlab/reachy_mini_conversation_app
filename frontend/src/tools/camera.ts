@@ -17,10 +17,14 @@ export const definitions: ToolDefinition[] = [
 async function fetchSnapshot(): Promise<string | null> {
   try {
     const res = await fetch("/api/camera/snapshot");
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.warn("[camera] snapshot endpoint returned", res.status, await res.text());
+      return null;
+    }
     const data = await res.json();
     return data.b64 ?? null;
-  } catch {
+  } catch (err) {
+    console.warn("[camera] snapshot fetch failed:", err);
     return null;
   }
 }

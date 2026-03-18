@@ -1,4 +1,5 @@
-import { CONFIG, type FullBodyPose } from "./types";
+import { CONFIG } from "./types";
+import { type Mat4, mat4Flatten } from "./mat4";
 
 const DEBUG = import.meta.env.DEV;
 
@@ -96,10 +97,17 @@ function scheduleReconnect(): void {
   reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, CONFIG.WS_RECONNECT_DELAY);
 }
 
-export function sendFullBodyPose(pose: FullBodyPose): boolean {
+export interface Mat4FullBodyPose {
+  head: Mat4;
+  antennas: [number, number];
+  bodyYaw: number;
+}
+
+/** Send a full body pose using the daemon's Matrix4x4Pose format {m: [16 floats]}. */
+export function sendFullBodyPose(pose: Mat4FullBodyPose): boolean {
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
   ws.send(JSON.stringify({
-    target_head_pose: pose.head,
+    target_head_pose: { m: mat4Flatten(pose.head) },
     target_antennas: pose.antennas,
     target_body_yaw: pose.bodyYaw,
   }));
