@@ -2,10 +2,8 @@ import base64
 import asyncio
 import logging
 from typing import Any, Dict
-from fractions import Fraction
 
-import av
-
+from reachy_mini_conversation_app.image_encoding import encode_jpeg
 from reachy_mini_conversation_app.tools.core_tools import Tool, ToolDependencies
 
 
@@ -60,20 +58,5 @@ class Camera(Tool):
                 else {"error": "vision returned non-string"}
             )
 
-        rgb_frame = frame[:, :, ::-1].copy()
-        video_frame = av.VideoFrame.from_ndarray(rgb_frame, format="rgb24")
-
-        codec = av.CodecContext.create("mjpeg", "w")
-        codec.width = rgb_frame.shape[1]  # type: ignore[attr-defined]
-        codec.height = rgb_frame.shape[0]  # type: ignore[attr-defined]
-        codec.pix_fmt = "yuvj444p"  # type: ignore[attr-defined]
-        codec.time_base = Fraction(1, 1)
-        codec.options = {"qscale": "2"}
-
-        packets = codec.encode(video_frame)  # type: ignore[attr-defined]
-        packets += codec.encode(None)  # type: ignore[attr-defined]
-        if not packets:
-            raise RuntimeError("Failed to encode frame as JPEG")
-
-        jpeg_bytes = b"".join(bytes(packet) for packet in packets)
+        jpeg_bytes = encode_jpeg(frame)
         return {"b64_im": base64.b64encode(jpeg_bytes).decode("utf-8")}

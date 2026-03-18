@@ -6,7 +6,6 @@ import threading
 from typing import Any, Dict
 from dataclasses import dataclass
 
-import cv2
 import numpy as np
 import torch
 from numpy.typing import NDArray
@@ -14,6 +13,7 @@ from transformers import AutoProcessor, AutoModelForImageTextToText
 from huggingface_hub import snapshot_download
 
 from reachy_mini_conversation_app.config import config
+from reachy_mini_conversation_app.image_encoding import encode_jpeg
 
 
 logger = logging.getLogger(__name__)
@@ -91,26 +91,20 @@ class VisionProcessor:
 
     def process_image(
         self,
-        cv2_image: NDArray[np.uint8],
+        image: NDArray[np.uint8],
         prompt: str = "Briefly describe what you see in one sentence.",
     ) -> str:
-        """Process CV2 image and return description with retry logic."""
+        """Process a BGR camera image and return a description with retry logic."""
         if not self._initialized or self.processor is None or self.model is None:
             return "Vision model not initialized"
 
         for attempt in range(self.vision_config.max_retries):
             try:
-                # Convert to JPEG bytes
-                success, jpeg_buffer = cv2.imencode(
-                    ".jpg",
-                    cv2_image,
-                    [cv2.IMWRITE_JPEG_QUALITY, self.vision_config.jpeg_quality],
-                )
-                if not success:
+                try:
+                    jpeg_bytes = encode_jpeg(image, quality=self.vision_config.jpeg_quality)
+                except RuntimeError:
                     return "Failed to encode image"
-
-                # Convert to base64
-                image_base64 = base64.b64encode(jpeg_buffer.tobytes()).decode("utf-8")
+                image_base64 = base64.b64encode(jpeg_bytes).decode("utf-8")
 
                 messages = [
                     {

@@ -172,11 +172,7 @@ def test_vision_processor_process_image_not_initialized(mock_torch: Any) -> None
 
 def test_vision_processor_process_image_success(mock_torch: Any, mock_transformers: Any) -> None:
     """Test process_image processes an image successfully."""
-    with patch("reachy_mini_conversation_app.vision.processors.cv2") as mock_cv2:
-        # Mock cv2.imencode to return success
-        mock_cv2.imencode.return_value = (True, np.array([1, 2, 3], dtype=np.uint8))
-        mock_cv2.IMWRITE_JPEG_QUALITY = 1
-
+    with patch("reachy_mini_conversation_app.vision.processors.encode_jpeg", return_value=b"jpg"):
         processor = VisionProcessor()
         processor.initialize()
 
@@ -189,10 +185,10 @@ def test_vision_processor_process_image_success(mock_torch: Any, mock_transforme
 
 def test_vision_processor_process_image_encode_failure(mock_torch: Any, mock_transformers: Any) -> None:
     """Test process_image handles image encoding failure."""
-    with patch("reachy_mini_conversation_app.vision.processors.cv2") as mock_cv2:
-        mock_cv2.imencode.return_value = (False, None)
-        mock_cv2.IMWRITE_JPEG_QUALITY = 1
-
+    with patch(
+        "reachy_mini_conversation_app.vision.processors.encode_jpeg",
+        side_effect=RuntimeError("encode failed"),
+    ):
         processor = VisionProcessor()
         processor.initialize()
 
@@ -204,10 +200,7 @@ def test_vision_processor_process_image_encode_failure(mock_torch: Any, mock_tra
 
 def test_vision_processor_process_image_with_retry(mock_torch: Any, mock_transformers: Any) -> None:
     """Test process_image retries on failure."""
-    with patch("reachy_mini_conversation_app.vision.processors.cv2") as mock_cv2:
-        mock_cv2.imencode.return_value = (True, np.array([1, 2, 3], dtype=np.uint8))
-        mock_cv2.IMWRITE_JPEG_QUALITY = 1
-
+    with patch("reachy_mini_conversation_app.vision.processors.encode_jpeg", return_value=b"jpg"):
         # Set up the OutOfMemoryError to be a proper exception
         mock_torch.cuda.OutOfMemoryError = type("OutOfMemoryError", (Exception,), {})
 
@@ -311,10 +304,7 @@ def test_vision_manager_start_stop(mock_torch: Any, mock_transformers: Any, mock
 
 def test_vision_manager_processes_frames(mock_torch: Any, mock_transformers: Any, mock_camera: Mock) -> None:
     """Test VisionManager processes frames at intervals."""
-    with patch("reachy_mini_conversation_app.vision.processors.cv2") as mock_cv2:
-        mock_cv2.imencode.return_value = (True, np.array([1, 2, 3], dtype=np.uint8))
-        mock_cv2.IMWRITE_JPEG_QUALITY = 1
-
+    with patch("reachy_mini_conversation_app.vision.processors.encode_jpeg", return_value=b"jpg"):
         config = VisionConfig(vision_interval=0.1)  # Fast interval for testing
         manager = VisionManager(mock_camera, config)
 
@@ -343,10 +333,10 @@ def test_vision_manager_handles_none_frame(mock_torch: Any, mock_transformers: A
 
 def test_vision_manager_handles_processing_error(mock_torch: Any, mock_transformers: Any, mock_camera: Mock) -> None:
     """Test VisionManager handles processing errors gracefully."""
-    with patch("reachy_mini_conversation_app.vision.processors.cv2") as mock_cv2:
-        mock_cv2.imencode.side_effect = Exception("Processing error")
-        mock_cv2.IMWRITE_JPEG_QUALITY = 1
-
+    with patch(
+        "reachy_mini_conversation_app.vision.processors.encode_jpeg",
+        side_effect=Exception("Processing error"),
+    ):
         config = VisionConfig(vision_interval=0.1)
         manager = VisionManager(mock_camera, config)
 
@@ -372,10 +362,7 @@ def test_vision_manager_get_status(mock_torch: Any, mock_transformers: Any, mock
 
 def test_vision_manager_skips_invalid_responses(mock_torch: Any, mock_transformers: Any, mock_camera: Mock) -> None:
     """Test VisionManager doesn't update timestamp for invalid responses."""
-    with patch("reachy_mini_conversation_app.vision.processors.cv2") as mock_cv2:
-        mock_cv2.imencode.return_value = (True, np.array([1, 2, 3], dtype=np.uint8))
-        mock_cv2.IMWRITE_JPEG_QUALITY = 1
-
+    with patch("reachy_mini_conversation_app.vision.processors.encode_jpeg", return_value=b"jpg"):
         # Make processor return invalid response
         config = VisionConfig(vision_interval=0.1)
         manager = VisionManager(mock_camera, config)
@@ -441,10 +428,7 @@ def test_initialize_vision_manager_processor_failure(mock_torch: Any, mock_camer
 
 def test_vision_processor_cuda_oom_recovery(mock_torch: Any, mock_transformers: Any) -> None:
     """Test VisionProcessor recovers from CUDA OOM errors."""
-    with patch("reachy_mini_conversation_app.vision.processors.cv2") as mock_cv2:
-        mock_cv2.imencode.return_value = (True, np.array([1, 2, 3], dtype=np.uint8))
-        mock_cv2.IMWRITE_JPEG_QUALITY = 1
-
+    with patch("reachy_mini_conversation_app.vision.processors.encode_jpeg", return_value=b"jpg"):
         processor = VisionProcessor(VisionConfig(max_retries=2, retry_delay=0.01))
         processor.initialize()
         processor.device = "cuda"  # Force CUDA for this test
@@ -463,10 +447,7 @@ def test_vision_processor_cuda_oom_recovery(mock_torch: Any, mock_transformers: 
 
 def test_vision_processor_cache_cleanup_mps(mock_torch: Any, mock_transformers: Any) -> None:
     """Test VisionProcessor cleans up MPS cache after processing."""
-    with patch("reachy_mini_conversation_app.vision.processors.cv2") as mock_cv2:
-        mock_cv2.imencode.return_value = (True, np.array([1, 2, 3], dtype=np.uint8))
-        mock_cv2.IMWRITE_JPEG_QUALITY = 1
-
+    with patch("reachy_mini_conversation_app.vision.processors.encode_jpeg", return_value=b"jpg"):
         processor = VisionProcessor()
         processor.initialize()
         processor.device = "mps"  # Force MPS for this test
@@ -480,10 +461,7 @@ def test_vision_processor_cache_cleanup_mps(mock_torch: Any, mock_transformers: 
 
 def test_vision_manager_thread_safety(mock_torch: Any, mock_transformers: Any, mock_camera: Mock) -> None:
     """Test VisionManager thread safety with multiple start/stop cycles."""
-    with patch("reachy_mini_conversation_app.vision.processors.cv2") as mock_cv2:
-        mock_cv2.imencode.return_value = (True, np.array([1, 2, 3], dtype=np.uint8))
-        mock_cv2.IMWRITE_JPEG_QUALITY = 1
-
+    with patch("reachy_mini_conversation_app.vision.processors.encode_jpeg", return_value=b"jpg"):
         config = VisionConfig(vision_interval=0.05)
         manager = VisionManager(mock_camera, config)
 
