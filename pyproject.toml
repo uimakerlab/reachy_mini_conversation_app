@@ -15,7 +15,6 @@ dependencies = [
     "fastrtc>=0.0.34",
     "gradio==5.50.1.dev1",
     "huggingface-hub==1.3.0",
-    "opencv-python>=4.12.0.88",
 
     #Environment variables
     "python-dotenv",
@@ -40,6 +39,7 @@ local_vision = [
 yolo_vision = [
   "ultralytics",
   "supervision",
+  "opencv-python>=4.12.0.88",
 ]
 mediapipe_vision = [
   "mediapipe==0.10.14",
@@ -50,6 +50,7 @@ all_vision = [
   "num2words",
   "ultralytics",
   "supervision",
+  "opencv-python>=4.12.0.88",
   "mediapipe==0.10.14",
 ]
 
