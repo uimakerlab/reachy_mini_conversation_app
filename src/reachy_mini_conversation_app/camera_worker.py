@@ -1,10 +1,4 @@
-"""Camera worker thread with frame buffering and face tracking.
-
-Ported from main_works.py camera_worker() function to provide:
-- 30Hz+ camera polling with thread-safe frame buffering
-- Face tracking integration with smooth interpolation
-- Latest frame always available for tools
-"""
+"""Camera worker thread with frame buffering and optional head tracking."""
 
 import time
 import logging
@@ -91,17 +85,15 @@ class CameraWorker:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join()
+        if self.head_tracker is not None:
+            self.head_tracker.close()
 
         logger.debug("Camera worker stopped")
 
     def working_loop(self) -> None:
-        """Enable the camera worker loop.
-
-        Ported from main_works.py camera_worker() with same logic.
-        """
+        """Run the camera worker loop."""
         logger.debug("Starting camera working loop")
 
-        # Initialize head tracker if available
         neutral_pose = np.eye(4)  # Neutral pose (identity matrix)
         self.previous_head_tracking_state = self.is_head_tracking_enabled
 
@@ -115,13 +107,13 @@ class CameraWorker:
                 if frame is not None:
                     # Thread-safe frame storage
                     with self.frame_lock:
-                        self.latest_frame = frame  # .copy()
+                        self.latest_frame = frame
 
                     # Check if face tracking was just disabled
                     if self.previous_head_tracking_state and not self.is_head_tracking_enabled:
                         # Face tracking was just disabled - start interpolation to neutral
-                        self.last_face_detected_time = current_time  # Trigger the face-lost logic
-                        self.interpolation_start_time = None  # Will be set by the face-lost interpolation
+                        self.last_face_detected_time = current_time
+                        self.interpolation_start_time = None
                         self.interpolation_start_pose = None
 
                     # Update tracking state
@@ -134,7 +126,8 @@ class CameraWorker:
                         if eye_center is not None:
                             # Face detected - immediately switch to tracking
                             self.last_face_detected_time = current_time
-                            self.interpolation_start_time = None  # Stop any interpolation
+                            # Stop any interpolation
+                            self.interpolation_start_time = None
 
                             # Convert normalized coordinates to pixel coordinates
                             h, w, _ = frame.shape
@@ -165,10 +158,10 @@ class CameraWorker:
                                 self.face_tracking_offsets = [
                                     translation[0],
                                     translation[1],
-                                    translation[2],  # x, y, z
+                                    translation[2],
                                     rotation[0],
                                     rotation[1],
-                                    rotation[2],  # roll, pitch, yaw
+                                    rotation[2],
                                 ]
 
                         # No face detected while tracking enabled - set face lost timestamp
@@ -218,10 +211,10 @@ class CameraWorker:
                                 self.face_tracking_offsets = [
                                     translation[0],
                                     translation[1],
-                                    translation[2],  # x, y, z
+                                    translation[2],
                                     rotation[0],
                                     rotation[1],
-                                    rotation[2],  # roll, pitch, yaw
+                                    rotation[2],
                                 ]
 
                             # If interpolation is complete, reset timing
@@ -229,13 +222,13 @@ class CameraWorker:
                                 self.last_face_detected_time = None
                                 self.interpolation_start_time = None
                                 self.interpolation_start_pose = None
-                        # else: Keep current offsets (within 2s delay period)
 
                 # Small sleep to prevent excessive CPU usage (same as main_works.py)
                 time.sleep(0.04)
 
             except Exception as e:
                 logger.error(f"Camera worker error: {e}")
-                time.sleep(0.1)  # Longer sleep on error
+                # Longer sleep on error
+                time.sleep(0.1)
 
         logger.debug("Camera worker thread exited")

@@ -5,6 +5,7 @@ from typing import Any, Tuple, Optional
 
 from reachy_mini import ReachyMini
 from reachy_mini_conversation_app.camera_worker import CameraWorker
+from reachy_mini_conversation_app.vision.head_tracker import HeadTracker
 
 
 def parse_args() -> Tuple[argparse.Namespace, list]:  # type: ignore
@@ -47,14 +48,11 @@ def handle_vision_stuff(args: argparse.Namespace, current_robot: ReachyMini) -> 
     if not args.no_camera:
         # Initialize head tracker if specified
         if args.head_tracker is not None:
-            if args.head_tracker == "yolo":
-                from reachy_mini_conversation_app.vision.yolo_head_tracker import HeadTracker
-
-                head_tracker = HeadTracker()
-            elif args.head_tracker == "mediapipe":
-                from reachy_mini_toolbox.vision import HeadTracker  # type: ignore[no-redef]
-
-                head_tracker = HeadTracker()
+            head_tracker = HeadTracker(args.head_tracker)
+            logging.getLogger(__name__).info(
+                "Using %s head tracker subprocess",
+                args.head_tracker,
+            )
 
         # Initialize camera worker
         camera_worker = CameraWorker(current_robot, head_tracker)
