@@ -211,7 +211,9 @@ export default function MessageBubble({ msg, botAvatar, botName }: BubbleProps) 
                 lineHeight: 1.6,
                 fontSize: "0.84rem",
                 fontStyle: msg.partial ? "italic" : "normal",
-                color: isUser ? theme.palette.primary.light : "text.primary",
+                color: isUser
+                  ? (theme.palette.mode === "dark" ? theme.palette.primary.light : theme.palette.primary.dark)
+                  : "text.primary",
               }}
             >
               {msg.content}
