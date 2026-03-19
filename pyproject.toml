@@ -3,7 +3,7 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "reachy-mini-conversation-app-new-ui"
+name = "reachy_mini_conversation_app"
 version = "0.3.0"
 authors = [{ name = "Pollen Robotics", email = "contact@pollen-robotics.com" }]
 description = ""
@@ -79,7 +79,7 @@ dependency-metadata = [
 ]
 
 [project.entry-points."reachy_mini_apps"]
-reachy-mini-conversation-app-new-ui = "reachy_mini_conversation_app.main:ReachyMiniConversationApp"
+reachy_mini_conversation_app = "reachy_mini_conversation_app.main:ReachyMiniConversationApp"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
