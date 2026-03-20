@@ -2,9 +2,12 @@ import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
 import CameraAltIcon from "@mui/icons-material/CameraAlt";
+import CircularProgress from "@mui/material/CircularProgress";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import { alpha, useTheme } from "@mui/material/styles";
 import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import BuildRoundedIcon from "@mui/icons-material/BuildRounded";
+import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import type { ChatMessage } from "../hooks/useChat";
 
 function timeAgo(ts: number): string {
@@ -73,7 +76,8 @@ function BotAvatar({ botAvatar, botName, color }: { botAvatar?: string | null; b
 
 function ToolContent({ msg }: { msg: ChatMessage }) {
   const theme = useTheme();
-  const toolColor = "#8b5cf6";
+  const isRunning = msg.toolStatus === "running";
+  const toolColor = isRunning ? "#f59e0b" : "#8b5cf6";
   const hasImage = !!msg.imageUrl;
   const name = cleanToolName(msg.toolName);
   const result = formatToolResult(msg.content);
@@ -85,7 +89,7 @@ function ToolContent({ msg }: { msg: ChatMessage }) {
       sx={{
         borderRadius: "16px 16px 16px 4px",
         bgcolor: alpha(theme.palette.background.paper, 0.8),
-        border: `1px solid ${theme.palette.divider}`,
+        border: `1px solid ${alpha(toolColor, 0.3)}`,
         overflow: "hidden",
         backdropFilter: "blur(8px)",
       }}
@@ -106,9 +110,14 @@ function ToolContent({ msg }: { msg: ChatMessage }) {
         >
           <IconComponent sx={{ fontSize: 13, color: toolColor }} />
         </Box>
-        <Typography sx={{ fontSize: "0.75rem", fontWeight: 600, color: toolColor }}>
+        <Typography sx={{ fontSize: "0.75rem", fontWeight: 600, color: toolColor, flex: 1 }}>
           {name}
         </Typography>
+        {isRunning ? (
+          <CircularProgress size={12} thickness={5} sx={{ color: toolColor }} />
+        ) : (
+          <CheckCircleOutlineIcon sx={{ fontSize: 14, color: toolColor, opacity: 0.6 }} />
+        )}
       </Box>
 
       {/* Result entries */}
@@ -151,10 +160,36 @@ function ToolContent({ msg }: { msg: ChatMessage }) {
   );
 }
 
+function ErrorContent({ msg }: { msg: ChatMessage }) {
+  const theme = useTheme();
+  const errorColor = theme.palette.error.main;
+
+  return (
+    <Box
+      sx={{
+        borderRadius: "16px 16px 16px 4px",
+        bgcolor: alpha(errorColor, 0.06),
+        border: `1px solid ${alpha(errorColor, 0.2)}`,
+        px: 2,
+        py: 1.25,
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 1,
+      }}
+    >
+      <ErrorOutlineIcon sx={{ fontSize: 15, color: errorColor, mt: 0.15, flexShrink: 0 }} />
+      <Typography sx={{ fontSize: "0.75rem", color: errorColor, lineHeight: 1.5 }}>
+        {msg.content}
+      </Typography>
+    </Box>
+  );
+}
+
 export default function MessageBubble({ msg, botAvatar, botName }: BubbleProps) {
   const theme = useTheme();
   const isUser = msg.role === "user";
   const isTool = msg.role === "tool";
+  const isError = msg.role === "error";
   const avatarColor = isUser ? theme.palette.primary.main : "#10b981";
 
   return (
@@ -182,9 +217,11 @@ export default function MessageBubble({ msg, botAvatar, botName }: BubbleProps) 
       )}
 
       {/* Bubble + timestamp */}
-      <Box sx={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", maxWidth: isTool ? "85%" : "75%", minWidth: 0, flex: isTool ? 1 : undefined }}>
+      <Box sx={{ display: "flex", flexDirection: "column", alignItems: isUser ? "flex-end" : "flex-start", maxWidth: (isTool || isError) ? "85%" : "75%", minWidth: 0, flex: (isTool || isError) ? 1 : undefined }}>
         {isTool ? (
           <ToolContent msg={msg} />
+        ) : isError ? (
+          <ErrorContent msg={msg} />
         ) : (
           <Paper
             elevation={0}

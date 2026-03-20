@@ -14,6 +14,7 @@ import { useChat } from "./hooks/useChat";
 import { useConversation } from "./hooks/useConversation";
 import { getBuiltinProfile } from "./config/builtinProfiles";
 import type { BuiltinProfile } from "./config/builtinProfiles";
+import { applyProfileOnServer } from "./config/settings";
 
 export default function App() {
   const { settings, update, hasKey } = useSettings();
@@ -73,6 +74,7 @@ export default function App() {
       customInstructions: "",
       onboardingDone: true,
     });
+    applyProfileOnServer(profile.id, true);
   }, [update]);
 
   const handleWelcomeSkip = useCallback(() => {

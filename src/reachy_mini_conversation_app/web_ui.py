@@ -1,32 +1,29 @@
-"""Web UI server: FastAPI + WebSocket replacing Gradio.
+"""Web UI server: FastAPI + fastrtc WebRTC for audio, SSE for control messages.
 
-Serves a React/MUI frontend and streams bidirectional audio
-to the OpenAI Realtime handler over a single WebSocket.
+Uses fastrtc's WebRTC transport for bidirectional audio with built-in
+echo cancellation. Control messages (transcripts, tool events, state)
+are streamed to the frontend via Server-Sent Events (SSE).
 
-Protocol
---------
-Client -> Server:
-    binary  : raw PCM int16 mono audio chunk (sample rate set by WEB_INPUT_SAMPLE_RATE)
-    text    : JSON control message  {"type": "start"} / {"type": "stop"}
-
-Server -> Client:
-    binary  : raw PCM int16 mono 24 kHz audio chunk
-    text    : JSON  {"type": "transcript"|"tool"|"image"|"interrupt"|"status", ...}
+Architecture
+------------
+Audio:    Browser <--WebRTC--> fastrtc Stream <--> OpenaiRealtimeHandler <--> OpenAI
+Control:  Browser <---SSE---- /api/events (AdditionalOutputs from handler)
+Config:   Browser <---REST--- /api/* endpoints
 """
 
+import os
 import json
 import base64
 import asyncio
 import logging
-from typing import Any, Union, Optional
+from typing import Any, Optional
 from pathlib import Path
 
 import cv2
-import numpy as np
 import uvicorn
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastrtc import AdditionalOutputs
-from fastapi.responses import JSONResponse, Response
+from fastapi import FastAPI, Request
+from fastrtc import Stream, AdditionalOutputs
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -48,14 +45,45 @@ logger = logging.getLogger(__name__)
 WEB_APP_DIR = Path(__file__).parent / "web-app"
 SETTINGS_STATIC_DIR = Path(__file__).parent / "static"
 
-WEB_INPUT_SAMPLE_RATE = 24000
 
-_INTERRUPT_SENTINEL = "__interrupt__"
-QueueItem = Union[tuple[int, Any], AdditionalOutputs, str]
+def _format_control_message(msg: dict[str, Any]) -> dict[str, Any] | None:
+    """Convert an AdditionalOutputs dict to a frontend-friendly JSON event."""
+    if "_state" in msg:
+        return {"type": "state", "state": msg["_state"]}
+
+    role = msg.get("role", "")
+    content = msg.get("content", "")
+    metadata = msg.get("metadata")
+
+    if isinstance(content, str) and content.startswith("data:image"):
+        return {"type": "image", "data": content}
+
+    if metadata:
+        return {
+            "type": "tool",
+            "title": metadata.get("title", ""),
+            "content": content if isinstance(content, str) else json.dumps(content),
+            "status": "done",
+        }
+
+    if isinstance(content, str) and content.startswith("\U0001f6e0\ufe0f Used tool"):
+        parts = content.split(" with args ", 1)
+        tool_name = parts[0].replace("\U0001f6e0\ufe0f Used tool ", "")
+        args_str = parts[1].split(". The tool is now running.")[0] if len(parts) > 1 else "{}"
+        return {"type": "tool", "title": tool_name, "content": args_str, "status": "running"}
+
+    if isinstance(content, str) and content.startswith("[error]"):
+        return {"type": "error", "content": content[len("[error] "):]}
+
+    return {
+        "type": "transcript",
+        "role": role,
+        "content": content if isinstance(content, str) else str(content),
+    }
 
 
 class WebUI:
-    """Lightweight web server that bridges a React frontend to the realtime handler."""
+    """Web server bridging a React frontend to the realtime handler via WebRTC."""
 
     def __init__(
         self,
@@ -63,17 +91,54 @@ class WebUI:
         host: str = "0.0.0.0",
         port: int = 7860,
         instance_path: Optional[str] = None,
+        dev_mode: bool = False,
     ):
         """Initialize the web UI server with a realtime handler."""
         self.handler = handler
         self.host = host
         self.port = port
         self._instance_path = instance_path
+        self.dev_mode = dev_mode
         self.app = FastAPI(title="Reachy Mini Conversation")
         self._active_handler: Optional[OpenaiRealtimeHandler] = None
+
+        self._patch_handler_copy()
+
+        self.stream = Stream(
+            handler=self.handler,
+            mode="send-receive",
+            modality="audio",
+            concurrency_limit=None,
+        )
+
         self._setup_middleware()
         self._setup_api_routes()
-        self._setup_ws_and_static()
+
+        # Mount fastrtc WebRTC routes before the catch-all static files
+        self.stream.mount(self.app)
+
+        self._setup_events_and_static()
+
+    def _patch_handler_copy(self) -> None:
+        """Override handler.copy() to track the active session and wire interrupts."""
+        _original_copy = self.handler.copy
+
+        def _tracked_copy() -> OpenaiRealtimeHandler:
+            new_handler = _original_copy()
+            self._active_handler = new_handler
+
+            def _clear_queue() -> None:
+                while not new_handler.output_queue.empty():
+                    try:
+                        new_handler.output_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                new_handler.output_queue.put_nowait(AdditionalOutputs({"_state": "interrupt"}))
+
+            new_handler._clear_queue = _clear_queue  # type: ignore[attr-defined]
+            return new_handler
+
+        self.handler.copy = _tracked_copy  # type: ignore[assignment]
 
     def _setup_middleware(self) -> None:
         self.app.add_middleware(
@@ -167,12 +232,11 @@ class WebUI:
         @self.app.get("/api/config")
         def api_config() -> dict[str, Any]:
             """Expose the OpenAI API key (from HF Secret or env) to the TS frontend."""
-            import os
             key = os.environ.get("OPENAI_API_KEY", "")
             api_key = key.strip() if key.strip() else None
             if not api_key:
                 api_key = str(config.OPENAI_API_KEY).strip() if config.OPENAI_API_KEY else None
-            return {"openai_api_key": api_key}
+            return {"openai_api_key": api_key, "dev_mode": self.dev_mode}
 
         @self.app.get("/api/status")
         def api_status() -> dict[str, Any]:
@@ -312,7 +376,6 @@ class WebUI:
             key = str(raw.get("openai_api_key", "")).strip()
             if not key:
                 return JSONResponse({"ok": False, "error": "empty_key"}, status_code=400)
-            import os
             os.environ["OPENAI_API_KEY"] = key
             try:
                 config.OPENAI_API_KEY = key
@@ -321,34 +384,27 @@ class WebUI:
             return JSONResponse({"ok": True})
 
     # ------------------------------------------------------------------
-    # WebSocket + static files
+    # SSE events + static files
     # ------------------------------------------------------------------
-    def _setup_ws_and_static(self) -> None:
-        @self.app.websocket("/ws")
-        async def websocket_endpoint(ws: WebSocket) -> None:
-            await ws.accept()
-            logger.info("WebSocket client connected")
+    def _setup_events_and_static(self) -> None:
 
-            session_handler = self.handler.copy()
-            self._active_handler = session_handler
-            self._setup_interrupt(session_handler, ws)
+        @self.app.get("/api/events")
+        async def sse_events(webrtc_id: str) -> StreamingResponse:
+            """Stream control messages (transcripts, tools, state) via SSE."""
+            async def event_stream() -> Any:
+                yield "retry: 1000\n\n"
+                try:
+                    async for output in self.stream.output_stream(webrtc_id):
+                        for msg in output.args:
+                            if not isinstance(msg, dict):
+                                continue
+                            event = _format_control_message(msg)
+                            if event:
+                                yield f"data: {json.dumps(event)}\n\n"
+                except Exception as e:
+                    logger.debug("SSE stream ended for %s: %s", webrtc_id, e)
 
-            handler_task = asyncio.create_task(session_handler.start_up(), name="handler")
-            emit_task = asyncio.create_task(self._emit_loop(ws, session_handler), name="emit")
-
-            try:
-                await self._receive_loop(ws, session_handler)
-            except WebSocketDisconnect:
-                logger.info("WebSocket client disconnected")
-            except Exception:
-                logger.exception("WebSocket error")
-            finally:
-                handler_task.cancel()
-                emit_task.cancel()
-                await session_handler.shutdown()
-                if self._active_handler is session_handler:
-                    self._active_handler = None
-                logger.info("Session cleaned up")
+            return StreamingResponse(event_stream(), media_type="text/event-stream")
 
         if SETTINGS_STATIC_DIR.exists():
             self.app.mount(
@@ -361,84 +417,6 @@ class WebUI:
             self.app.mount("/", StaticFiles(directory=str(WEB_APP_DIR), html=True), name="web-app")
         else:
             logger.warning("Web app directory %s not found - frontend will not be served", WEB_APP_DIR)
-
-    @staticmethod
-    def _setup_interrupt(handler: OpenaiRealtimeHandler, ws: WebSocket) -> None:
-        """Wire the handler's queue-clear callback to send an interrupt signal."""
-        def clear_queue() -> None:
-            while not handler.output_queue.empty():
-                try:
-                    handler.output_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-            handler.output_queue.put_nowait(_INTERRUPT_SENTINEL)  # type: ignore[arg-type]
-
-        handler._clear_queue = clear_queue
-
-    @staticmethod
-    async def _receive_loop(ws: WebSocket, handler: OpenaiRealtimeHandler) -> None:
-        """Forward binary audio frames from the client to the handler."""
-        while True:
-            message = await ws.receive()
-            msg_type = message.get("type", "")
-
-            if msg_type == "websocket.disconnect":
-                break
-
-            if "bytes" in message and message["bytes"]:
-                pcm = np.frombuffer(message["bytes"], dtype=np.int16).reshape(1, -1)
-                await handler.receive((WEB_INPUT_SAMPLE_RATE, pcm))
-
-    @staticmethod
-    async def _emit_loop(ws: WebSocket, handler: OpenaiRealtimeHandler) -> None:
-        """Forward handler outputs (audio + chat) to the client."""
-        while True:
-            try:
-                output = await handler.emit()
-            except Exception:
-                logger.debug("emit() interrupted")
-                break
-
-            if output is None:
-                continue
-
-            if isinstance(output, str) and output == _INTERRUPT_SENTINEL:
-                await ws.send_json({"type": "interrupt"})
-                continue
-
-            if isinstance(output, tuple):
-                _sr, audio = output
-                await ws.send_bytes(audio.squeeze().astype(np.int16).tobytes())
-                continue
-
-            if isinstance(output, AdditionalOutputs):
-                for msg in output.args:
-                    if not isinstance(msg, dict):
-                        continue
-
-                    # State events (VAD, TTS) forwarded as {"type": "state", "state": "..."}
-                    if "_state" in msg:
-                        await ws.send_json({"type": "state", "state": msg["_state"]})
-                        continue
-
-                    role = msg.get("role", "")
-                    content = msg.get("content", "")
-                    metadata = msg.get("metadata")
-
-                    if isinstance(content, str) and content.startswith("data:image"):
-                        await ws.send_json({"type": "image", "data": content})
-                    elif metadata:
-                        await ws.send_json({
-                            "type": "tool",
-                            "title": metadata.get("title", ""),
-                            "content": content if isinstance(content, str) else json.dumps(content),
-                        })
-                    else:
-                        await ws.send_json({
-                            "type": "transcript",
-                            "role": role,
-                            "content": content if isinstance(content, str) else str(content),
-                        })
 
     def launch(self) -> None:
         """Start the web server (blocking)."""

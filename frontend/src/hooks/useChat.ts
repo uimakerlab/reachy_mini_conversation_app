@@ -1,11 +1,14 @@
 import { useState, useCallback, useRef } from "react";
 
+export type ToolStatus = "running" | "done";
+
 export interface ChatMessage {
   id: number;
-  role: "user" | "assistant" | "tool";
+  role: "user" | "assistant" | "tool" | "error";
   content: string;
   partial?: boolean;
   toolName?: string;
+  toolStatus?: ToolStatus;
   imageUrl?: string;
   ts: number;
 }
@@ -95,8 +98,28 @@ export function useChat() {
   );
 
   const addToolMessage = useCallback(
-    (toolName: string, result: string) => {
-      addMessage({ role: "tool", content: result, toolName });
+    (toolName: string, result: string, status: ToolStatus = "done") => {
+      if (status === "done") {
+        setMessages((prev) => {
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].role === "tool" && prev[i].toolName === toolName && prev[i].toolStatus === "running") {
+              const updated = [...prev];
+              updated[i] = { ...updated[i], content: result, toolStatus: "done" };
+              return updated;
+            }
+          }
+          return [...prev, { ...{ role: "tool" as const, content: result, toolName, toolStatus: status }, id: ++nextId.current, ts: Date.now() }];
+        });
+      } else {
+        addMessage({ role: "tool", content: result, toolName, toolStatus: status });
+      }
+    },
+    [addMessage],
+  );
+
+  const addErrorMessage = useCallback(
+    (content: string) => {
+      addMessage({ role: "error", content });
     },
     [addMessage],
   );
@@ -125,6 +148,7 @@ export function useChat() {
     handleUserTranscript,
     handleAssistantTranscript,
     addToolMessage,
+    addErrorMessage,
     attachImageToLastTool,
   };
 }

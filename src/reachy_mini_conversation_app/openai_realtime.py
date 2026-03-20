@@ -8,9 +8,7 @@ from typing import Any, Final, Tuple, Literal, Optional
 from pathlib import Path
 from datetime import datetime
 
-import cv2
 import numpy as np
-import gradio as gr
 from openai import AsyncOpenAI
 from fastrtc import AdditionalOutputs, AsyncStreamHandler, wait_for_item, audio_to_int16
 from pydantic import Field, BaseModel
@@ -83,7 +81,7 @@ def _compute_response_cost(usage: Any) -> float:
 class OpenaiRealtimeHandler(AsyncStreamHandler):
     """An OpenAI realtime handler for fastrtc Stream."""
 
-    def __init__(self, deps: ToolDependencies, gradio_mode: bool = False, instance_path: Optional[str] = None):
+    def __init__(self, deps: ToolDependencies, instance_path: Optional[str] = None):
         """Initialize the handler."""
         super().__init__(
             expected_layout="mono",
@@ -91,15 +89,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             input_sample_rate=OPEN_AI_INPUT_SAMPLE_RATE,
         )
 
-        # Override typing of the sample rates to match OpenAI's requirements
-        self.output_sample_rate: Literal[24000] = self.output_sample_rate
-        self.input_sample_rate: Literal[24000] = self.input_sample_rate
+        # Narrow the type for OpenAI strict typing (Literal[24000])
+        self.output_sample_rate: Literal[24000] = OPEN_AI_OUTPUT_SAMPLE_RATE
+        self.input_sample_rate: Literal[24000] = OPEN_AI_INPUT_SAMPLE_RATE
 
         self.deps = deps
-
-        # Override type annotations for OpenAI strict typing (only for values used in API)
-        self.output_sample_rate = OPEN_AI_OUTPUT_SAMPLE_RATE
-        self.input_sample_rate = OPEN_AI_INPUT_SAMPLE_RATE
 
         self.connection: AsyncRealtimeConnection | None = None
         self.output_queue: "asyncio.Queue[Tuple[int, NDArray[np.int16]] | AdditionalOutputs]" = asyncio.Queue()
@@ -107,11 +101,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         self.last_activity_time = asyncio.get_event_loop().time()
         self.start_time = asyncio.get_event_loop().time()
         self.is_idle_tool_call = False
-        self.gradio_mode = gradio_mode
         self.instance_path = instance_path
-        # Track how the API key was provided (env vs textbox) and its value
-        self._key_source: Literal["env", "textbox"] = "env"
-        self._provided_api_key: str | None = None
 
         # Debouncing for partial transcripts
         self.partial_transcript_task: asyncio.Task[None] | None = None
@@ -137,7 +127,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
     def copy(self) -> "OpenaiRealtimeHandler":
         """Create a copy of the handler."""
-        return OpenaiRealtimeHandler(self.deps, self.gradio_mode, self.instance_path)
+        return OpenaiRealtimeHandler(self.deps, self.instance_path)
 
     async def apply_personality(self, profile: str | None) -> str:
         """Apply a new personality (profile) at runtime if possible.
@@ -215,27 +205,14 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
     async def start_up(self) -> None:
         """Start the handler with minimal retries on unexpected websocket closure."""
+        logger.info("start_up() called - initializing OpenAI realtime connection")
         openai_api_key = config.OPENAI_API_KEY
-        if self.gradio_mode and not openai_api_key:
-            # api key was not found in .env or in the environment variables
-            await self.wait_for_args()  # type: ignore[no-untyped-call]
-            args = list(self.latest_args)
-            textbox_api_key = args[3] if len(args[3]) > 0 else None
-            if textbox_api_key is not None:
-                openai_api_key = textbox_api_key
-                self._key_source = "textbox"
-                self._provided_api_key = textbox_api_key
-            else:
-                openai_api_key = config.OPENAI_API_KEY
-        else:
-            if not openai_api_key or not openai_api_key.strip():
-                # In headless console mode, LocalStream now blocks startup until the key is provided.
-                # However, unit tests may invoke this handler directly with a stubbed client.
-                # To keep tests hermetic without requiring a real key, fall back to a placeholder.
-                logger.warning("OPENAI_API_KEY missing. Proceeding with a placeholder (tests/offline).")
-                openai_api_key = "DUMMY"
+        if not openai_api_key or not openai_api_key.strip():
+            logger.warning("OPENAI_API_KEY missing. Proceeding with a placeholder (tests/offline).")
+            openai_api_key = "DUMMY"
 
         self.client = AsyncOpenAI(api_key=openai_api_key)
+        logger.info("OpenAI client created, connecting to realtime API (model=%s)...", config.MODEL_NAME)
 
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
@@ -382,7 +359,6 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             return
 
         try:
-            # TODO: refactor this since it's repeated here, in the camera branch below, and in send_idle_signal
             if isinstance(bg_tool.id, str):
                 await self.connection.conversation.item.create(
                     item={
@@ -392,19 +368,19 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     },
                 )
 
-            await self.output_queue.put(
-                AdditionalOutputs(
-                    {
-                        "role": "assistant",
-                        "content": json.dumps(tool_result),
-                        # Gradio UI metadata.status accept only "pending" and "done". Do not accept bg.tool.status values.
-                        "metadata": {
-                            "title": f"🛠️ Used tool {bg_tool.tool_name}",
-                            "status": "done",
+            if not bg_tool.is_idle_tool_call:
+                await self.output_queue.put(
+                    AdditionalOutputs(
+                        {
+                            "role": "assistant",
+                            "content": json.dumps(tool_result),
+                            "metadata": {
+                                "title": f"🛠️ Used tool {bg_tool.tool_name}",
+                                "status": "done",
+                            },
                         },
-                    },
-                ),
-            )
+                    ),
+                )
 
             if bg_tool.tool_name == "camera" and "b64_im" in tool_result:
                 # use raw base64, don't json.dumps (which adds quotes)
@@ -426,23 +402,14 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 )
                 logger.info("Added camera image to conversation")
 
-                if self.deps.camera_worker is not None:
-                    np_img = self.deps.camera_worker.get_latest_frame()
-                    if np_img is not None:
-                        # Camera frames are BGR from OpenCV; convert so Gradio displays correct colors.
-                        rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
-                    else:
-                        rgb_frame = None
-                    img = gr.Image(value=rgb_frame)
-
-                    await self.output_queue.put(
-                        AdditionalOutputs(
-                            {
-                                "role": "assistant",
-                                "content": img,
-                            },
-                        ),
-                    )
+                await self.output_queue.put(
+                    AdditionalOutputs(
+                        {
+                            "role": "assistant",
+                            "content": f"data:image/jpeg;base64,{b64_im}",
+                        },
+                    ),
+                )
 
             # If this tool call was triggered by an idle signal, don't make the robot speak.
             # For other tool calls, let the robot reply out loud.
@@ -489,9 +456,6 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None),
                     get_session_voice(),
                 )
-                # If we reached here, the session update succeeded which implies the API key worked.
-                # Persist the key to a newly created .env (copied from .env.example) if needed.
-                self._persist_api_key_if_needed()
             except Exception:
                 logger.exception("Realtime session.update failed; aborting startup")
                 return
@@ -536,17 +500,14 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         await self.output_queue.put(AdditionalOutputs({"_state": "vad_end"}))
                         logger.debug("User speech stopped - server will auto-commit with VAD")
 
-                    if event.type == "response.output_audio.done":
-                        logger.debug("response completed")
-
                     if event.type == "response.created":
                         self._response_done_event.clear()
                         logger.debug("Response created (active)")
 
                     if event.type == "response.done":
-                        # Doesn't mean the audio is done playing
                         self._response_done_event.set()
                         logger.debug("Response done")
+                        await self.output_queue.put(AdditionalOutputs({"_state": "response_done"}))
 
                         response = getattr(event, "response", None)
                         usage = getattr(response, "usage", None) if response else None
@@ -647,14 +608,15 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             is_idle_tool_call=self.is_idle_tool_call,
                         )
 
-                        await self.output_queue.put(
-                            AdditionalOutputs(
-                                {
-                                    "role": "assistant",
-                                    "content": f"🛠️ Used tool {tool_name} with args {args_json_str}. The tool is now running. Tool ID: {bg_tool.tool_id}",
-                                },
-                            ),
-                        )
+                        if not self.is_idle_tool_call:
+                            await self.output_queue.put(
+                                AdditionalOutputs(
+                                    {
+                                        "role": "assistant",
+                                        "content": f"🛠️ Used tool {tool_name} with args {args_json_str}. The tool is now running. Tool ID: {bg_tool.tool_id}",
+                                    },
+                                ),
+                            )
 
                         if self.is_idle_tool_call:
                             self.is_idle_tool_call = False
@@ -683,7 +645,10 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                             logger.error("Realtime error [%s]: %s (raw=%s)", code, msg, err)
 
                         # Only show user-facing errors, not internal state errors
-                        if code not in ("input_audio_buffer_commit_empty",):
+                        if code not in (
+                            "input_audio_buffer_commit_empty",
+                            "conversation_already_has_active_response",
+                        ):
                             await self.output_queue.put(
                                 AdditionalOutputs({"role": "assistant", "content": f"[error] {msg}"})
                             )
@@ -878,69 +843,3 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             ),
         )
 
-    def _persist_api_key_if_needed(self) -> None:
-        """Persist the API key into `.env` inside `instance_path/` when appropriate.
-
-        - Only runs in Gradio mode when key came from the textbox and is non-empty.
-        - Only saves if `self.instance_path` is not None.
-        - Writes `.env` to `instance_path/.env` (does not overwrite if it already exists).
-        - If `instance_path/.env.example` exists, copies its contents while overriding OPENAI_API_KEY.
-        """
-        try:
-            if not self.gradio_mode:
-                logger.warning("Not in Gradio mode; skipping API key persistence.")
-                return
-
-            if self._key_source != "textbox":
-                logger.info("API key not provided via textbox; skipping persistence.")
-                return
-
-            key = (self._provided_api_key or "").strip()
-            if not key:
-                logger.warning("No API key provided via textbox; skipping persistence.")
-                return
-            if self.instance_path is None:
-                logger.warning("Instance path is None; cannot persist API key.")
-                return
-
-            # Update the current process environment for downstream consumers
-            try:
-                import os
-
-                os.environ["OPENAI_API_KEY"] = key
-            except Exception:  # best-effort
-                pass
-
-            target_dir = Path(self.instance_path)
-            env_path = target_dir / ".env"
-            if env_path.exists():
-                # Respect existing user configuration
-                logger.info(".env already exists at %s; not overwriting.", env_path)
-                return
-
-            example_path = target_dir / ".env.example"
-            content_lines: list[str] = []
-            if example_path.exists():
-                try:
-                    content = example_path.read_text(encoding="utf-8")
-                    content_lines = content.splitlines()
-                except Exception as e:
-                    logger.warning("Failed to read .env.example at %s: %s", example_path, e)
-
-            # Replace or append the OPENAI_API_KEY line
-            replaced = False
-            for i, line in enumerate(content_lines):
-                if line.strip().startswith("OPENAI_API_KEY="):
-                    content_lines[i] = f"OPENAI_API_KEY={key}"
-                    replaced = True
-                    break
-            if not replaced:
-                content_lines.append(f"OPENAI_API_KEY={key}")
-
-            # Ensure file ends with newline
-            final_text = "\n".join(content_lines) + "\n"
-            env_path.write_text(final_text, encoding="utf-8")
-            logger.info("Created %s and stored OPENAI_API_KEY for future runs.", env_path)
-        except Exception as e:
-            # Never crash the app for QoL persistence; just log.
-            logger.warning("Could not persist OPENAI_API_KEY to .env: %s", e)

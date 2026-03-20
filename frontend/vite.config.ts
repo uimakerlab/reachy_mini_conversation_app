@@ -14,11 +14,15 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Python backend WebSocket (audio + conversation)
-      "/ws": {
+      // fastrtc WebRTC signaling
+      "/webrtc": {
         target: "http://localhost:7860",
         changeOrigin: true,
-        ws: true,
+      },
+      // SSE events stream
+      "/api/events": {
+        target: "http://localhost:7860",
+        changeOrigin: true,
       },
       // Python backend REST endpoints
       "/api/config": {

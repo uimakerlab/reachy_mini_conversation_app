@@ -14,14 +14,25 @@ interface Props {
 export default function ChatPanel({ messages, isConnected, botAvatar, botName }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const userScrolledUp = useRef(false);
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    // Only auto-scroll if already near the bottom (avoid hijacking manual scroll)
-    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (isNearBottom) {
+    const handleScroll = () => {
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      userScrolledUp.current = distFromBottom > 150;
+    };
+    el.addEventListener("scroll", handleScroll, { passive: true });
+    return () => el.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || userScrolledUp.current) return;
+    requestAnimationFrame(() => {
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-    }
+    });
   }, [messages]);
 
   return (

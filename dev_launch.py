@@ -6,7 +6,7 @@ For simulation:            reachy-mini-daemon --sim
 """
 import sys
 
-sys.argv = [sys.argv[0], "--web"]
+sys.argv = [sys.argv[0], "--ui", "--debug"]
 
 from reachy_mini_conversation_app.utils import parse_args
 from reachy_mini_conversation_app.main import run

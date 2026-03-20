@@ -1,31 +1,26 @@
 """Entrypoint for the Reachy Mini conversation app."""
 
-import os
 import sys
 import time
 import asyncio
 import argparse
 import threading
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
-import gradio as gr
 from fastapi import FastAPI
-from fastrtc import Stream
-from gradio.utils import get_space
 
 from reachy_mini import ReachyMini, ReachyMiniApp
+
+if TYPE_CHECKING:
+    from reachy_mini_conversation_app.web_ui import WebUI
+    from reachy_mini_conversation_app.console import LocalStream
+
 from reachy_mini_conversation_app.utils import (
     parse_args,
     setup_logger,
     handle_vision_stuff,
     log_connection_troubleshooting,
 )
-
-
-def update_chatbot(chatbot: List[Dict[str, Any]], response: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Update the chatbot with AdditionalOutputs."""
-    chatbot.append(response)
-    return chatbot
 
 
 def main() -> None:
@@ -90,7 +85,7 @@ def run(
             logger.error("Please check your configuration and try again.")
             sys.exit(1)
 
-    use_web = getattr(args, "web", False) or getattr(args, "gradio", False)
+    use_web = getattr(args, "ui", False)
 
     # Auto-enable web UI in simulation mode (both MuJoCo for daemon and mockup-sim for desktop app)
     status = robot.client.get_status()
@@ -123,60 +118,14 @@ def run(
         vision_manager=vision_manager,
         head_wobbler=head_wobbler,
     )
-    current_file_path = os.path.dirname(os.path.abspath(__file__))
-    logger.debug(f"Current file absolute path: {current_file_path}")
-    chatbot = gr.Chatbot(
-        type="messages",
-        resizable=True,
-        avatar_images=(
-            os.path.join(current_file_path, "images", "user_avatar.png"),
-            os.path.join(current_file_path, "images", "reachymini_avatar.png"),
-        ),
-    )
-    logger.debug(f"Chatbot avatar images: {chatbot.avatar_images}")
+    handler = OpenaiRealtimeHandler(deps, instance_path=instance_path)
 
-    handler = OpenaiRealtimeHandler(deps, gradio_mode=args.gradio, instance_path=instance_path)
-
-    stream_manager: Any = None
+    stream_manager: Union["WebUI", "LocalStream", None] = None
 
     if use_web:
         from reachy_mini_conversation_app.web_ui import WebUI
 
-        stream_manager = WebUI(handler, instance_path=instance_path)
-    elif args.gradio:
-        api_key_textbox = gr.Textbox(
-            label="OPENAI API Key",
-            type="password",
-            value=os.getenv("OPENAI_API_KEY") if not get_space() else "",
-        )
-
-        from reachy_mini_conversation_app.gradio_personality import PersonalityUI
-
-        personality_ui = PersonalityUI()
-        personality_ui.create_components()
-
-        stream = Stream(
-            handler=handler,
-            mode="send-receive",
-            modality="audio",
-            additional_inputs=[
-                chatbot,
-                api_key_textbox,
-                *personality_ui.additional_inputs_ordered(),
-            ],
-            additional_outputs=[chatbot],
-            additional_outputs_handler=update_chatbot,
-            ui_args={"title": "Talk with Reachy Mini"},
-        )
-        stream_manager = stream.ui
-        if not settings_app:
-            app = FastAPI()
-        else:
-            app = settings_app
-
-        personality_ui.wire_events(handler, stream_manager)
-
-        app = gr.mount_gradio_app(app, stream.ui, path="/")
+        stream_manager = WebUI(handler, instance_path=instance_path, dev_mode=args.debug)
     else:
         stream_manager = LocalStream(
             handler,
@@ -243,7 +192,7 @@ class ReachyMiniConversationApp(ReachyMiniApp):  # type: ignore[misc]
         asyncio.set_event_loop(loop)
 
         args, _ = parse_args()
-        args.web = True
+        args.ui = True
 
         # is_wireless = reachy_mini.client.get_status()["wireless_version"]
         # args.head_tracker = None if is_wireless else "mediapipe"

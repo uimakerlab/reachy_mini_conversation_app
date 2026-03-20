@@ -57,14 +57,24 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   return s;
 }
 
-export async function fetchConfigFromBackend(): Promise<Partial<AppSettings>> {
+export interface BackendConfig {
+  openaiApiKey?: string;
+  devMode?: boolean;
+}
+
+export async function fetchConfigFromBackend(): Promise<BackendConfig> {
   try {
     const res = await fetch("/api/config");
     if (!res.ok) return {};
     const data = await res.json();
+    const config: BackendConfig = {};
     if (typeof data.openai_api_key === "string" && data.openai_api_key) {
-      return { openaiApiKey: data.openai_api_key };
+      config.openaiApiKey = data.openai_api_key;
     }
+    if (data.dev_mode === true) {
+      config.devMode = true;
+    }
+    return config;
   } catch { /* backend not available */ }
   return {};
 }

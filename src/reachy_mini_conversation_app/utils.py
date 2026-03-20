@@ -1,10 +1,13 @@
 import logging
 import argparse
 import warnings
-from typing import Any, Tuple, Optional
+from typing import TYPE_CHECKING, Tuple, Optional
 
 from reachy_mini import ReachyMini
 from reachy_mini_conversation_app.camera_worker import CameraWorker
+
+if TYPE_CHECKING:
+    from reachy_mini_conversation_app.vision.processors import VisionManager
 
 
 def parse_args() -> Tuple[argparse.Namespace, list]:  # type: ignore
@@ -23,8 +26,7 @@ def parse_args() -> Tuple[argparse.Namespace, list]:  # type: ignore
         action="store_true",
         help="Use local vision model instead of gpt-realtime vision",
     )
-    parser.add_argument("--web", default=False, action="store_true", help="Launch web UI (React frontend)")
-    parser.add_argument("--gradio", default=False, action="store_true", help="Open gradio interface (legacy)")
+    parser.add_argument("--ui", default=False, action="store_true", help="Launch web UI (React frontend)")
     parser.add_argument("--debug", default=False, action="store_true", help="Enable debug logging")
     parser.add_argument(
         "--robot-name",
@@ -35,7 +37,7 @@ def parse_args() -> Tuple[argparse.Namespace, list]:  # type: ignore
     return parser.parse_known_args()
 
 
-def handle_vision_stuff(args: argparse.Namespace, current_robot: ReachyMini) -> Tuple[CameraWorker | None, Any, Any]:
+def handle_vision_stuff(args: argparse.Namespace, current_robot: ReachyMini) -> Tuple[CameraWorker | None, object | None, "VisionManager | None"]:
     """Initialize camera, head tracker, camera worker, and vision manager.
 
     By default, vision is handled by gpt-realtime model when camera tool is used.
