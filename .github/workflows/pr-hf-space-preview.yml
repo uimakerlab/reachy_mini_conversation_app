@@ -106,11 +106,6 @@ jobs:
         run: |
           echo "space_id=${HF_SPACE_NAMESPACE}/${HF_SPACE_BASE_NAME}_PR${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.12"
-
       - name: Delete preview space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
