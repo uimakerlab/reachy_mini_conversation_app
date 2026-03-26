@@ -16,9 +16,10 @@ from gradio.utils import get_space
 from reachy_mini import ReachyMini, ReachyMiniApp
 from reachy_mini_conversation_app.config import config
 from reachy_mini_conversation_app.utils import (
+    CameraVisionInitializationError,
     parse_args,
     setup_logger,
-    handle_vision_stuff,
+    initialize_camera_and_vision,
     log_connection_troubleshooting,
 )
 
@@ -106,7 +107,11 @@ def run(
         logger.info("Simulation mode detected. Automatically enabling gradio flag.")
         args.gradio = True
 
-    camera_worker, _, vision_manager = handle_vision_stuff(args, robot)
+    try:
+        camera_worker, vision_processor = initialize_camera_and_vision(args, robot)
+    except CameraVisionInitializationError as e:
+        logger.error("Failed to initialize camera/vision: %s", e)
+        sys.exit(1)
 
     movement_manager = MovementManager(
         current_robot=robot,
@@ -129,7 +134,7 @@ def run(
         reachy_mini=robot,
         movement_manager=movement_manager,
         camera_worker=camera_worker,
-        vision_manager=vision_manager,
+        vision_processor=vision_processor,
         head_wobbler=head_wobbler,
         memory_manager=memory_manager,
     )
@@ -197,8 +202,6 @@ def run(
     head_wobbler.start()
     if camera_worker:
         camera_worker.start()
-    if vision_manager:
-        vision_manager.start()
 
     def poll_stop_event() -> None:
         """Poll the stop event to allow graceful shutdown."""
@@ -223,8 +226,6 @@ def run(
         head_wobbler.stop()
         if camera_worker:
             camera_worker.stop()
-        if vision_manager:
-            vision_manager.stop()
 
         # Ensure media is explicitly closed before disconnecting
         try:
