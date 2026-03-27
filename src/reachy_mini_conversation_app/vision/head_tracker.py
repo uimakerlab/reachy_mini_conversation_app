@@ -11,7 +11,7 @@ import struct
 import logging
 import threading
 import subprocess
-from typing import IO, Any
+from typing import IO, Protocol, TypeAlias, TypeGuard
 from pathlib import Path
 
 import numpy as np
@@ -25,27 +25,28 @@ _REQUEST_TIMEOUT = 0.5
 _SHUTDOWN_TIMEOUT = 2.0
 _HEADER_STRUCT = struct.Struct("!I")
 
-
-class _StubTrackerBackend:
-    """Test double used by unit tests."""
-
-    def get_head_position(self, img: NDArray[np.uint8]) -> tuple[NDArray[np.float32], float]:
-        """Return a deterministic fake head position."""
-        return np.zeros(2, dtype=np.float32), 0.0
+TrackerResult: TypeAlias = tuple[NDArray[np.float32] | None, float | None]
 
 
-def _build_tracker_backend(backend: str) -> Any:
+class TrackerBackend(Protocol):
+    """Backend contract for head-tracking workers."""
+
+    def get_head_position(self, img: NDArray[np.uint8]) -> TrackerResult:
+        """Return the detected head position for a frame."""
+
+
+def _build_tracker_backend(backend: str) -> TrackerBackend:
     """Instantiate a concrete head-tracker backend."""
     if backend == "yolo":
         from reachy_mini_conversation_app.vision.yolo_face_detector import YoloFaceDetector
 
-        return YoloFaceDetector()
+        yolo_tracker: TrackerBackend = YoloFaceDetector()
+        return yolo_tracker
     if backend == "mediapipe":
-        from reachy_mini_toolbox.vision import HeadTracker
+        from reachy_mini_toolbox.vision import HeadTracker as MediapipeHeadTracker
 
-        return HeadTracker()
-    if backend == "stub":
-        return _StubTrackerBackend()
+        mediapipe_tracker: TrackerBackend = MediapipeHeadTracker()
+        return mediapipe_tracker
     raise ValueError(f"Unsupported head tracker backend: {backend}")
 
 
@@ -60,7 +61,7 @@ def _read_exact(stream: IO[bytes], size: int) -> bytes:
     return bytes(chunks)
 
 
-def _send_message(stream: IO[bytes], payload: Any) -> None:
+def _send_message(stream: IO[bytes], payload: object) -> None:
     """Serialize and write a single message."""
     data = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
     stream.write(_HEADER_STRUCT.pack(len(data)))
@@ -68,7 +69,7 @@ def _send_message(stream: IO[bytes], payload: Any) -> None:
     stream.flush()
 
 
-def _receive_message(stream: IO[bytes]) -> Any:
+def _receive_message(stream: IO[bytes]) -> object:
     """Read and deserialize a single message."""
     header = _read_exact(stream, _HEADER_STRUCT.size)
     (size,) = _HEADER_STRUCT.unpack(header)
@@ -76,7 +77,7 @@ def _receive_message(stream: IO[bytes]) -> Any:
     return pickle.loads(data)
 
 
-def _reader_loop(stream: IO[bytes], messages: "queue.Queue[tuple[str, Any]]") -> None:
+def _reader_loop(stream: IO[bytes], messages: queue.Queue[tuple[str, object | None]]) -> None:
     """Read responses from the child process in the background."""
     try:
         while True:
@@ -126,6 +127,19 @@ def _worker_main(backend: str) -> int:
             _send_message(protocol_out, ("error", request_id, repr(exc)))
 
 
+def _is_tracker_result(payload: object) -> TypeGuard[TrackerResult]:
+    """Return whether the payload matches a tracker result."""
+    if not isinstance(payload, tuple) or len(payload) != 2:
+        return False
+
+    eye_center, roll = payload
+    if eye_center is not None and not isinstance(eye_center, np.ndarray):
+        return False
+    if roll is not None and not isinstance(roll, float):
+        return False
+    return True
+
+
 class HeadTracker:
     """Proxy that runs the configured head-tracker backend out of process."""
 
@@ -135,7 +149,7 @@ class HeadTracker:
         self.request_timeout = request_timeout
         self._closed = False
         self._send_lock = threading.Lock()
-        self._messages: "queue.Queue[tuple[str, Any]]" = queue.Queue()
+        self._messages: queue.Queue[tuple[str, object | None]] = queue.Queue()
         self._next_request_id = 0
 
         module_path = "reachy_mini_conversation_app.vision.head_tracker"
@@ -183,7 +197,7 @@ class HeadTracker:
             self.close()
             raise RuntimeError(f"Failed to initialize {backend} head tracker: {payload}")
 
-    def _wait_for_message(self, timeout: float) -> Any:
+    def _wait_for_message(self, timeout: float) -> object:
         """Wait for the next child-process message payload."""
         try:
             event, payload = self._messages.get(timeout=timeout)
@@ -196,7 +210,7 @@ class HeadTracker:
             raise RuntimeError(f"{self.backend} head tracker exited unexpectedly")
         raise RuntimeError(f"{self.backend} head tracker reader failed: {payload}")
 
-    def _wait_for_response(self, request_id: int, timeout: float) -> tuple[str, Any]:
+    def _wait_for_response(self, request_id: int, timeout: float) -> tuple[str, object]:
         """Wait for the response matching the requested frame."""
         deadline = time.monotonic() + timeout
         while True:
@@ -254,8 +268,12 @@ class HeadTracker:
             return None, None
 
         if status == "result":
-            eye_center, roll = payload
-            return eye_center, roll
+            if _is_tracker_result(payload):
+                eye_center, roll = payload
+                return eye_center, roll
+
+            logger.error("%s head tracker returned an invalid result: %r", self.backend, payload)
+            return None, None
 
         logger.error("%s head tracker failed to process frame: %s", self.backend, payload)
         return None, None
