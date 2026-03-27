@@ -1,7 +1,7 @@
 """Three-tier memory manager for Reachy Mini conversation app.
 
 Tiers:
-  1. Conversation logs  — automatic JSONL, one file per calendar day
+  1. Conversation logs  — plain-text, one file per session
   2. Active memory       — markdown facts, prompt-injected, capped at ~1500 tokens
   3. Archived memory     — overflow facts, one file per archival event
 """
@@ -9,7 +9,6 @@ Tiers:
 from __future__ import annotations
 
 import json
-import uuid
 import logging
 import threading
 from datetime import datetime, timezone
@@ -43,13 +42,10 @@ class MemoryManager:
         self._active_path = self._memory_dir / "active_memory.md"
         self._archive_dir = self._memory_dir / "archive"
         self._logs_dir = self._memory_dir / "logs"
-        self._session_id = str(uuid.uuid4())
+        self._session_log_path: Path | None = None
         self._ensure_dirs()
-        logger.info(
-            "MemoryManager initialized: data_dir=%s, session_id=%s",
-            data_dir,
-            self._session_id,
-        )
+        self._start_session_log()
+        logger.info("MemoryManager initialized: data_dir=%s", data_dir)
 
     def _ensure_dirs(self) -> None:
         for d in (self._memory_dir, self._archive_dir, self._logs_dir):
@@ -60,23 +56,38 @@ class MemoryManager:
     # ------------------------------------------------------------------
 
     def new_session(self) -> None:
-        """Rotate session ID when a new realtime session starts."""
-        with self._lock:
-            self._session_id = str(uuid.uuid4())
-        logger.info("MemoryManager new session: %s", self._session_id)
+        """Rotate session log file when a new realtime session starts."""
+        self._start_session_log()
+        logger.info("MemoryManager new session: %s", self._session_log_path.name if self._session_log_path else "?")
+
+    def _start_session_log(self) -> None:
+        """Create a new session log file with a header."""
+        now = datetime.now(timezone.utc)
+        base = now.strftime("%Y-%m-%d_%H-%M")
+        path = self._logs_dir / f"{base}.log"
+        suffix = 2
+        while path.exists():
+            path = self._logs_dir / f"{base}_{suffix}.log"
+            suffix += 1
+        try:
+            path.write_text(
+                f"--- session {now.strftime('%Y-%m-%d %H:%M')} UTC ---\n\n",
+                encoding="utf-8",
+            )
+        except OSError as e:
+            logger.warning("Failed to create session log: %s", e)
+        self._session_log_path = path
 
     # ------------------------------------------------------------------
     # Tier 1: Conversation logging
     # ------------------------------------------------------------------
 
-    def _log_path_for_today(self) -> Path:
-        return self._logs_dir / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.jsonl"
-
-    def _append_log(self, record: dict) -> None:
-        """Append a JSON record to today's log file."""
+    def _append_log(self, line: str) -> None:
+        """Append a plain-text line to the current session log."""
+        if self._session_log_path is None:
+            return
         try:
-            line = json.dumps(record, ensure_ascii=False)
-            with open(self._log_path_for_today(), "a", encoding="utf-8") as f:
+            with open(self._session_log_path, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
         except OSError as e:
             logger.warning("Failed to write conversation log: %s", e)
@@ -85,29 +96,17 @@ class MemoryManager:
         """Log a user or assistant transcript turn."""
         if not content or not content.strip():
             return
-        self._append_log(
-            {
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "session_id": self._session_id,
-                "role": role,
-                "content": content.strip(),
-            }
-        )
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        self._append_log(f"{ts} {role}: {content.strip()}")
 
     def log_tool_call(
         self, tool_name: str, args: dict[str, Any] | None = None, result: dict[str, Any] | None = None
     ) -> None:
         """Log a completed tool call."""
-        self._append_log(
-            {
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "session_id": self._session_id,
-                "role": "tool",
-                "tool_name": tool_name,
-                "args": args or {},
-                "result": result or {},
-            }
-        )
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        args_str = json.dumps(args or {}, ensure_ascii=False)
+        result_str = json.dumps(result or {}, ensure_ascii=False)
+        self._append_log(f"{ts} tool: {tool_name}({args_str}) -> {result_str}")
 
     # ------------------------------------------------------------------
     # Tier 2: Active memory (read / write / prompt injection)
