@@ -40,7 +40,7 @@ local_vision = [
 yolo_vision = [
   "ultralytics",
   "supervision",
-  "opencv-python>=4.12.0.88",
+  "opencv-python>=4.13.0.92",
 ]
 mediapipe_vision = [
   "mediapipe==0.10.14",
@@ -52,7 +52,7 @@ all_vision = [
   "num2words",
   "ultralytics",
   "supervision",
-  "opencv-python>=4.12.0.88",
+  "opencv-python>=4.13.0.92",
   "mediapipe==0.10.14",
 ]
 
