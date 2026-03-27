@@ -121,9 +121,9 @@ Inspired by human short-term / long-term memory and the [MemGPT virtual memory m
 
 | Tier | What | Format | Size | Access |
 |---|---|---|---|---|
-| **1. Conversation logs** | Full transcripts of every session | JSONL, one file per day | Unbounded (user manages) | External tools, future summarizers |
+| **1. Conversation logs** | Full transcripts of every session | Plain text, one file per session | Unbounded (user manages) | Readable via `recall_memory` tool |
 | **2. Active memory** | Curated facts the LLM saved | Markdown, single file | ~1,500 tokens max | Injected into system prompt automatically |
-| **3. Archived memory** | Evicted entries from active memory | Markdown, one file per archival event | Grows over time | Accessible via `recall_memory` tool |
+| **3. Archived memory** | Evicted entries from active memory | Markdown, one file per archival event | Grows over time | On disk for reference |
 
 ### Data directory layout
 
@@ -135,31 +135,33 @@ $REACHY_MINI_DATA_DIRECTORY/        # default: ~/.reachy_mini/data/
     │   ├── 2026-02-25T14-23-00.md
     │   └── 2026-03-01T09-15-00.md
     └── logs/                       # Tier 1: conversation transcripts
-        ├── 2026-02-20.jsonl
-        └── 2026-02-21.jsonl
+        ├── 2026-02-20_14-32.log
+        └── 2026-02-21_09-15.log
 ```
 
 ### Active memory format (`active_memory.md`)
 
-```markdown
-- [2026-02-20] User's name is Rémi, he's one of the creators of Reachy Mini. (ref: 2026-02-20.jsonl)
-- [2026-02-20] Rémi prefers French but speaks English at work. (ref: 2026-02-20.jsonl)
-- [2026-02-21] We discussed adding object detection to Reachy's camera. (ref: 2026-02-21.jsonl)
-- [Archived: 5 older memories moved to archive/2026-02-25T14-23-00.md — use recall_memory to access]
+```
+User's name is Rémi, he's one of the creators of Reachy Mini. (2026-02-20_14-32.log)
+Rémi prefers French but speaks English at work. (2026-02-20_14-32.log)
+We discussed adding object detection to Reachy's camera. (2026-02-21_09-15.log)
+[Archived: 5 older memories moved to archive/2026-02-25T14-23-00.md — use recall_memory to access]
 ```
 
-Each line is a free-form fact written by the LLM via the `save_memory` tool, with a date prefix and an optional reference to the source log file.
+Each line is a free-form fact written by the LLM via the `save_memory` tool, with a parenthesized reference to the session log file where the conversation happened. The LLM can pass this filename to `recall_memory` to read the detailed conversation.
 
-### Conversation log format (`logs/YYYY-MM-DD.jsonl`)
+### Conversation log format (`logs/YYYY-MM-DD_HH-MM.log`)
 
-```json
-{"ts": "2026-02-20T14:32:00Z", "session_id": "a1b2c3", "role": "user", "content": "Hi, my name is Rémi!"}
-{"ts": "2026-02-20T14:32:02Z", "session_id": "a1b2c3", "role": "assistant", "content": "Nice to meet you, Rémi! I'll remember that."}
-{"ts": "2026-02-20T14:32:03Z", "session_id": "a1b2c3", "role": "tool", "tool_name": "save_memory", "args": {"fact": "User's name is Rémi"}, "result": {"status": "saved"}}
-{"ts": "2026-02-20T14:35:10Z", "session_id": "a1b2c3", "role": "tool", "tool_name": "dance", "args": {"dance_name": "happy"}, "result": {"status": "queued"}}
+```
+--- session 2026-02-20 14:32 UTC ---
+
+14:32:00 user: Hi, my name is Rémi!
+14:32:02 assistant: Nice to meet you, Rémi! I'll remember that.
+14:32:03 tool: save_memory({"fact": "User's name is Rémi"}) -> {"status": "saved"}
+14:35:10 tool: dance({"name": "happy"}) -> {"status": "queued"}
 ```
 
-One line per event, append-only, never modified by the app. The `session_id` field groups events within a single app session. Tool calls are logged with their name, arguments, and results — providing a complete record of both conversation and actions.
+One file per session, human-readable plain text. The session header is written once at file creation. Each line has a timestamp (HH:MM:SS), role, and content. Append-only, never modified by the app.
 
 ### Archive format (`archive/TIMESTAMP.md`)
 
@@ -185,20 +187,20 @@ The LLM calls this tool when it encounters something worth remembering across se
 | **Parameters** | `fact` (string, required): A concise statement to remember, e.g. "User's name is Alice" |
 | **Returns** | `{"status": "saved", "fact": "..."}` |
 
-**Behavior**: Appends the fact (with date prefix and log reference) to `active_memory.md`. If the file exceeds the token cap after the append, the oldest third of entries are moved to a new archive file and replaced with a breadcrumb line.
+**Behavior**: Appends the fact (with session log reference) to `active_memory.md`. If the file exceeds the token cap after the append, the oldest third of entries are moved to a new archive file and replaced with a breadcrumb line.
 
 ### `recall_memory`
 
-The LLM calls this tool when it needs to search for information that may have been archived.
+The LLM calls this tool when it needs detailed context from a past conversation referenced in a memory entry.
 
 | Field | Value |
 |---|---|
 | **Name** | `recall_memory` |
-| **Description** | Search long-term memory (active + archived) for facts matching a query. Use when you need to check older context not visible in the current MEMORY block. |
-| **Parameters** | `query` (string, required): A keyword or phrase to search for |
-| **Returns** | `{"active_matches": [...], "archive_matches": [...], "total_found": N}` |
+| **Description** | Read a past session log. Each memory has a filename in parentheses — pass it to read the full conversation. Empty string lists available logs. |
+| **Parameters** | `log_ref` (string, required): Session log filename (e.g. `2026-03-26_16-28.log`) or empty string |
+| **Returns** | `{"log_ref": "...", "content": "..."}` or `{"available_logs": [...]}` or `{"error": "..."}` |
 
-**Behavior**: Case-insensitive substring search across active memory entries and all archive files. Returns up to 5 archive matches to avoid huge responses. Archive files are searched newest-first.
+**Behavior**: Reads the referenced session log file from the `logs/` directory and returns the entire content. If the file doesn't exist, returns an error with the list of available log files. If `log_ref` is empty, returns just the list of available files.
 
 ---
 
