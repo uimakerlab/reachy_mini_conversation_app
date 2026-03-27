@@ -12,3 +12,4 @@ move_head
 # AN EXAMPLE OF A CUSTOM TOOL DEFINED LOCALLY
 sweep_look
 web_search
+token_usage
