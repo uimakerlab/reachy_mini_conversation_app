@@ -45,3 +45,24 @@ def test_initialize_camera_and_vision_raises_when_local_vision_import_crashes() 
             initialize_camera_and_vision(args, MagicMock())
 
     mock_camera_worker.assert_called_once()
+
+
+def test_initialize_camera_and_vision_raises_when_head_tracker_init_fails() -> None:
+    """Head-tracker startup failures should be reported through the clean init error path."""
+    args = argparse.Namespace(
+        no_camera=False,
+        head_tracker="yolo",
+        local_vision=False,
+    )
+
+    with patch("reachy_mini_conversation_app.utils.CameraWorker") as mock_camera_worker, patch(
+        "reachy_mini_conversation_app.utils.HeadTracker",
+        side_effect=RuntimeError("tracker init failed"),
+    ):
+        with pytest.raises(
+            CameraVisionInitializationError,
+            match="Failed to initialize yolo head tracker: tracker init failed",
+        ):
+            initialize_camera_and_vision(args, MagicMock())
+
+    mock_camera_worker.assert_not_called()

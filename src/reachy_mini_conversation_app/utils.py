@@ -57,7 +57,12 @@ def initialize_camera_and_vision(
 
     if not args.no_camera:
         if args.head_tracker is not None:
-            head_tracker = HeadTracker(args.head_tracker)
+            try:
+                head_tracker = HeadTracker(args.head_tracker)
+            except Exception as e:
+                raise CameraVisionInitializationError(
+                    f"Failed to initialize {args.head_tracker} head tracker: {e}",
+                ) from e
             logging.getLogger(__name__).info(
                 "Using %s head tracker subprocess",
                 args.head_tracker,
