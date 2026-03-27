@@ -137,9 +137,8 @@ class MemoryManager:
         if not fact:
             return {"error": "fact must be a non-empty string"}
 
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        log_ref = self._log_path_for_today().name
-        entry = f"- [{date_str}] {fact} (ref: {log_ref})"
+        log_name = self._session_log_path.name if self._session_log_path else "unknown"
+        entry = f"{fact} ({log_name})"
 
         with self._lock:
             lines = self._read_active_lines()
