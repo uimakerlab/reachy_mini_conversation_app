@@ -175,48 +175,42 @@ class MemoryManager:
         return [breadcrumb] + to_keep
 
     # ------------------------------------------------------------------
-    # Tier 3: Recall (search active + archives)
+    # Tier 3: Recall (read session logs)
     # ------------------------------------------------------------------
 
-    def recall_memory(self, query: str) -> dict:
-        """Search active memory and archives for entries matching a query.
+    def _list_log_files(self) -> list[str]:
+        """Return available log filenames, newest first."""
+        try:
+            return sorted(
+                (f.name for f in self._logs_dir.glob("*.log")),
+                reverse=True,
+            )
+        except OSError:
+            return []
 
-        Simple case-insensitive substring search — replaceable with vector search later.
+    def recall_memory(self, log_ref: str) -> dict:
+        """Read a session log file and return its content.
+
+        If log_ref is empty, returns the list of available log files.
+        If the file doesn't exist, returns an error with the list of available files.
         """
-        with self._lock:
-            active_lines = self._read_active_lines()
+        available = self._list_log_files()
 
-        if not query or not query.strip():
+        if not log_ref or not log_ref.strip():
+            return {"available_logs": available}
+
+        path = self._logs_dir / log_ref.strip()
+        if not path.exists() or not path.is_file():
             return {
-                "active_matches": active_lines,
-                "archive_matches": [],
-                "total_found": len(active_lines),
+                "error": f"Log file '{log_ref}' not found.",
+                "available_logs": available,
             }
 
-        q = query.strip().lower()
-
-        active_matches = [ln for ln in active_lines if q in ln.lower()]
-
-        archive_matches: list[str] = []
         try:
-            for archive_file in sorted(self._archive_dir.glob("*.md"), reverse=True):
-                try:
-                    text = archive_file.read_text(encoding="utf-8")
-                    for ln in text.splitlines():
-                        if ln.strip() and not ln.startswith("#") and "[Archived:" not in ln and q in ln.lower():
-                            archive_matches.append(f"[{archive_file.stem}] {ln.strip()}")
-                    if len(archive_matches) >= 5:
-                        break
-                except OSError:
-                    continue
-        except OSError:
-            pass
-
-        return {
-            "active_matches": active_matches,
-            "archive_matches": archive_matches,
-            "total_found": len(active_matches) + len(archive_matches),
-        }
+            content = path.read_text(encoding="utf-8")
+            return {"log_ref": log_ref, "content": content}
+        except OSError as e:
+            return {"error": f"Failed to read '{log_ref}': {e}"}
 
     # ------------------------------------------------------------------
     # Prompt injection
