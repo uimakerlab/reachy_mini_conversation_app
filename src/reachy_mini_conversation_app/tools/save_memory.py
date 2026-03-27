@@ -13,9 +13,9 @@ class SaveMemory(Tool):
 
     name = "save_memory"
     description = (
-        "Save an important fact to long-term memory so you remember it across sessions. "
+        "Save an information to long-term memory so you remember it across sessions. "
         "Use when the user shares something worth remembering: their name, preferences, "
-        "interests, or key discussion topics. Be selective — save meaningful facts, not every utterance."
+        "interests, or discussion topics. Save anything that would help you have a more personalized and engaging conversation in the future. "
     )
     parameters_schema = {
         "type": "object",
