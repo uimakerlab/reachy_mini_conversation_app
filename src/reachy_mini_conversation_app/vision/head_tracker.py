@@ -3,6 +3,7 @@
 from __future__ import annotations
 import os
 import sys
+import time
 import queue
 import atexit
 import pickle
@@ -101,21 +102,28 @@ def _worker_main(backend: str) -> int:
 
     while True:
         try:
-            command, payload = _receive_message(sys.stdin.buffer)
+            message = _receive_message(sys.stdin.buffer)
         except EOFError:
             return 0
 
-        if command == "close":
-            return 0
-        if command != "frame":
-            _send_message(protocol_out, ("error", f"Unknown command: {command}"))
+        if not isinstance(message, tuple) or not message or not isinstance(message[0], str):
+            _send_message(protocol_out, ("error", -1, f"Invalid command: {message!r}"))
             continue
 
+        command = message[0]
+        if command == "close":
+            return 0
+        if command != "frame" or len(message) != 3 or not isinstance(message[1], int):
+            _send_message(protocol_out, ("error", -1, f"Unknown command: {message!r}"))
+            continue
+
+        request_id = message[1]
+        payload = message[2]
         try:
             result = tracker.get_head_position(payload)
-            _send_message(protocol_out, ("result", result))
+            _send_message(protocol_out, ("result", request_id, result))
         except Exception as exc:
-            _send_message(protocol_out, ("error", repr(exc)))
+            _send_message(protocol_out, ("error", request_id, repr(exc)))
 
 
 class HeadTracker:
@@ -128,6 +136,7 @@ class HeadTracker:
         self._closed = False
         self._send_lock = threading.Lock()
         self._messages: "queue.Queue[tuple[str, Any]]" = queue.Queue()
+        self._next_request_id = 0
 
         module_path = "reachy_mini_conversation_app.vision.head_tracker"
         env = os.environ.copy()
@@ -164,25 +173,63 @@ class HeadTracker:
         self._reader.start()
         atexit.register(self.close)
 
-        status, payload = self._wait_for_message(_PROCESS_START_TIMEOUT)
+        message = self._wait_for_message(_PROCESS_START_TIMEOUT)
+        if not (isinstance(message, tuple) and len(message) == 2 and isinstance(message[0], str)):
+            self.close()
+            raise RuntimeError(f"{backend} head tracker returned an invalid startup message: {message!r}")
+
+        status, payload = message
         if status != "ready":
             self.close()
             raise RuntimeError(f"Failed to initialize {backend} head tracker: {payload}")
 
-    def _wait_for_message(self, timeout: float) -> tuple[str, Any]:
-        """Wait for the next child-process message."""
+    def _wait_for_message(self, timeout: float) -> Any:
+        """Wait for the next child-process message payload."""
         try:
             event, payload = self._messages.get(timeout=timeout)
         except queue.Empty as exc:
             raise RuntimeError(f"{self.backend} head tracker timed out after {timeout:.2f}s") from exc
 
         if event == "message":
-            if isinstance(payload, tuple) and len(payload) == 2 and isinstance(payload[0], str):
-                return payload[0], payload[1]
-            raise RuntimeError(f"{self.backend} head tracker returned an invalid message: {payload!r}")
+            return payload
         if event == "eof":
             raise RuntimeError(f"{self.backend} head tracker exited unexpectedly")
         raise RuntimeError(f"{self.backend} head tracker reader failed: {payload}")
+
+    def _wait_for_response(self, request_id: int, timeout: float) -> tuple[str, Any]:
+        """Wait for the response matching the requested frame."""
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"{self.backend} head tracker timed out after {timeout:.2f}s")
+
+            message = self._wait_for_message(remaining)
+            if not (
+                isinstance(message, tuple)
+                and len(message) == 3
+                and isinstance(message[0], str)
+                and isinstance(message[1], int)
+            ):
+                raise RuntimeError(f"{self.backend} head tracker returned an invalid response: {message!r}")
+
+            status, message_request_id, payload = message
+            if message_request_id < request_id:
+                logger.debug(
+                    "Discarding stale reply from %s head tracker: expected request %s, got %s",
+                    self.backend,
+                    request_id,
+                    message_request_id,
+                )
+                continue
+
+            if message_request_id > request_id:
+                raise RuntimeError(
+                    f"{self.backend} head tracker returned out-of-order response "
+                    f"{message_request_id} while waiting for {request_id}"
+                )
+
+            return status, payload
 
     def get_head_position(
         self,
@@ -198,8 +245,10 @@ class HeadTracker:
 
         try:
             with self._send_lock:
-                _send_message(self._stdin, ("frame", frame))
-                status, payload = self._wait_for_message(self.request_timeout)
+                request_id = self._next_request_id
+                self._next_request_id += 1
+                _send_message(self._stdin, ("frame", request_id, frame))
+                status, payload = self._wait_for_response(request_id, self.request_timeout)
         except Exception as exc:
             logger.error("Head tracker %s communication failed: %s", self.backend, exc)
             return None, None
