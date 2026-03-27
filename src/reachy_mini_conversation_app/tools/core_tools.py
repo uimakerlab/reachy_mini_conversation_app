@@ -143,16 +143,16 @@ def _load_profile_tools() -> None:
 
     # Build path to tools.txt
     # Get the profile directory path
-    profile_module_path = config.PROFILES_DIRECTORY / profile
-    tools_txt_path = profile_module_path / "tools.txt"
+    profile_dir = config.PROFILES_DIRECTORY / profile
+    tools_txt_path = profile_dir / "tools.txt"
     default_tools_txt_path = DEFAULT_PROFILES_PATH / "default" / "tools.txt"
 
     if config.PROFILES_DIRECTORY != DEFAULT_PROFILES_PATH:
-        logger.info(
-            "Loading external profile '%s' from %s",
-            profile,
-            profile_module_path,
-        )
+            logger.info(
+                "Loading external profile '%s' from %s",
+                profile,
+                profile_dir,
+            )
 
     if not tools_txt_path.exists():
         if profile != "default" and default_tools_txt_path.exists():
