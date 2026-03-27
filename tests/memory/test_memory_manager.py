@@ -1,6 +1,5 @@
 """Tests for MemoryManager — all three tiers."""
 
-import json
 import pytest
 from pathlib import Path
 
@@ -35,70 +34,77 @@ class TestInit:
     def test_active_memory_empty_on_fresh_start(self, manager: MemoryManager) -> None:
         assert manager.get_memory_block() == ""
 
-    def test_new_session_rotates_id(self, manager: MemoryManager) -> None:
-        old_id = manager._session_id
+    def test_initial_session_log_created(self, manager: MemoryManager, data_dir: Path) -> None:
+        log_files = list((data_dir / "memory" / "logs").glob("*.log"))
+        assert len(log_files) == 1
+        content = log_files[0].read_text()
+        assert content.startswith("--- session")
+
+    def test_new_session_creates_new_log(self, manager: MemoryManager, data_dir: Path) -> None:
         manager.new_session()
-        assert manager._session_id != old_id
+        log_files = list((data_dir / "memory" / "logs").glob("*.log"))
+        assert len(log_files) == 2
 
 
 # ------------------------------------------------------------------
-# Tier 1: Conversation logging
+# Tier 1: Conversation logging (per-session plain text)
 # ------------------------------------------------------------------
 
 
 class TestConversationLogging:
-    def test_log_turn_creates_jsonl(self, manager: MemoryManager, data_dir: Path) -> None:
+    def test_log_turn_creates_entry(self, manager: MemoryManager) -> None:
         manager.log_turn("user", "Hello there!")
-        log_files = list((data_dir / "memory" / "logs").glob("*.jsonl"))
-        assert len(log_files) == 1
+        content = manager._session_log_path.read_text()
+        assert "user: Hello there!" in content
 
-        with open(log_files[0]) as f:
-            record = json.loads(f.readline())
-        assert record["role"] == "user"
-        assert record["content"] == "Hello there!"
-        assert "ts" in record
-        assert "session_id" in record
-
-    def test_log_turn_appends(self, manager: MemoryManager, data_dir: Path) -> None:
+    def test_log_turn_appends(self, manager: MemoryManager) -> None:
         manager.log_turn("user", "First")
         manager.log_turn("assistant", "Second")
+        content = manager._session_log_path.read_text()
+        assert "user: First" in content
+        assert "assistant: Second" in content
 
-        log_files = list((data_dir / "memory" / "logs").glob("*.jsonl"))
-        with open(log_files[0]) as f:
-            lines = f.readlines()
-        assert len(lines) == 2
-        assert json.loads(lines[0])["role"] == "user"
-        assert json.loads(lines[1])["role"] == "assistant"
+    def test_log_turn_has_timestamp(self, manager: MemoryManager) -> None:
+        manager.log_turn("user", "Hello")
+        lines = manager._session_log_path.read_text().splitlines()
+        # Find the line with the log entry (skip header)
+        log_lines = [ln for ln in lines if "user:" in ln]
+        assert len(log_lines) == 1
+        # Should start with HH:MM:SS
+        assert log_lines[0][2] == ":" and log_lines[0][5] == ":"
 
-    def test_log_turn_ignores_empty(self, manager: MemoryManager, data_dir: Path) -> None:
+    def test_log_turn_ignores_empty(self, manager: MemoryManager) -> None:
         manager.log_turn("user", "")
         manager.log_turn("user", "   ")
-        log_files = list((data_dir / "memory" / "logs").glob("*.jsonl"))
-        assert len(log_files) == 0
+        content = manager._session_log_path.read_text()
+        assert "user:" not in content
 
-    def test_log_tool_call(self, manager: MemoryManager, data_dir: Path) -> None:
+    def test_log_tool_call(self, manager: MemoryManager) -> None:
         manager.log_tool_call("dance", args={"name": "happy"}, result={"status": "queued"})
-        log_files = list((data_dir / "memory" / "logs").glob("*.jsonl"))
-        assert len(log_files) == 1
+        content = manager._session_log_path.read_text()
+        assert 'tool: dance({"name": "happy"})' in content
+        assert '{"status": "queued"}' in content
 
-        with open(log_files[0]) as f:
-            record = json.loads(f.readline())
-        assert record["role"] == "tool"
-        assert record["tool_name"] == "dance"
-        assert record["args"] == {"name": "happy"}
-        assert record["result"] == {"status": "queued"}
-
-    def test_session_id_in_logs(self, manager: MemoryManager, data_dir: Path) -> None:
-        manager.log_turn("user", "Before new session")
+    def test_new_session_writes_to_new_file(self, manager: MemoryManager) -> None:
+        manager.log_turn("user", "Before")
+        old_path = manager._session_log_path
         manager.new_session()
-        manager.log_turn("user", "After new session")
+        manager.log_turn("user", "After")
+        new_path = manager._session_log_path
 
-        log_files = list((data_dir / "memory" / "logs").glob("*.jsonl"))
-        with open(log_files[0]) as f:
-            lines = f.readlines()
-        r1 = json.loads(lines[0])
-        r2 = json.loads(lines[1])
-        assert r1["session_id"] != r2["session_id"]
+        assert old_path != new_path
+        assert "Before" in old_path.read_text()
+        assert "After" in new_path.read_text()
+        assert "After" not in old_path.read_text()
+
+    def test_filename_collision_handling(self, manager: MemoryManager, data_dir: Path) -> None:
+        # Create multiple sessions rapidly — should get _2, _3 suffixes
+        paths = [manager._session_log_path]
+        for _ in range(3):
+            manager.new_session()
+            paths.append(manager._session_log_path)
+        # All paths should be unique
+        assert len(set(paths)) == len(paths)
 
 
 # ------------------------------------------------------------------
@@ -118,11 +124,18 @@ class TestActiveMemory:
         assert "Alice" in block
         assert "## MEMORY" in block
 
-    def test_save_memory_has_date_and_ref(self, manager: MemoryManager) -> None:
+    def test_save_memory_has_log_ref(self, manager: MemoryManager) -> None:
         manager.save_memory("User's name is Alice")
         block = manager.get_memory_block()
-        assert "(ref:" in block
-        assert ".jsonl)" in block
+        assert ".log)" in block
+
+    def test_save_memory_format(self, manager: MemoryManager) -> None:
+        manager.save_memory("User's name is Alice")
+        lines = manager._read_active_lines()
+        # Format: "fact text (YYYY-MM-DD_HH-MM.log)"
+        assert len(lines) == 1
+        assert lines[0].startswith("User's name is Alice (")
+        assert lines[0].endswith(".log)")
 
     def test_save_memory_rejects_empty(self, manager: MemoryManager) -> None:
         result = manager.save_memory("")
@@ -152,22 +165,17 @@ class TestArchival:
             manager.save_memory(f"Memory fact number {i:04d} with some extra padding text here")
 
     def test_archival_triggered_when_over_cap(self, manager: MemoryManager, data_dir: Path) -> None:
-        # Each entry is ~80 chars ≈ 23 tokens. 1500/23 ≈ 65 entries to fill.
         self._fill_memory(manager, 80)
-
         archive_files = list((data_dir / "memory" / "archive").glob("*.md"))
         assert len(archive_files) > 0
 
     def test_breadcrumb_left_after_archival(self, manager: MemoryManager) -> None:
         self._fill_memory(manager, 80)
-
         block = manager.get_memory_block()
         assert "[Archived:" in block
-        assert "recall_memory" in block
 
     def test_archived_entries_in_file(self, manager: MemoryManager, data_dir: Path) -> None:
         self._fill_memory(manager, 80)
-
         archive_files = list((data_dir / "memory" / "archive").glob("*.md"))
         content = archive_files[0].read_text()
         assert "# Archived memory" in content
@@ -175,53 +183,50 @@ class TestArchival:
 
     def test_active_memory_stays_under_cap_after_archival(self, manager: MemoryManager) -> None:
         self._fill_memory(manager, 80)
-
         block = manager.get_memory_block()
         tokens = _estimate_tokens(block)
-        # Allow some headroom: the block includes the header text
         assert tokens < ACTIVE_MEMORY_TOKEN_CAP * 1.5
 
 
 # ------------------------------------------------------------------
-# Tier 3: Recall
+# Tier 3: Recall (read session logs)
 # ------------------------------------------------------------------
 
 
 class TestRecall:
-    def test_recall_active_match(self, manager: MemoryManager) -> None:
-        manager.save_memory("User's name is Bob")
-        result = manager.recall_memory("Bob")
-        assert result["total_found"] >= 1
-        assert any("Bob" in m for m in result["active_matches"])
+    def test_recall_returns_session_log(self, manager: MemoryManager) -> None:
+        manager.log_turn("user", "Hello, my name is Rémi")
+        manager.log_turn("assistant", "Nice to meet you!")
+        log_name = manager._session_log_path.name
+        result = manager.recall_memory(log_name)
+        assert "content" in result
+        assert "Rémi" in result["content"]
+        assert "Nice to meet you" in result["content"]
 
-    def test_recall_no_match(self, manager: MemoryManager) -> None:
-        manager.save_memory("User's name is Bob")
-        result = manager.recall_memory("nonexistent_query_xyz")
-        assert result["total_found"] == 0
+    def test_recall_file_not_found(self, manager: MemoryManager) -> None:
+        result = manager.recall_memory("nonexistent.log")
+        assert "error" in result
+        assert "available_logs" in result
 
-    def test_recall_case_insensitive(self, manager: MemoryManager) -> None:
-        manager.save_memory("User likes Python programming")
-        result = manager.recall_memory("python")
-        assert result["total_found"] >= 1
-
-    def test_recall_searches_archives(self, manager: MemoryManager) -> None:
-        # Fill memory so archival happens, then search for an archived fact
-        manager.save_memory("Special fact about zebras")
-        # Fill with generic facts to push zebras to archive
-        for i in range(80):
-            manager.save_memory(f"Generic filler fact number {i:04d} with extra padding text here")
-
-        result = manager.recall_memory("zebras")
-        assert result["total_found"] >= 1
-        # Should be in archives since it was the oldest
-        assert len(result["archive_matches"]) >= 1
-
-    def test_recall_empty_query_returns_all_active(self, manager: MemoryManager) -> None:
-        manager.save_memory("Fact A")
-        manager.save_memory("Fact B")
+    def test_recall_empty_lists_files(self, manager: MemoryManager) -> None:
         result = manager.recall_memory("")
-        assert any("Fact A" in m for m in result["active_matches"])
-        assert any("Fact B" in m for m in result["active_matches"])
+        assert "available_logs" in result
+        assert len(result["available_logs"]) >= 1  # at least the init session log
+
+    def test_recall_via_save_memory_ref(self, manager: MemoryManager) -> None:
+        """End-to-end: save a memory, extract its ref, recall the session log."""
+        manager.log_turn("user", "I love playing chess")
+        manager.save_memory("User loves chess")
+
+        # Extract the log ref from the active memory entry
+        lines = manager._read_active_lines()
+        entry = [ln for ln in lines if "chess" in ln][0]
+        # Format: "User loves chess (2026-03-26_16-28.log)"
+        log_ref = entry.split("(")[-1].rstrip(")")
+
+        result = manager.recall_memory(log_ref)
+        assert "content" in result
+        assert "chess" in result["content"]
 
 
 # ------------------------------------------------------------------
@@ -249,7 +254,6 @@ class TestPromptInjection:
 
 class TestTokenEstimation:
     def test_estimate_tokens_short(self) -> None:
-        # "hello" = 5 chars ≈ 1-2 tokens
         assert _estimate_tokens("hello") >= 1
 
     def test_estimate_tokens_long(self) -> None:
