@@ -1,9 +1,8 @@
-"""Three-tier memory manager for Reachy Mini conversation app.
+"""Memory manager for Reachy Mini conversation app.
 
-Tiers:
+Two tiers:
   1. Conversation logs  — plain-text, one file per session
-  2. Active memory       — markdown facts, prompt-injected, capped at ~1500 tokens
-  3. Archived memory     — overflow facts, one file per archival event
+  2. Active memory       — facts injected into the system prompt
 """
 
 from __future__ import annotations
@@ -18,10 +17,9 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Token estimation: GPT-4 family averages ~4 chars/token for English.
-# We use 3.5 to be conservative (safe side = archive sooner).
+# We use 3.5 to be conservative.
 _CHARS_PER_TOKEN = 3.5
-ACTIVE_MEMORY_TOKEN_CAP = 1500
-ARCHIVE_FRACTION = 1 / 3  # oldest third gets archived when over cap
+ACTIVE_MEMORY_TOKEN_WARN = 1500
 
 
 def _estimate_tokens(text: str) -> int:
@@ -29,7 +27,7 @@ def _estimate_tokens(text: str) -> int:
 
 
 class MemoryManager:
-    """Manages all three tiers of persistent memory.
+    """Manages conversation logs and active memory.
 
     Thread-safe: all public methods that touch active memory acquire self._lock.
     Conversation log appends are atomic on Linux for small writes.
@@ -40,7 +38,6 @@ class MemoryManager:
         self._data_dir = data_dir
         self._memory_dir = data_dir / "memory"
         self._active_path = self._memory_dir / "active_memory.md"
-        self._archive_dir = self._memory_dir / "archive"
         self._logs_dir = self._memory_dir / "logs"
         self._session_log_path: Path | None = None
         self._ensure_dirs()
@@ -48,7 +45,7 @@ class MemoryManager:
         logger.info("MemoryManager initialized: data_dir=%s", data_dir)
 
     def _ensure_dirs(self) -> None:
-        for d in (self._memory_dir, self._archive_dir, self._logs_dir):
+        for d in (self._memory_dir, self._logs_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -129,7 +126,7 @@ class MemoryManager:
             logger.warning("Failed to write active memory: %s", e)
 
     def save_memory(self, fact: str) -> dict:
-        """Add a fact to active memory, archiving oldest entries if over token cap.
+        """Add a fact to active memory.
 
         Returns a result dict suitable for tool return values.
         """
@@ -143,36 +140,18 @@ class MemoryManager:
         with self._lock:
             lines = self._read_active_lines()
             lines.append(entry)
-
-            while len(lines) > 1 and _estimate_tokens("\n".join(lines)) > ACTIVE_MEMORY_TOKEN_CAP:
-                prev_len = len(lines)
-                lines = self._archive_oldest(lines)
-                if len(lines) >= prev_len:
-                    break  # archive failed or made no progress
-
             self._write_active_lines(lines)
+
+            tokens = _estimate_tokens("\n".join(lines))
+            if tokens > ACTIVE_MEMORY_TOKEN_WARN:
+                logger.warning(
+                    "Active memory is large: ~%d tokens (%d entries). "
+                    "Consider pruning old entries.",
+                    tokens, len(lines),
+                )
 
         logger.info("Memory saved: %s", fact[:80])
         return {"status": "saved", "fact": fact}
-
-    def _archive_oldest(self, lines: list[str]) -> list[str]:
-        """Move the oldest 1/3 of lines to an archive file. Lock must be held."""
-        n_archive = max(1, len(lines) // 3)
-        to_archive = lines[:n_archive]
-        to_keep = lines[n_archive:]
-
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%f")
-        archive_file = self._archive_dir / f"{ts}.md"
-        header = f"# Archived memory — {ts}\n\n"
-        try:
-            archive_file.write_text(header + "\n".join(to_archive) + "\n", encoding="utf-8")
-            logger.info("Archived %d memory entries to %s", n_archive, archive_file.name)
-        except OSError as e:
-            logger.warning("Failed to write archive: %s", e)
-            return lines  # keep everything if archive fails
-
-        breadcrumb = f"- [Archived: {n_archive} older memories moved to archive/{archive_file.name} — use recall_memory to access]"
-        return [breadcrumb] + to_keep
 
     # ------------------------------------------------------------------
     # Tier 3: Recall (read session logs)

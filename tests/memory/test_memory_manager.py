@@ -1,11 +1,11 @@
-"""Tests for MemoryManager — all three tiers."""
+"""Tests for MemoryManager."""
 
 import pytest
 from pathlib import Path
 
 from reachy_mini_conversation_app.memory.memory_manager import (
     MemoryManager,
-    ACTIVE_MEMORY_TOKEN_CAP,
+    ACTIVE_MEMORY_TOKEN_WARN,
     _estimate_tokens,
 )
 
@@ -28,7 +28,6 @@ def manager(data_dir: Path) -> MemoryManager:
 class TestInit:
     def test_creates_directories(self, manager: MemoryManager, data_dir: Path) -> None:
         assert (data_dir / "memory").is_dir()
-        assert (data_dir / "memory" / "archive").is_dir()
         assert (data_dir / "memory" / "logs").is_dir()
 
     def test_active_memory_empty_on_fresh_start(self, manager: MemoryManager) -> None:
@@ -154,42 +153,7 @@ class TestActiveMemory:
 
 
 # ------------------------------------------------------------------
-# Tier 2 → 3: Archival
-# ------------------------------------------------------------------
-
-
-class TestArchival:
-    def _fill_memory(self, manager: MemoryManager, n: int) -> None:
-        """Fill memory with n entries, each ~50 chars ≈ 14 tokens."""
-        for i in range(n):
-            manager.save_memory(f"Memory fact number {i:04d} with some extra padding text here")
-
-    def test_archival_triggered_when_over_cap(self, manager: MemoryManager, data_dir: Path) -> None:
-        self._fill_memory(manager, 80)
-        archive_files = list((data_dir / "memory" / "archive").glob("*.md"))
-        assert len(archive_files) > 0
-
-    def test_breadcrumb_left_after_archival(self, manager: MemoryManager) -> None:
-        self._fill_memory(manager, 80)
-        block = manager.get_memory_block()
-        assert "[Archived:" in block
-
-    def test_archived_entries_in_file(self, manager: MemoryManager, data_dir: Path) -> None:
-        self._fill_memory(manager, 80)
-        archive_files = list((data_dir / "memory" / "archive").glob("*.md"))
-        content = archive_files[0].read_text()
-        assert "# Archived memory" in content
-        assert "Memory fact number" in content
-
-    def test_active_memory_stays_under_cap_after_archival(self, manager: MemoryManager) -> None:
-        self._fill_memory(manager, 80)
-        block = manager.get_memory_block()
-        tokens = _estimate_tokens(block)
-        assert tokens < ACTIVE_MEMORY_TOKEN_CAP * 1.5
-
-
-# ------------------------------------------------------------------
-# Tier 3: Recall (read session logs)
+# Recall (read session logs)
 # ------------------------------------------------------------------
 
 

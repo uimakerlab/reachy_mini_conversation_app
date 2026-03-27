@@ -87,9 +87,7 @@ This design builds on top of [PR #205](https://github.com/pollen-robotics/reachy
 
 ## Architecture
 
-### Three-tier memory model
-
-Inspired by human short-term / long-term memory and the [MemGPT virtual memory metaphor](https://arxiv.org/abs/2310.08560):
+### Two-tier memory model
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -97,24 +95,16 @@ Inspired by human short-term / long-term memory and the [MemGPT virtual memory m
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │  Profile instructions (identity, rules, tool guidance)     │  │
 │  ├────────────────────────────────────────────────────────────┤  │
-│  │  TIER 2: Active Memory (~1500 token cap)                   │  │
-│  │  - User's name is Rémi (ref: 2026-02-20.jsonl)            │  │
-│  │  - Rémi prefers French (ref: 2026-02-20.jsonl)            │  │
-│  │  - [archived: older memories in 2026-02-25T14-23-00.md]   │  │
+│  │  Active Memory (grows unbounded, warning at ~1500 tokens)  │  │
+│  │  User's name is Rémi (2026-02-20_14-32.log)               │  │
+│  │  Rémi prefers French (2026-02-20_14-32.log)               │  │
 │  └────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────┐
-│  TIER 3: Archived Memory (accessible via tool)  │
-│  archive/2026-02-25T14-23-00.md                 │
-│  archive/2026-03-01T09-15-00.md                 │
-│  ...                                            │
-└─────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────┐
-│  TIER 1: Conversation Logs (always-on)          │
-│  logs/2026-02-20.jsonl                          │
-│  logs/2026-02-21.jsonl                          │
+│  Conversation Logs (readable via recall_memory) │
+│  logs/2026-02-20_14-32.log                      │
+│  logs/2026-02-21_09-15.log                      │
 │  ...                                            │
 └─────────────────────────────────────────────────┘
 ```
@@ -122,19 +112,15 @@ Inspired by human short-term / long-term memory and the [MemGPT virtual memory m
 | Tier | What | Format | Size | Access |
 |---|---|---|---|---|
 | **1. Conversation logs** | Full transcripts of every session | Plain text, one file per session | Unbounded (user manages) | Readable via `recall_memory` tool |
-| **2. Active memory** | Curated facts the LLM saved | Markdown, single file | ~1,500 tokens max | Injected into system prompt automatically |
-| **3. Archived memory** | Evicted entries from active memory | Markdown, one file per archival event | Grows over time | On disk for reference |
+| **2. Active memory** | Curated facts the LLM saved | Plain text, single file | Unbounded (warning logged at ~1500 tokens) | Injected into system prompt automatically |
 
 ### Data directory layout
 
 ```
 $REACHY_MINI_DATA_DIRECTORY/        # default: ~/.reachy_mini/data/
 └── memory/
-    ├── active_memory.md            # Tier 2: prompt-injected facts
-    ├── archive/                    # Tier 3: evicted memory entries
-    │   ├── 2026-02-25T14-23-00.md
-    │   └── 2026-03-01T09-15-00.md
-    └── logs/                       # Tier 1: conversation transcripts
+    ├── active_memory.md            # Active memory: prompt-injected facts
+    └── logs/                       # Conversation logs: one per session
         ├── 2026-02-20_14-32.log
         └── 2026-02-21_09-15.log
 ```
@@ -162,15 +148,6 @@ Each line is a free-form fact written by the LLM via the `save_memory` tool, wit
 ```
 
 One file per session, human-readable plain text. The session header is written once at file creation. Each line has a timestamp (HH:MM:SS), role, and content. Append-only, never modified by the app.
-
-### Archive format (`archive/TIMESTAMP.md`)
-
-```markdown
-# Archived memory — 2026-02-25T14-23-00
-
-- [2026-02-15] User mentioned they work at Pollen Robotics. (ref: 2026-02-15.jsonl)
-- [2026-02-16] Discussed how Reachy Mini's antenna emotions work. (ref: 2026-02-16.jsonl)
-```
 
 ---
 
@@ -251,30 +228,13 @@ This runs on every session start and personality switch, so newly saved facts ap
 
 ---
 
-## Archival strategy
+## Memory growth
 
-When `save_memory` is called and the active memory file exceeds ~1,500 tokens:
-
-1. The **oldest third** of entries are removed from `active_memory.md`.
-2. These entries are written to a new file: `archive/YYYY-MM-DDTHH-MM-SS.md`.
-3. A **breadcrumb line** is inserted at the top of `active_memory.md`:
-   ```
-   - [Archived: N older memories moved to archive/TIMESTAMP.md — use recall_memory to access]
-   ```
-4. The LLM can later search archived entries via the `recall_memory` tool.
-
-This creates a natural short-term / long-term memory hierarchy:
-- **Active memory** ≈ human working memory (always accessible, limited capacity)
-- **Archived memory** ≈ human long-term memory (requires effort to recall, unlimited capacity)
-- **Conversation logs** ≈ raw sensory experience (complete record, not directly accessible to the LLM)
-
-### Why "oldest third" and not a smarter policy?
-
-Research shows that indiscriminate memory storage degrades performance ([ACM survey on LLM agent memory](https://dl.acm.org/doi/10.1145/3748302)). A smarter policy (relevance scoring, frequency-based retention) would be better, but adds complexity. The oldest-third heuristic is simple, deterministic, and good enough for V1. The breadcrumb ensures nothing is truly lost — just moved one tool call away.
+Active memory grows unbounded — every `save_memory` call appends a line. When the file exceeds ~1,500 tokens (~5,250 chars), a warning is logged. There is no automatic archival or pruning; the user or a future feature is responsible for managing growth. In practice, the context budget (~11,000 tokens available) provides ample headroom.
 
 ### Token estimation
 
-We use a character-count heuristic (`len(text) / 3.5`) rather than a tokenizer dependency. This is intentionally conservative — GPT-4 family models average ~4 chars/token for English. The 10-20% imprecision is acceptable given our ~4,000 token headroom.
+We use a character-count heuristic (`len(text) / 3.5`) rather than a tokenizer dependency. This is intentionally conservative — GPT-4 family models average ~4 chars/token for English.
 
 ---
 
